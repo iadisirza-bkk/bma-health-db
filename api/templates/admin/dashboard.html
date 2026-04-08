@@ -8,11 +8,11 @@
 
     <!-- Page Header -->
     <div class="flex items-center justify-between">
-        <h1 class="text-2xl font-bold text-gray-800">Dashboard</h1>
+        <h1 class="text-lg font-bold text-gray-900">Dashboard</h1>
         <form method="POST" action="/admin/refresh" id="refreshForm">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button type="submit" id="refreshBtn"
-                    class="inline-flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition-colors">
+                    class="inline-flex items-center gap-2 px-4 py-2.5 bg-[#00744B] text-white rounded-lg font-medium hover:bg-[#005C3B] transition-colors">
                 <svg id="refreshIcon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
                 </svg>
@@ -22,85 +22,65 @@
     </div>
 
     <!-- Summary Cards -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {% set summary_tables = [
-            {"key": "patients", "label": "Total Patients", "label_th": "ผู้ป่วยทั้งหมด", "color": "indigo"},
-            {"key": "vitalsigns", "label": "Total Vitalsigns", "label_th": "สัญญาณชีพ", "color": "emerald"},
-            {"key": "lab", "label": "Total Lab", "label_th": "ผลแลป", "color": "amber"},
-            {"key": "visits", "label": "Total Visits", "label_th": "การเยี่ยมบ้าน", "color": "sky"}
-        ] %}
+    {% set summary_tables = [
+        {"key": "patients", "icon": "&#x1F465;", "label": "ผู้ป่วย", "sublabel": "Patients"},
+        {"key": "vitalsigns", "icon": "&#x1F493;", "label": "สัญญาณชีพ", "sublabel": "Vitalsigns"},
+        {"key": "visits", "icon": "&#x1F3E5;", "label": "การเข้ารับบริการ", "sublabel": "Visits"},
+        {"key": "lab", "icon": "&#x1F52C;", "label": "ผลแลป", "sublabel": "Lab"},
+        {"key": "homevisit", "icon": "&#x1F3E0;", "label": "เยี่ยมบ้าน", "sublabel": "Home Visit"},
+        {"key": "homehealth", "icon": "&#x1F4CB;", "label": "สุขภาพที่บ้าน", "sublabel": "Home Health"},
+        {"key": "lab_extended", "icon": "&#x1F9EA;", "label": "ผลแลปเพิ่มเติม", "sublabel": "Lab Extended"}
+    ] %}
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-4">
         {% for item in summary_tables %}
-        <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
-            <p class="text-sm font-medium text-gray-500">{{ item.label_th }}</p>
-            <p class="text-2xl font-bold text-gray-800 mt-2">
-                {{ "{:,}".format(table_counts.get(item.key, 0)) if table_counts is mapping else 0 }}
+        <div class="bg-white rounded-xl p-5 border border-gray-200 shadow-sm">
+            <div class="text-2xl mb-2">{{ item.icon|safe }}</div>
+            <p class="text-xs font-semibold uppercase tracking-wider text-gray-500">{{ item.sublabel }}</p>
+            <p class="text-3xl font-bold text-[#00744B] mt-1">
+                {{ "{:,}".format(table_counts.get(item.key, 0)) }}
             </p>
             <p class="text-xs text-gray-400 mt-1">{{ item.label }}</p>
         </div>
         {% endfor %}
     </div>
 
-    <!-- Raw Tables Section -->
-    <div class="bg-white rounded-xl shadow-sm border border-gray-200">
-        <div class="px-6 py-4 border-b border-gray-200">
-            <h2 class="text-lg font-semibold text-gray-800">ตารางข้อมูลทั้งหมด</h2>
-            <p class="text-sm text-gray-500 mt-0.5">All Raw Tables</p>
-        </div>
-        <div class="overflow-x-auto">
-            <table class="w-full text-sm">
-                <thead>
-                    <tr class="bg-gray-50 text-left">
-                        <th class="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Table Name</th>
-                        <th class="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider text-right">Row Count</th>
-                        <th class="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Last Updated</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-100">
-                    {% if table_counts is iterable and table_counts is not mapping %}
-                    {% for table in table_counts %}
-                    <tr class="hover:bg-gray-50 transition-colors">
-                        <td class="px-6 py-3 font-medium text-gray-800">{{ table.name }}</td>
-                        <td class="px-6 py-3 text-right text-gray-600">{{ "{:,}".format(table.count) }}</td>
-                        <td class="px-6 py-3 text-gray-500">{{ table.last_updated or '-' }}</td>
-                    </tr>
-                    {% endfor %}
-                    {% else %}
-                    <tr>
-                        <td colspan="3" class="px-6 py-8 text-center text-gray-400">ไม่มีข้อมูลตาราง</td>
-                    </tr>
-                    {% endif %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-
     <!-- Materialized Views Section -->
     <div class="bg-white rounded-xl shadow-sm border border-gray-200">
         <div class="px-6 py-4 border-b border-gray-200">
-            <h2 class="text-lg font-semibold text-gray-800">Materialized Views</h2>
-            <p class="text-sm text-gray-500 mt-0.5">Summary views สำหรับ API</p>
+            <h2 class="text-lg font-bold text-gray-900">Materialized Views</h2>
+            <p class="text-xs text-gray-500 mt-0.5">Summary views สำหรับ API</p>
         </div>
         <div class="overflow-x-auto">
             <table class="w-full text-sm">
                 <thead>
                     <tr class="bg-gray-50 text-left">
-                        <th class="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">View Name</th>
-                        <th class="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider text-right">Row Count</th>
-                        <th class="px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Last Refreshed</th>
+                        <th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-gray-500">View Name</th>
+                        <th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-gray-500 text-right">Rows</th>
+                        <th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Status</th>
                     </tr>
                 </thead>
-                <tbody class="divide-y divide-gray-100">
+                <tbody class="divide-y divide-gray-200">
                     {% if view_info %}
                     {% for view in view_info %}
                     <tr class="hover:bg-gray-50 transition-colors">
-                        <td class="px-6 py-3 font-medium text-gray-800">{{ view.name }}</td>
-                        <td class="px-6 py-3 text-right text-gray-600">{{ "{:,}".format(view.row_count) }}</td>
-                        <td class="px-6 py-3 text-gray-500">{{ view.refreshed_at or '-' }}</td>
+                        <td class="px-6 py-3.5 font-medium text-gray-900">{{ view.name }}</td>
+                        <td class="px-6 py-3.5 text-right text-2xl font-bold text-gray-900">{{ "{:,}".format(view.row_count) }}</td>
+                        <td class="px-6 py-3.5">
+                            <span class="inline-flex items-center gap-1.5 text-xs font-semibold rounded-full px-3 py-1 bg-green-100 text-green-700">
+                                <span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>
+                                Active
+                            </span>
+                        </td>
                     </tr>
                     {% endfor %}
                     {% else %}
                     <tr>
-                        <td colspan="3" class="px-6 py-8 text-center text-gray-400">ไม่มี Materialized Views</td>
+                        <td colspan="3" class="px-6 py-12 text-center">
+                            <svg class="w-10 h-10 mx-auto text-gray-300 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/>
+                            </svg>
+                            <p class="text-sm text-gray-400">ไม่มี Materialized Views</p>
+                        </td>
                     </tr>
                     {% endif %}
                 </tbody>
