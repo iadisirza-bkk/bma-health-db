@@ -385,12 +385,25 @@ async def login_page(request: Request):
     """Render the login form."""
     if _check_auth(request):
         return RedirectResponse(url="/admin/dashboard", status_code=303)
-    return templates.TemplateResponse("admin/login.html", {"request": request, "error": None})
+    csrf_token = _generate_csrf_token(request)
+    response = templates.TemplateResponse(
+        "admin/login.html", {"request": request, "error": None, "csrf_token": csrf_token}
+    )
+    response.set_cookie("csrf_token", csrf_token, httponly=True, samesite="strict", max_age=86400)
+    return response
 
 
 @router.post("/login")
-async def login_submit(request: Request, password: str = Form(...)):
+async def login_submit(request: Request, password: str = Form(...), csrf_token: str = Form("")):
     """Validate password and set session cookie."""
+    # Validate CSRF
+    if not _validate_csrf(request, csrf_token):
+        return templates.TemplateResponse(
+            "admin/login.html",
+            {"request": request, "error": "Invalid request. Please try again.", "csrf_token": ""},
+            status_code=403,
+        )
+
     client_ip = request.client.host if request.client else "unknown"
     if not _check_login_rate(client_ip):
         return templates.TemplateResponse(

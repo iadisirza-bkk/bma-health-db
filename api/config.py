@@ -29,13 +29,18 @@ _INSECURE_DEFAULTS = {
 }
 
 def validate_production_config():
-    """Warn loudly if default credentials are in use."""
+    """Warn or fail if default credentials are in use."""
     import warnings
+    is_prod = os.getenv("ENVIRONMENT", "development") == "production"
+
     for key, default_val in _INSECURE_DEFAULTS.items():
         current = globals().get(key)
         if current == default_val:
-            warnings.warn(
-                f"\u26a0\ufe0f  SECURITY WARNING: {key} is using the default value. "
-                f"Set the {key} environment variable before deploying to production.",
-                stacklevel=2,
+            msg = (
+                f"SECURITY: {key} is using the default value. "
+                f"Set the {key} environment variable before deploying."
             )
+            if is_prod:
+                raise RuntimeError(f"FATAL — {msg}")
+            else:
+                warnings.warn(f"\u26a0\ufe0f  {msg}", stacklevel=2)

@@ -26,6 +26,7 @@
             {% endif %}
 
             <form method="POST" action="/admin/login">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <div class="mb-5">
                     <label for="password" class="block text-sm font-medium text-gray-700 mb-2">รหัสผ่าน</label>
                     <input type="password" id="password" name="password" required autofocus

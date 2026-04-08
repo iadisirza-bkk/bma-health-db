@@ -128,7 +128,19 @@ def _validate_disease_key(disease_key: str) -> None:
 
 @app.get("/health", tags=["System"])
 def health_check():
-    return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+    db_ok = False
+    try:
+        result = execute_scalar("SELECT 1")
+        db_ok = result == 1
+    except Exception:
+        pass
+
+    status = "ok" if db_ok else "degraded"
+    return {
+        "status": status,
+        "database": "connected" if db_ok else "disconnected",
+        "timestamp": datetime.utcnow().isoformat(),
+    }
 
 
 # =========================================================================== #

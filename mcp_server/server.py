@@ -356,7 +356,13 @@ def get_district_summary(dcode: str) -> dict:
 
     # Disease data
     disease_rows = _query("""
-        SELECT * FROM summary_district_disease WHERE district_code = %s
+        SELECT district_code, district_name, zone_code, total_screened,
+               risk_dm_count, risk_hpt_count, risk_cvd_count, risk_bmi_count,
+               found_dm_count, found_hpt_count, found_cvd_count, found_stroke_count,
+               found_obesity_count, found_dyslipidemia_count,
+               pct_risk_dm, pct_risk_hpt, pct_risk_cvd,
+               pct_found_dm, pct_found_hpt, pct_found_cvd
+        FROM summary_district_disease WHERE district_code = %s
     """, (dcode,))
 
     if not disease_rows:
@@ -367,13 +373,20 @@ def get_district_summary(dcode: str) -> dict:
 
     # Lab data
     lab_rows = _query("""
-        SELECT * FROM summary_district_lab WHERE district_code = %s
+        SELECT district_code, total_lab_patients,
+               avg_hemoglobin, avg_hematocrit, avg_fbs, avg_cholesterol,
+               avg_triglyceride, avg_hdl, avg_ldl, avg_creatinine, avg_egfr,
+               avg_uric_acid, avg_sgot, avg_sgpt,
+               pct_anemia, pct_ckd, pct_cbc_abnormal, pct_liver_abnormal
+        FROM summary_district_lab WHERE district_code = %s
     """, (dcode,))
     lab = lab_rows[0] if lab_rows else {}
 
     # Mental health data
     mental_rows = _query("""
-        SELECT * FROM summary_district_mental WHERE district_code = %s
+        SELECT district_code, total_screened,
+               pct_depression_risk, pct_phq9_moderate, pct_high_stress
+        FROM summary_district_mental WHERE district_code = %s
     """, (dcode,))
     mental = mental_rows[0] if mental_rows else {}
 

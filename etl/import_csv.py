@@ -126,7 +126,7 @@ def import_patients(cur, df, current_year: int) -> Dict[str, int]:
     """Import pt.csv -> raw_patients. Returns mapping idcard_hash -> patient id."""
     print("[1/7] Importing pt.csv -> raw_patients ...")
     rows = []
-    for _, r in df.iterrows():
+    for r in df.to_dict(orient='records'):
         id_hash = hash_id(r.get("IDCARD"))
         if id_hash is None:
             continue
@@ -213,7 +213,7 @@ def import_visits(cur, df, patient_map: Dict[str, int]):
     print("[2/7] Importing pthistory.csv -> raw_visits ...")
     rows = []
     skipped = 0
-    for _, r in df.iterrows():
+    for r in df.to_dict(orient='records'):
         pid = _ensure_patient(r.get("PID"), patient_map, cur)
         if pid is None:
             skipped += 1
@@ -247,7 +247,7 @@ def import_vitalsigns(cur, df, patient_map: Dict[str, int]):
     print("[3/7] Importing vitalsignslf.csv -> raw_vitalsigns ...")
     rows = []
     skipped = 0
-    for _, r in df.iterrows():
+    for r in df.to_dict(orient='records'):
         pid = _ensure_patient(r.get("PID"), patient_map, cur)
         if pid is None:
             skipped += 1
@@ -340,7 +340,7 @@ def import_homevisit(cur, df, patient_map: Dict[str, int]):
     print("[4/7] Importing homevisit.csv -> raw_homevisit ...")
     rows = []
     skipped = 0
-    for _, r in df.iterrows():
+    for r in df.to_dict(orient='records'):
         pid = _ensure_patient(r.get("PID"), patient_map, cur)
         if pid is None:
             skipped += 1
@@ -399,7 +399,7 @@ def import_homehealth(cur, df, patient_map: Dict[str, int]):
     print("[5/7] Importing homehealth.csv -> raw_homehealth ...")
     rows = []
     skipped = 0
-    for _, r in df.iterrows():
+    for r in df.to_dict(orient='records'):
         pid = _ensure_patient(r.get("PID"), patient_map, cur)
         if pid is None:
             skipped += 1
@@ -480,7 +480,7 @@ def import_lab_results(cur, df, patient_map: Dict[str, int]):
     print("[6/7] Importing labhealth.csv -> raw_lab_results ...")
     rows = []
     skipped = 0
-    for _, r in df.iterrows():
+    for r in df.to_dict(orient='records'):
         pid = _ensure_patient(r.get("PID"), patient_map, cur)
         if pid is None:
             skipped += 1
@@ -558,7 +558,7 @@ def import_lab_extended(cur, df, patient_map: Dict[str, int]):
     print("[7/7] Importing labhealthext.csv -> raw_lab_extended ...")
     rows = []
     skipped = 0
-    for _, r in df.iterrows():
+    for r in df.to_dict(orient='records'):
         pid = _ensure_patient(r.get("PID"), patient_map, cur)
         if pid is None:
             skipped += 1

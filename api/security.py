@@ -7,6 +7,7 @@ Security utilities:
 """
 from __future__ import annotations
 
+import hmac
 import time
 from collections import defaultdict
 from typing import Callable, Dict, List, Optional, Union
@@ -63,7 +64,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         provided = request.headers.get("X-API-Key")
-        if not provided or provided != API_KEY:
+        if not provided or not hmac.compare_digest(provided, API_KEY):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Invalid or missing API key"},
