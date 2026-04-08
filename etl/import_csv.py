@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import hmac
 import os
 import sys
 from datetime import datetime
@@ -24,13 +25,22 @@ from psycopg2.extras import execute_values
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Secret salt for HMAC hashing — MUST be set in production
+# Store separately from database (env var or key management service)
+_HASH_SECRET = os.getenv("IDCARD_HASH_SECRET", "dev-hash-secret-change-in-production").encode()
+
+
 def hash_id(raw_value: str) -> Optional[str]:
-    """Base64-decode the value then return its SHA-256 hex digest."""
+    """Base64-decode the value then return its HMAC-SHA-256 hex digest.
+
+    Uses a secret key to prevent brute-force reversal of Thai national ID numbers.
+    The secret MUST be stored separately from the database.
+    """
     if pd.isna(raw_value) or str(raw_value).strip() == "":
         return None
     try:
         decoded = base64.b64decode(str(raw_value).strip())
-        return hashlib.sha256(decoded).hexdigest()
+        return hmac.new(_HASH_SECRET, decoded, hashlib.sha256).hexdigest()
     except Exception:
         return None
 
@@ -675,6 +685,11 @@ def main():
     print(f"Database URL   : {db_url.split('@')[0].rsplit(':', 1)[0]}:***@{db_url.split('@')[-1]}")
     print(f"Current year   : {CURRENT_YEAR}")
     print()
+
+    if _HASH_SECRET == b"dev-hash-secret-change-in-production":
+        print("\u26a0\ufe0f  WARNING: IDCARD_HASH_SECRET is using the default value.")
+        print("   Set IDCARD_HASH_SECRET environment variable in production.")
+        print()
 
     conn = psycopg2.connect(db_url)
     conn.autocommit = False

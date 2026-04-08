@@ -858,6 +858,43 @@ async def logs_page(request: Request):
     )
 
 # =========================================================================== #
+# PDPA ERASURE
+# =========================================================================== #
+
+@router.post("/erasure", response_class=HTMLResponse)
+async def process_erasure(request: Request, idcard_hash: str = Form(...), csrf_token: str = Form("")):
+    """Process a PDPA erasure request for a patient by idcard_hash."""
+    _require_auth(request)
+    if not _validate_csrf(request, csrf_token):
+        raise HTTPException(status_code=403, detail="CSRF validation failed")
+
+    try:
+        with get_conn() as conn:
+            cur = conn.cursor()
+            # Execute erasure
+            cur.execute("SELECT execute_patient_erasure(%s)", (idcard_hash,))
+            rows_deleted = cur.fetchone()[0]
+            # Log the erasure request
+            cur.execute(
+                """INSERT INTO erasure_requests
+                   (idcard_hash, status, processed_date, rows_deleted, processed_by)
+                   VALUES (%s, 'completed', NOW(), %s, 'admin')""",
+                (idcard_hash, rows_deleted),
+            )
+            # Refresh views after deletion
+            etl = _load_etl()
+            etl.refresh_all_summaries(cur)
+            conn.commit()
+
+        response = RedirectResponse(url="/admin/dashboard", status_code=303)
+        _set_flash(response, "success", f"Erasure complete: {rows_deleted} records deleted.")
+        return response
+    except Exception as exc:
+        response = RedirectResponse(url="/admin/dashboard", status_code=303)
+        _set_flash(response, "error", f"Erasure failed: {_sanitize_error(exc)}")
+        return response
+
+# =========================================================================== #
 # API: Table counts (JSON, for AJAX dashboard refresh)
 # =========================================================================== #
 

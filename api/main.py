@@ -266,6 +266,7 @@ def zone_detail(zone_code: str):
         ORDER BY s.district_code
     """, (zone_code,))
 
+    districts = [d for d in districts if (d.get("total_screened") or 0) >= K_ANONYMITY_THRESHOLD]
     return {**zone[0], "districts": districts}
 
 
@@ -292,7 +293,9 @@ def list_districts(zone_code: Optional[str] = Query(None)):
         sql += " WHERE s.zone_code = %s"
         params = (zone_code,)
     sql += " ORDER BY s.district_code"
-    return execute_query(sql, params or None)
+    rows = execute_query(sql, params or None)
+    rows = [r for r in rows if (r.get("total_screened") or 0) >= K_ANONYMITY_THRESHOLD]
+    return rows
 
 
 @app.get("/api/v2/summary/districts/{dcode}", tags=["Districts"])
@@ -309,6 +312,8 @@ def district_detail(dcode: str):
     )
     if not disease:
         raise HTTPException(status_code=404, detail="District not found")
+    if (disease[0].get("total_screened") or 0) < K_ANONYMITY_THRESHOLD:
+        raise HTTPException(status_code=403, detail="Data suppressed for privacy (k-anonymity)")
 
     lab = execute_query(
         """SELECT district_code, total_lab_patients,
@@ -620,6 +625,7 @@ def lab_summary(
         ORDER BY l.district_code
     """, tuple(params) or None)
 
+    rows = [r for r in rows if (r.get("total_lab_patients") or 0) >= K_ANONYMITY_THRESHOLD]
     return rows
 
 
@@ -658,6 +664,7 @@ def mental_health_summary(
         ORDER BY m.district_code
     """, tuple(params) or None)
 
+    rows = [r for r in rows if (r.get("total_screened") or 0) >= K_ANONYMITY_THRESHOLD]
     return rows
 
 
@@ -699,6 +706,7 @@ def demographics_summary(
         ORDER BY dm.district_code
     """, tuple(params) or None)
 
+    rows = [r for r in rows if (r.get("total_respondents") or 0) >= K_ANONYMITY_THRESHOLD]
     return rows
 
 
@@ -769,6 +777,7 @@ def search_districts(
         LIMIT %s
     """, tuple(params + [limit]))
 
+    rows = [r for r in rows if (r.get("total_screened") or r.get("total_lab_patients") or 0) >= K_ANONYMITY_THRESHOLD]
     return {"disease": disease, "results": rows}
 
 
@@ -802,6 +811,7 @@ def _search_districts_lab(disease: str, min_pct, max_pct, sort_by, limit):
         LIMIT %s
     """, tuple(params + [limit]))
 
+    rows = [r for r in rows if (r.get("total_screened") or r.get("total_lab_patients") or 0) >= K_ANONYMITY_THRESHOLD]
     return {"disease": disease, "results": rows}
 
 

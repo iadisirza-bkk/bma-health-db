@@ -368,6 +368,9 @@ def get_district_summary(dcode: str) -> dict:
     if not disease_rows:
         _write_audit_entry("get_district_summary", {"dcode": dcode}, 0)
         return {"error": f"No data found for district code='{dcode}'"}
+    if (disease_rows[0].get("total_screened") or 0) < K_ANONYMITY_THRESHOLD:
+        _write_audit_entry("get_district_summary", {"dcode": dcode}, 0)
+        return {"error": "Data suppressed for privacy (k-anonymity threshold)"}
 
     d = disease_rows[0]
 
@@ -508,6 +511,9 @@ def compare_disease(
 
     rows = _query(sql, params or None)
 
+    # Enforce k-anonymity: suppress districts/zones with too few screened
+    rows = [r for r in rows if (r.get("total_screened") or 0) >= K_ANONYMITY_THRESHOLD]
+
     # Add ranking by pct_at_risk descending
     sorted_rows = sorted(rows, key=lambda r: r.get("pct_at_risk") or 0, reverse=True)
     for rank, row in enumerate(sorted_rows, 1):
@@ -588,7 +594,7 @@ def get_filtered_summary(filters: Dict) -> Union[List[Dict], Dict]:
     result = {
         "rows": _round_floats(safe_rows),
         "total_rows": len(safe_rows),
-        "suppressed_groups": suppressed,
+        "has_suppressed_data": suppressed > 0,
         "k_anonymity_threshold": K_ANONYMITY_THRESHOLD,
     }
 
@@ -731,6 +737,11 @@ def get_lab_summary(
     rows = _query(sql, params or None)
     result = rows[0] if rows else {}
 
+    # Enforce k-anonymity on lab data
+    if (result.get("total_lab_patients") or 0) < K_ANONYMITY_THRESHOLD:
+        _write_audit_entry("get_lab_summary", {"dcode": dcode, "zone_code": zone_code}, 0)
+        return {"error": "Data suppressed for privacy (k-anonymity threshold)"}
+
     _write_audit_entry(
         "get_lab_summary",
         {"dcode": dcode, "zone_code": zone_code},
@@ -780,6 +791,11 @@ def get_mental_health_summary(
 
     rows = _query(sql, params or None)
     result = rows[0] if rows else {}
+
+    # Enforce k-anonymity on mental health data
+    if (result.get("total_screened") or 0) < K_ANONYMITY_THRESHOLD:
+        _write_audit_entry("get_mental_health_summary", {"dcode": dcode, "zone_code": zone_code}, 0)
+        return {"error": "Data suppressed for privacy (k-anonymity threshold)"}
 
     _write_audit_entry(
         "get_mental_health_summary",
@@ -851,6 +867,11 @@ def get_demographics(
     r = rows[0] if rows else {}
 
     total = r.get("total_respondents") or 0
+
+    # Enforce k-anonymity on demographics data
+    if total < K_ANONYMITY_THRESHOLD:
+        _write_audit_entry("get_demographics", {"dcode": dcode, "zone_code": zone_code}, 0)
+        return {"error": "Data suppressed for privacy (k-anonymity threshold)"}
 
     def _pct(val: Any) -> Optional[float]:
         if val is None or not total:
@@ -979,6 +1000,9 @@ def search_districts(query: Dict) -> Union[List[Dict], Dict]:
     params.append(limit)
 
     rows = _query(sql, params)
+
+    # Enforce k-anonymity
+    rows = [r for r in rows if (r.get("total_screened") or 0) >= K_ANONYMITY_THRESHOLD]
 
     _write_audit_entry("search_districts", query, len(rows))
     return _round_floats(rows)
