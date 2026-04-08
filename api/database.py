@@ -5,6 +5,7 @@ Returns query results as lists of dicts. Never exposes PII columns.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from decimal import Decimal
 from typing import Optional, List, Dict
 from urllib.parse import urlparse
 
@@ -65,8 +66,10 @@ def execute_query(sql: str, params: Optional[tuple] = None) -> List[Dict]:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
-    # Strip PII columns
-    return [{k: v for k, v in row.items() if k not in _PII_COLUMNS} for row in rows]
+    # Strip PII columns + convert Decimal to float for JSON serialization
+    def _clean(v):
+        return float(v) if isinstance(v, Decimal) else v
+    return [{k: _clean(v) for k, v in row.items() if k not in _PII_COLUMNS} for row in rows]
 
 
 def execute_scalar(sql: str, params: Optional[tuple] = None):
@@ -75,7 +78,8 @@ def execute_scalar(sql: str, params: Optional[tuple] = None):
         with conn.cursor() as cur:
             cur.execute(sql, params)
             row = cur.fetchone()
-    return row[0] if row else None
+    val = row[0] if row else None
+    return float(val) if isinstance(val, Decimal) else val
 
 
 def close_pool():

@@ -150,6 +150,15 @@ def import_patients(cur, df, current_year: int) -> Dict[str, int]:
         print("  No valid rows.")
         return {}
 
+    # Dedup by idcard_hash (first column) — keep last occurrence
+    seen = {}
+    for row in rows:
+        seen[row[0]] = row
+    deduped = list(seen.values())
+    if len(deduped) < len(rows):
+        print(f"  Deduped {len(rows)} -> {len(deduped)} (removed {len(rows)-len(deduped)} duplicates)")
+    rows = deduped
+
     sql = """
         INSERT INTO raw_patients (idcard_hash, notype, pname, sex, birth_year, age_group, created_at, updated_at)
         VALUES %s
@@ -189,7 +198,7 @@ def _batch_ensure_patients(df, patient_map: Dict[str, int], cur):
     if new_hashes:
         execute_values(
             cur,
-            """INSERT INTO raw_patients (idcard_hash, created_at, updated_at)
+            """INSERT INTO raw_patients (idcard_hash)
                VALUES %s ON CONFLICT (idcard_hash) DO NOTHING""",
             new_hashes, page_size=500,
         )
