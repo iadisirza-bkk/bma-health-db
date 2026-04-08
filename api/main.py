@@ -821,6 +821,529 @@ def _search_districts_lab(disease: str, min_pct, max_pct, sort_by, limit):
     return {"disease": disease, "results": rows}
 
 
+# =========================================================================== #
+# Epidemiology
+# =========================================================================== #
+
+@app.get("/api/v2/epidemiology/age-group-prevalence", tags=["Epidemiology"])
+def age_group_prevalence(
+    district: Optional[str] = Query(None),
+    zone_code: Optional[str] = Query(None),
+    sex: Optional[int] = Query(None),
+):
+    """Disease prevalence by Thai lifecycle age group x sex x district."""
+    conditions = []
+    params = []
+    if district:
+        conditions.append("s.district_code = %s")
+        params.append(district)
+    if zone_code:
+        conditions.append("d.zone_code = %s")
+        params.append(zone_code)
+    if sex is not None:
+        conditions.append("s.sex = %s")
+        params.append(sex)
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    rows = execute_query(f"""
+        SELECT s.district_code, s.sex, s.age_group, s.total_screened,
+               s.risk_dm, s.risk_hpt, s.risk_cvd, s.risk_bmi,
+               s.found_dm, s.found_hpt, s.found_cvd, s.found_stroke,
+               s.found_obesity, s.found_dyslipidemia
+        FROM summary_disease_age_sex s
+        JOIN ref_districts d ON s.district_code = d.dcode
+        {where}
+        ORDER BY s.age_group, s.sex
+    """, tuple(params) or None)
+
+    rows = [r for r in rows if (r.get("total_screened") or 0) >= K_ANONYMITY_THRESHOLD]
+    return {"age_groups": ["วัยเรียน","วัยเริ่มทำงาน","วัยทำงาน","วัยกลางคน","วัยก่อนสูงอายุ","สูงวัย"], "data": rows}
+
+
+@app.get("/api/v2/epidemiology/disease-lab-crosstab", tags=["Epidemiology"])
+def disease_lab_crosstab(
+    district: Optional[str] = Query(None),
+    zone_code: Optional[str] = Query(None),
+):
+    """Lab values stratified by disease status (positive vs negative)."""
+    conditions = []
+    params = []
+    if district:
+        conditions.append("s.district_code = %s")
+        params.append(district)
+    if zone_code:
+        conditions.append("d.zone_code = %s")
+        params.append(zone_code)
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    rows = execute_query(f"""
+        SELECT s.*
+        FROM summary_lab_disease_cross s
+        JOIN ref_districts d ON s.district_code = d.dcode
+        {where}
+        ORDER BY s.district_code
+    """, tuple(params) or None)
+
+    rows = [r for r in rows if (r.get("total_patients") or 0) >= K_ANONYMITY_THRESHOLD]
+    return {"data": rows}
+
+
+# =========================================================================== #
+# Monitoring
+# =========================================================================== #
+
+@app.get("/api/v2/monitoring/data-quality", tags=["Monitoring"])
+def data_quality():
+    """Data completeness report -- null rates per table per field."""
+    tables = ["raw_patients", "raw_visits", "raw_vitalsigns", "raw_homevisit",
+              "raw_homehealth", "raw_lab_results", "raw_lab_extended"]
+    result = {}
+    for table in tables:
+        total = execute_scalar(f'SELECT COUNT(*) FROM "{table}"') or 0
+        if total == 0:
+            result[table] = {"total_rows": 0, "fields": {}}
+            continue
+
+        # Get column null counts
+        cols = execute_query("""
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = %s
+            AND column_name NOT IN ('id','created_at','updated_at')
+            ORDER BY ordinal_position
+        """, (table,))
+
+        fields = {}
+        for col in cols:
+            cn = col["column_name"]
+            null_count = execute_scalar(
+                f'SELECT COUNT(*) FROM "{table}" WHERE "{cn}" IS NULL'
+            ) or 0
+            fields[cn] = {
+                "null_count": int(null_count),
+                "null_pct": round(100.0 * null_count / total, 1) if total > 0 else 0,
+                "filled_pct": round(100.0 * (total - null_count) / total, 1) if total > 0 else 0,
+            }
+
+        result[table] = {"total_rows": int(total), "fields": fields}
+
+    # Identify blocked fields (100% null)
+    blocked = []
+    for table, info in result.items():
+        for field, stats in info.get("fields", {}).items():
+            if stats["null_pct"] >= 100 and info["total_rows"] > 0:
+                blocked.append({"table": table, "field": field, "note": f"ไม่มีข้อมูล {field} เลย"})
+
+    return {"tables": result, "blocked_fields": blocked}
+
+
+@app.get("/api/v2/monitoring/cleansing-report", tags=["Monitoring"])
+def cleansing_report():
+    """Data cleansing summary -- what was cleaned during import."""
+    tables_info = {}
+
+    for table in ["raw_patients", "raw_vitalsigns", "raw_lab_results", "raw_homevisit", "raw_homehealth", "raw_lab_extended"]:
+        total = execute_scalar(f'SELECT COUNT(*) FROM "{table}"') or 0
+        cancelled = 0
+        if table != "raw_patients":
+            cancelled = execute_scalar(f'SELECT COUNT(*) FROM "{table}" WHERE cancel_status = 1') or 0
+
+        tables_info[table] = {
+            "total_rows": int(total),
+            "active_rows": int(total - cancelled),
+            "cancelled_excluded": int(cancelled),
+        }
+
+    # Patient-specific quality
+    null_birth = execute_scalar("SELECT COUNT(*) FROM raw_patients WHERE birth_year IS NULL") or 0
+    null_sex = execute_scalar("SELECT COUNT(*) FROM raw_patients WHERE sex IS NULL") or 0
+    tables_info["raw_patients"]["null_birth_year"] = int(null_birth)
+    tables_info["raw_patients"]["null_sex"] = int(null_sex)
+
+    # Vitalsigns-specific quality
+    null_district = execute_scalar("SELECT COUNT(*) FROM raw_vitalsigns WHERE district_code IS NULL AND cancel_status = 0") or 0
+    null_bp = execute_scalar("SELECT COUNT(*) FROM raw_vitalsigns WHERE (sbp IS NULL OR sbp = 0) AND cancel_status = 0") or 0
+    tables_info["raw_vitalsigns"]["null_district_code"] = int(null_district)
+    tables_info["raw_vitalsigns"]["null_bp"] = int(null_bp)
+
+    # Last import info
+    last_import = execute_query("""
+        SELECT filename, file_type, status, started_at, rows_imported
+        FROM import_history
+        ORDER BY started_at DESC LIMIT 5
+    """)
+
+    # Blocked fields (100% null in active records)
+    blocked = []
+    checks = [
+        ("raw_lab_results", "egfr", "eGFR (ค่าการทำงานของไต)"),
+        ("raw_lab_results", "cervical_cancer_result", "มะเร็งปากมดลูก"),
+        ("raw_lab_results", "colorectal_result", "มะเร็งลำไส้"),
+        ("raw_homehealth", "food_preference_sweet", "ความชอบอาหารหวาน"),
+        ("raw_homehealth", "dm_treatment", "สถานะการรักษาเบาหวาน"),
+        ("raw_vitalsigns", "referral_type", "ประเภทการส่งต่อ"),
+    ]
+    for table, field, label in checks:
+        total_t = execute_scalar(f'SELECT COUNT(*) FROM "{table}"') or 0
+        if total_t > 0:
+            filled = execute_scalar(f'SELECT COUNT(*) FROM "{table}" WHERE "{field}" IS NOT NULL') or 0
+            if filled == 0:
+                blocked.append({"table": table, "field": field, "label": label, "null_pct": 100.0})
+
+    return {
+        "tables": tables_info,
+        "recent_imports": last_import,
+        "blocked_fields": blocked,
+    }
+
+
+# =========================================================================== #
+# Health Promotion
+# =========================================================================== #
+
+@app.get("/api/v2/promotion/bmi-distribution", tags=["Health Promotion"])
+def bmi_distribution(
+    district: Optional[str] = Query(None),
+    zone_code: Optional[str] = Query(None),
+):
+    """BMI category distribution + waist circumference risk per district."""
+    conditions = []
+    params = []
+    if district:
+        conditions.append("s.district_code = %s")
+        params.append(district)
+    if zone_code:
+        conditions.append("d.zone_code = %s")
+        params.append(zone_code)
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    rows = execute_query(f"""
+        SELECT s.district_code, s.sex, s.total_measured,
+               s.bmi_underweight, s.bmi_normal, s.bmi_overweight, s.bmi_obese, s.bmi_severely_obese,
+               s.avg_bmi, s.total_waist_measured, s.avg_waist,
+               s.male_waist_risk, s.female_waist_risk,
+               s.avg_height, s.avg_weight
+        FROM summary_bmi_waist s
+        JOIN ref_districts d ON s.district_code = d.dcode
+        {where}
+        ORDER BY s.district_code, s.sex
+    """, tuple(params) or None)
+
+    rows = [r for r in rows if (r.get("total_measured") or 0) >= K_ANONYMITY_THRESHOLD]
+
+    return {
+        "bmi_categories": {
+            "underweight": {"label": "ผอม", "range": "< 18.5"},
+            "normal": {"label": "ปกติ", "range": "18.5-22.9"},
+            "overweight": {"label": "ท้วม", "range": "23-24.9"},
+            "obese": {"label": "อ้วน", "range": "25-29.9"},
+            "severely_obese": {"label": "อ้วนมาก", "range": "≥ 30"},
+        },
+        "data": rows,
+    }
+
+
+# =========================================================================== #
+# Executive
+# =========================================================================== #
+
+@app.get("/api/v2/executive/headline-kpi", tags=["Executive"])
+def headline_kpi():
+    """3 headline KPIs for the Governor's press conference."""
+    total = execute_scalar("SELECT COALESCE(SUM(total_screened), 0) FROM summary_district_disease") or 0
+    target = TARGET_SCREENED
+    coverage = round(100.0 * total / target, 2) if target > 0 else 0
+
+    # Top disease by prevalence
+    disease_rows = execute_query("""
+        SELECT
+            SUM(risk_dm_count) as diabetes, SUM(risk_hpt_count) as hypertension,
+            SUM(risk_cvd_count) as cardiovascular, SUM(risk_bmi_count) as obesity,
+            SUM(found_dyslipidemia_count) as dyslipidemia, SUM(found_stroke_count) as stroke,
+            SUM(total_screened) as total
+        FROM summary_district_disease
+    """)
+
+    disease_names_th = {
+        "diabetes": "เบาหวาน", "hypertension": "ความดันโลหิตสูง",
+        "cardiovascular": "หลอดเลือดหัวใจ", "obesity": "โรคอ้วน",
+        "dyslipidemia": "ไขมันในเลือดผิดปกติ", "stroke": "หลอดเลือดสมอง",
+    }
+
+    d = disease_rows[0] if disease_rows else {}
+    ts = d.get("total") or 1
+    top_disease = None
+    top_pct = 0
+    for key in disease_names_th:
+        cnt = d.get(key) or 0
+        pct = round(100.0 * cnt / ts, 1) if ts else 0
+        if pct > top_pct:
+            top_pct = pct
+            top_disease = {"key": key, "name_th": disease_names_th[key], "pct": pct, "count": cnt}
+
+    # Most concerning district (highest total disease burden)
+    worst = execute_query("""
+        SELECT district_code, district_name, total_screened,
+               risk_dm_count + risk_hpt_count + risk_cvd_count + risk_bmi_count AS total_risk
+        FROM summary_district_disease
+        WHERE total_screened >= 5
+        ORDER BY (risk_dm_count + risk_hpt_count + risk_cvd_count + risk_bmi_count)::float / NULLIF(total_screened, 0) DESC
+        LIMIT 1
+    """)
+
+    worst_district = None
+    if worst:
+        w = worst[0]
+        worst_district = {
+            "district_code": w.get("district_code"),
+            "name_th": w.get("district_name"),
+            "total_risk_pct": round(100.0 * (w.get("total_risk") or 0) / (w.get("total_screened") or 1), 1),
+        }
+
+    # Population from ref_districts
+    pop = execute_scalar("SELECT SUM(population) FROM ref_districts") or 0
+
+    return {
+        "total_screened": total,
+        "target": target,
+        "coverage_pct": coverage,
+        "population": pop,
+        "top_disease": top_disease,
+        "most_concerning_district": worst_district,
+        "summary_text": f"คัดกรองแล้ว {total:,} คน จากเป้า {target:,} ({coverage}%) โรคที่พบมากที่สุดคือ{top_disease['name_th'] if top_disease else '-'} ({top_pct}%)",
+    }
+
+
+# =========================================================================== #
+# P1 Endpoints
+# =========================================================================== #
+
+@app.get("/api/v2/facility/performance", tags=["Facility"])
+def facility_performance(
+    district: Optional[str] = Query(None),
+    zone_code: Optional[str] = Query(None),
+):
+    """Screening performance per health facility (HPTCODE)."""
+    conditions = []
+    params = []
+    if district:
+        conditions.append("s.district_code = %s")
+        params.append(district)
+    if zone_code:
+        conditions.append("d.zone_code = %s")
+        params.append(zone_code)
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    rows = execute_query(f"""
+        SELECT s.facility_code, s.district_code, s.total_screened,
+               s.risk_dm, s.risk_hpt, s.found_dm, s.found_hpt,
+               s.found_obesity, s.found_dyslipidemia,
+               s.lab_completed, s.first_screening, s.last_screening
+        FROM summary_facility s
+        LEFT JOIN ref_districts d ON s.district_code = d.dcode
+        {where}
+        ORDER BY s.total_screened DESC
+    """, tuple(params) or None)
+
+    rows = [r for r in rows if (r.get("total_screened") or 0) >= K_ANONYMITY_THRESHOLD]
+
+    # Convert dates to strings
+    for r in rows:
+        for k in ("first_screening", "last_screening"):
+            if r.get(k) and hasattr(r[k], "isoformat"):
+                r[k] = r[k].isoformat()
+
+    return {"facilities": rows}
+
+
+@app.get("/api/v2/kpi/moph-targets", tags=["KPI"])
+def moph_targets():
+    """Compare actual performance against Ministry of Public Health targets."""
+    total = execute_scalar("SELECT COALESCE(SUM(total_screened), 0) FROM summary_district_disease") or 0
+    pop = execute_scalar("SELECT COALESCE(SUM(population), 0) FROM ref_districts") or 0
+
+    disease_totals = execute_query("""
+        SELECT
+            SUM(total_screened) as total,
+            SUM(risk_dm_count) as dm, SUM(risk_hpt_count) as hpt,
+            SUM(found_obesity_count) as obesity
+        FROM summary_district_disease
+    """)
+    d = disease_totals[0] if disease_totals else {}
+    ts = d.get("total") or 1
+
+    # MoPH KPI targets (standard Thai public health KPIs)
+    kpis = [
+        {
+            "kpi_code": "NCD-01",
+            "name_th": "ความครอบคลุมการคัดกรองสุขภาพ",
+            "name_en": "Screening Coverage",
+            "target_pct": 60.0,
+            "actual_pct": round(100.0 * total / pop, 1) if pop > 0 else 0,
+            "unit": "% ของประชากร",
+        },
+        {
+            "kpi_code": "NCD-02",
+            "name_th": "อัตราการพบผู้ป่วยเบาหวานรายใหม่",
+            "name_en": "New DM Detection Rate",
+            "target_pct": 5.0,
+            "actual_pct": round(100.0 * (d.get("dm") or 0) / ts, 1),
+            "unit": "% ของผู้คัดกรอง",
+        },
+        {
+            "kpi_code": "NCD-03",
+            "name_th": "อัตราการพบผู้ป่วยความดันรายใหม่",
+            "name_en": "New HPT Detection Rate",
+            "target_pct": 10.0,
+            "actual_pct": round(100.0 * (d.get("hpt") or 0) / ts, 1),
+            "unit": "% ของผู้คัดกรอง",
+        },
+        {
+            "kpi_code": "NCD-04",
+            "name_th": "อัตราภาวะอ้วน",
+            "name_en": "Obesity Rate",
+            "target_pct": 30.0,
+            "actual_pct": round(100.0 * (d.get("obesity") or 0) / ts, 1),
+            "unit": "% ของผู้คัดกรอง",
+            "direction": "lower_is_better",
+        },
+    ]
+
+    for kpi in kpis:
+        direction = kpi.pop("direction", "higher_is_better")
+        if direction == "lower_is_better":
+            kpi["status"] = "ผ่าน" if kpi["actual_pct"] <= kpi["target_pct"] else "ไม่ผ่าน"
+        else:
+            kpi["status"] = "ผ่าน" if kpi["actual_pct"] >= kpi["target_pct"] else "ไม่ผ่าน"
+
+    return {"total_screened": total, "population": pop, "kpis": kpis}
+
+
+@app.get("/api/v2/zone/{zone_code}/dashboard", tags=["Zones"])
+def zone_dashboard(zone_code: str):
+    """Zone dashboard with facility breakdown."""
+    # Zone info
+    zone = execute_query(
+        "SELECT zone_code, name_th, name_en, facilitator FROM ref_health_zones WHERE zone_code = %s",
+        (zone_code,),
+    )
+    if not zone:
+        raise HTTPException(status_code=404, detail="Zone not found")
+
+    # Districts in zone
+    districts = execute_query("""
+        SELECT s.district_code, s.district_name, s.total_screened,
+               s.risk_dm_count, s.risk_hpt_count, s.found_obesity_count
+        FROM summary_district_disease s
+        WHERE s.zone_code = %s AND s.total_screened >= 5
+        ORDER BY s.total_screened DESC
+    """, (zone_code,))
+
+    # Facilities in zone
+    facilities = execute_query("""
+        SELECT s.facility_code, s.district_code, s.total_screened,
+               s.risk_dm, s.risk_hpt, s.found_obesity, s.lab_completed,
+               s.first_screening, s.last_screening
+        FROM summary_facility s
+        JOIN ref_districts d ON s.district_code = d.dcode
+        WHERE d.zone_code = %s AND s.total_screened >= 5
+        ORDER BY s.total_screened DESC
+    """, (zone_code,))
+
+    for f in facilities:
+        for k in ("first_screening", "last_screening"):
+            if f.get(k) and hasattr(f[k], "isoformat"):
+                f[k] = f[k].isoformat()
+
+    # Zone totals
+    zone_total = sum(d.get("total_screened", 0) or 0 for d in districts)
+
+    return {
+        **zone[0],
+        "total_screened": zone_total,
+        "district_count": len(districts),
+        "facility_count": len(facilities),
+        "districts": districts,
+        "facilities": facilities,
+    }
+
+
+@app.get("/api/v2/executive/yoy-comparison", tags=["Executive"])
+def yoy_comparison(
+    granularity: str = Query("quarterly"),
+):
+    """Year-over-year or quarter-over-quarter comparison."""
+    if granularity not in ("monthly", "quarterly"):
+        raise HTTPException(status_code=400, detail="granularity must be monthly or quarterly")
+
+    trunc = "quarter" if granularity == "quarterly" else "month"
+
+    rows = execute_query(f"""
+        SELECT
+            DATE_TRUNC('{trunc}', v.visit_date) AS period,
+            COUNT(DISTINCT v.patient_id) AS screened,
+            COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_dm) AS risk_dm,
+            COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_hpt) AS risk_hpt,
+            COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_obesity) AS found_obesity
+        FROM raw_vitalsigns v
+        WHERE v.cancel_status IS DISTINCT FROM 1 AND v.visit_date IS NOT NULL
+        GROUP BY DATE_TRUNC('{trunc}', v.visit_date)
+        HAVING COUNT(DISTINCT v.patient_id) >= %s
+        ORDER BY period
+    """, (K_ANONYMITY_THRESHOLD,))
+
+    # Convert periods and compute deltas
+    result = []
+    prev = None
+    for r in rows:
+        if r.get("period") and hasattr(r["period"], "isoformat"):
+            r["period"] = r["period"].isoformat()[:10]
+        if prev:
+            r["delta_screened"] = (r.get("screened") or 0) - (prev.get("screened") or 0)
+            r["delta_pct"] = round(100.0 * r["delta_screened"] / (prev.get("screened") or 1), 1)
+        else:
+            r["delta_screened"] = 0
+            r["delta_pct"] = 0
+        prev = r
+        result.append(r)
+
+    return {"granularity": granularity, "periods": result}
+
+
+@app.get("/api/v2/epidemiology/multi-disease-matrix", tags=["Epidemiology"])
+def multi_disease_matrix(
+    district: Optional[str] = Query(None),
+    zone_code: Optional[str] = Query(None),
+):
+    """Disease co-occurrence matrix -- comorbidity analysis."""
+    conditions = []
+    params = []
+    if district:
+        conditions.append("s.district_code = %s")
+        params.append(district)
+    if zone_code:
+        conditions.append("d.zone_code = %s")
+        params.append(zone_code)
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    rows = execute_query(f"""
+        SELECT s.district_code, s.total_screened,
+               s.dm_only, s.hpt_only, s.obesity_only,
+               s.dm_and_hpt, s.dm_and_obesity, s.dm_and_dyslipidemia,
+               s.hpt_and_obesity, s.hpt_and_dyslipidemia,
+               s.cvd_and_stroke, s.dm_and_cvd,
+               s.metabolic_syndrome, s.dm_hpt_obesity,
+               s.multi_disease_count, s.no_disease
+        FROM summary_comorbidity s
+        LEFT JOIN ref_districts d ON s.district_code = d.dcode
+        {where}
+        ORDER BY s.district_code
+    """, tuple(params) or None)
+
+    rows = [r for r in rows if (r.get("total_screened") or 0) >= K_ANONYMITY_THRESHOLD]
+    return {"data": rows}
+
+
 # --------------------------------------------------------------------------- #
 # Run with: uvicorn main:app --host 0.0.0.0 --port 8000
 # --------------------------------------------------------------------------- #

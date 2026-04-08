@@ -1,0 +1,277 @@
+{% extends "base.html" %}
+{% set active_page = "data_quality" %}
+
+{% block title %}Data Quality - BMA Health Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+    <!-- Page Header -->
+    <div class="flex items-center justify-between">
+        <h1 class="text-lg font-bold text-gray-900">Data Quality</h1>
+        <a href="/admin/data-quality"
+           class="inline-flex items-center gap-2 px-4 py-2.5 bg-[#00744B] text-white rounded-lg font-medium hover:bg-[#005C3B] transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            Refresh
+        </a>
+    </div>
+
+    <!-- Blocked Fields (100% null) -->
+    {% if cleansing and cleansing.blocked_fields %}
+    <div class="bg-red-50 border border-red-200 rounded-xl p-5">
+        <div class="flex items-center gap-2 mb-3">
+            <svg class="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+            </svg>
+            <h2 class="text-sm font-bold text-red-800">Blocked Fields (100% null)</h2>
+            <span class="ml-auto text-xs text-red-600 bg-red-100 px-2 py-0.5 rounded-full font-medium">{{ cleansing.blocked_fields | length }} fields</span>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-left text-red-700">
+                        <th class="pb-2 pr-4 font-medium">Table</th>
+                        <th class="pb-2 pr-4 font-medium">Field</th>
+                        <th class="pb-2 font-medium">Note</th>
+                    </tr>
+                </thead>
+                <tbody class="text-red-800">
+                    {% for bf in cleansing.blocked_fields %}
+                    <tr class="border-t border-red-100">
+                        <td class="py-1.5 pr-4 font-mono text-xs">{{ bf.table }}</td>
+                        <td class="py-1.5 pr-4 font-mono text-xs">{{ bf.field }}</td>
+                        <td class="py-1.5 text-xs text-red-600">All rows NULL - no data imported for this field</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% else %}
+    <div class="bg-green-50 border border-green-200 rounded-xl p-4">
+        <div class="flex items-center gap-2">
+            <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <span class="text-sm font-medium text-green-800">No blocked fields detected</span>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Table Completeness -->
+    <div class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-100">
+            <h2 class="text-sm font-bold text-gray-900">Table Completeness</h2>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50">
+                    <tr class="text-left text-gray-600">
+                        <th class="px-5 py-3 font-medium">Table</th>
+                        <th class="px-5 py-3 font-medium text-right">Rows</th>
+                        <th class="px-5 py-3 font-medium text-right">Fill %</th>
+                        <th class="px-5 py-3 font-medium w-48">Completeness</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for table_name, info in data_quality.items() %}
+                    <tr class="hover:bg-gray-50 transition-colors">
+                        <td class="px-5 py-3 font-mono text-xs font-medium text-gray-900">{{ table_name }}</td>
+                        <td class="px-5 py-3 text-right text-gray-700">{{ "{:,}".format(info.total_rows) }}</td>
+                        <td class="px-5 py-3 text-right font-medium
+                            {% if info.total_rows == 0 %}text-gray-400
+                            {% elif info.avg_fill_pct >= 90 %}text-green-700
+                            {% elif info.avg_fill_pct >= 60 %}text-amber-600
+                            {% else %}text-red-600{% endif %}">
+                            {% if info.total_rows == 0 %}
+                                <span class="text-xs">--</span>
+                            {% else %}
+                                {{ info.avg_fill_pct }}%
+                            {% endif %}
+                        </td>
+                        <td class="px-5 py-3">
+                            {% if info.total_rows == 0 %}
+                                <div class="flex items-center gap-2">
+                                    <div class="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
+                                        <div class="h-full bg-gray-400 rounded-full" style="width: 0%"></div>
+                                    </div>
+                                    <span class="text-xs text-gray-400 whitespace-nowrap">No data</span>
+                                </div>
+                            {% else %}
+                                {% set fill = info.avg_fill_pct %}
+                                {% if fill >= 90 %}
+                                    {% set bar_color = "bg-green-500" %}
+                                {% elif fill >= 60 %}
+                                    {% set bar_color = "bg-amber-400" %}
+                                {% else %}
+                                    {% set bar_color = "bg-red-500" %}
+                                {% endif %}
+                                <div class="flex-1 h-2.5 bg-gray-200 rounded-full overflow-hidden">
+                                    <div class="h-full {{ bar_color }} rounded-full transition-all" style="width: {{ fill }}%"></div>
+                                </div>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% if not data_quality %}
+                    <tr>
+                        <td colspan="4" class="px-5 py-8 text-center text-gray-400 text-sm">No table data available</td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Per-Field Detail (expandable per table) -->
+    <div class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-100">
+            <h2 class="text-sm font-bold text-gray-900">Per-Field Detail</h2>
+            <p class="text-xs text-gray-500 mt-0.5">Click a table to expand field-level null analysis</p>
+        </div>
+        <div class="divide-y divide-gray-100">
+            {% for table_name, info in data_quality.items() %}
+            {% if info.total_rows > 0 and info.fields %}
+            <details class="group">
+                <summary class="flex items-center justify-between px-5 py-3 cursor-pointer hover:bg-gray-50 transition-colors select-none">
+                    <div class="flex items-center gap-2">
+                        <svg class="w-4 h-4 text-gray-400 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                        </svg>
+                        <span class="font-mono text-xs font-medium text-gray-900">{{ table_name }}</span>
+                        <span class="text-xs text-gray-500">({{ info.fields | length }} fields)</span>
+                    </div>
+                    <span class="text-xs font-medium
+                        {% if info.avg_fill_pct >= 90 %}text-green-700
+                        {% elif info.avg_fill_pct >= 60 %}text-amber-600
+                        {% else %}text-red-600{% endif %}">
+                        {{ info.avg_fill_pct }}% filled
+                    </span>
+                </summary>
+                <div class="px-5 pb-4">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="text-left text-gray-500 text-xs">
+                                <th class="pb-2 pr-4 font-medium">Field</th>
+                                <th class="pb-2 pr-4 font-medium text-right">Null Count</th>
+                                <th class="pb-2 pr-4 font-medium text-right">Null %</th>
+                                <th class="pb-2 font-medium w-40">Fill Bar</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-50">
+                            {% for field_name, stats in info.fields.items() %}
+                            <tr class="hover:bg-gray-50/50">
+                                <td class="py-1.5 pr-4 font-mono text-xs
+                                    {% if stats.null_pct >= 100 %}text-red-600 font-bold{% else %}text-gray-700{% endif %}">
+                                    {{ field_name }}
+                                    {% if stats.null_pct >= 100 %}
+                                    <span class="ml-1 text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full font-medium">BLOCKED</span>
+                                    {% endif %}
+                                </td>
+                                <td class="py-1.5 pr-4 text-right text-xs text-gray-600">{{ "{:,}".format(stats.null_count) }}</td>
+                                <td class="py-1.5 pr-4 text-right text-xs font-medium
+                                    {% if stats.null_pct >= 100 %}text-red-600
+                                    {% elif stats.null_pct >= 40 %}text-amber-600
+                                    {% elif stats.null_pct >= 10 %}text-gray-600
+                                    {% else %}text-green-600{% endif %}">
+                                    {{ stats.null_pct }}%
+                                </td>
+                                <td class="py-1.5">
+                                    {% set fill = stats.fill_pct %}
+                                    {% if fill >= 90 %}
+                                        {% set bar_color = "bg-green-500" %}
+                                    {% elif fill >= 60 %}
+                                        {% set bar_color = "bg-amber-400" %}
+                                    {% elif fill > 0 %}
+                                        {% set bar_color = "bg-red-500" %}
+                                    {% else %}
+                                        {% set bar_color = "bg-red-800" %}
+                                    {% endif %}
+                                    <div class="flex items-center gap-2">
+                                        <div class="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+                                            <div class="h-full {{ bar_color }} rounded-full" style="width: {{ fill }}%"></div>
+                                        </div>
+                                        {% if fill == 0 %}
+                                        <span class="text-[10px] text-red-600 whitespace-nowrap font-medium">No data</span>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </details>
+            {% elif info.total_rows == 0 %}
+            <div class="flex items-center justify-between px-5 py-3 text-gray-400">
+                <div class="flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"/>
+                    </svg>
+                    <span class="font-mono text-xs font-medium">{{ table_name }}</span>
+                </div>
+                <span class="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">No data</span>
+            </div>
+            {% endif %}
+            {% endfor %}
+            {% if not data_quality %}
+            <div class="px-5 py-8 text-center text-gray-400 text-sm">No table data available</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Recent Import History -->
+    <div class="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+        <div class="px-5 py-4 border-b border-gray-100">
+            <h2 class="text-sm font-bold text-gray-900">Recent Import History</h2>
+        </div>
+        {% if cleansing and cleansing.recent_imports %}
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead class="bg-gray-50">
+                    <tr class="text-left text-gray-600 text-xs">
+                        <th class="px-5 py-3 font-medium">Filename</th>
+                        <th class="px-5 py-3 font-medium">Type</th>
+                        <th class="px-5 py-3 font-medium">Status</th>
+                        <th class="px-5 py-3 font-medium">Started</th>
+                        <th class="px-5 py-3 font-medium text-right">Imported</th>
+                        <th class="px-5 py-3 font-medium text-right">Skipped</th>
+                        <th class="px-5 py-3 font-medium text-right">Duration</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100">
+                    {% for imp in cleansing.recent_imports %}
+                    <tr class="hover:bg-gray-50 transition-colors">
+                        <td class="px-5 py-2.5 font-mono text-xs text-gray-900 max-w-[200px] truncate" title="{{ imp.filename }}">{{ imp.filename }}</td>
+                        <td class="px-5 py-2.5 text-xs text-gray-600">{{ imp.file_type }}</td>
+                        <td class="px-5 py-2.5">
+                            {% if imp.status == 'success' %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">success</span>
+                            {% elif imp.status == 'error' %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">error</span>
+                            {% elif imp.status == 'running' %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">running</span>
+                            {% else %}
+                            <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">{{ imp.status }}</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-5 py-2.5 text-xs text-gray-500">{{ imp.started_at }}</td>
+                        <td class="px-5 py-2.5 text-right text-xs text-gray-700">{{ imp.rows_imported or 0 }}</td>
+                        <td class="px-5 py-2.5 text-right text-xs text-gray-700">{{ imp.rows_skipped or 0 }}</td>
+                        <td class="px-5 py-2.5 text-right text-xs text-gray-500">
+                            {% if imp.duration_seconds %}{{ "%.1f" | format(imp.duration_seconds) }}s{% else %}--{% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="px-5 py-8 text-center text-gray-400 text-sm">No import history available</div>
+        {% endif %}
+    </div>
+
+</div>
+{% endblock %}

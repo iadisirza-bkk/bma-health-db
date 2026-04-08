@@ -47,7 +47,7 @@ CREATE TABLE raw_patients (
   pname SMALLINT,
   sex SMALLINT,
   birth_year SMALLINT,
-  age_group VARCHAR(10),
+  age_group VARCHAR(30),
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now()
 );

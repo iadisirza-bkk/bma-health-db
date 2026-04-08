@@ -815,6 +815,70 @@ async def history_page(request: Request):
 # LOGS
 # =========================================================================== #
 
+@router.get("/data-quality", response_class=HTMLResponse)
+async def data_quality_page(request: Request):
+    """Data quality dashboard -- field completeness and cleansing report."""
+    _require_auth(request)
+
+    # Fetch data quality info
+    data_quality = {}
+    cleansing = {}
+    try:
+        # Query data quality directly (same logic as the API endpoint)
+        tables = ["raw_patients", "raw_visits", "raw_vitalsigns", "raw_homevisit",
+                  "raw_homehealth", "raw_lab_results", "raw_lab_extended"]
+        for table in tables:
+            total = execute_scalar(f'SELECT COUNT(*) FROM "{table}"') or 0
+            if total == 0:
+                data_quality[table] = {"total_rows": 0, "fields": {}, "avg_fill_pct": 0}
+                continue
+            cols = execute_query("""
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = %s
+                AND column_name NOT IN ('id','created_at','updated_at')
+                ORDER BY ordinal_position
+            """, (table,))
+            fields = {}
+            filled_total = 0
+            for col in cols:
+                cn = col["column_name"]
+                null_count = execute_scalar(f'SELECT COUNT(*) FROM "{table}" WHERE "{cn}" IS NULL') or 0
+                fill_pct = round(100.0 * (total - null_count) / total, 1)
+                filled_total += fill_pct
+                fields[cn] = {"null_count": int(null_count), "null_pct": round(100.0 * null_count / total, 1), "fill_pct": fill_pct}
+            avg_fill = round(filled_total / len(fields), 1) if fields else 0
+            data_quality[table] = {"total_rows": int(total), "fields": fields, "avg_fill_pct": avg_fill}
+
+        # Blocked fields
+        blocked = []
+        for table, info in data_quality.items():
+            for field, stats in info.get("fields", {}).items():
+                if stats["null_pct"] >= 100 and info["total_rows"] > 0:
+                    blocked.append({"table": table, "field": field})
+
+        # Recent imports
+        recent_imports = execute_query("""
+            SELECT filename, file_type, status, started_at, rows_imported, rows_skipped, duration_seconds
+            FROM import_history ORDER BY started_at DESC LIMIT 5
+        """)
+        cleansing = {"blocked_fields": blocked, "recent_imports": recent_imports}
+    except Exception:
+        pass
+
+    return templates.TemplateResponse(
+        "admin/data_quality.html",
+        {
+            "request": request,
+            "data_quality": data_quality,
+            "cleansing": cleansing,
+            "messages": _get_flash(request),
+        },
+    )
+
+# =========================================================================== #
+# LOGS
+# =========================================================================== #
+
 @router.get("/logs", response_class=HTMLResponse)
 async def logs_page(request: Request):
     """Show recent import log entries."""

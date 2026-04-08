@@ -115,17 +115,17 @@ def age_group(birth_year: Optional[int], current_year: int) -> Optional[str]:
     age = current_year - birth_year
     if age < 15:
         return None
-    if age <= 24:
-        return "15-24"
-    if age <= 34:
-        return "25-34"
-    if age <= 44:
-        return "35-44"
-    if age <= 54:
-        return "45-54"
+    if age <= 21:
+        return "วัยเรียน"
+    if age <= 35:
+        return "วัยเริ่มทำงาน"
+    if age <= 45:
+        return "วัยทำงาน"
+    if age <= 55:
+        return "วัยกลางคน"
     if age <= 64:
-        return "55-64"
-    return "65+"
+        return "วัยก่อนสูงอายุ"
+    return "สูงวัย"
 
 
 # ---------------------------------------------------------------------------
