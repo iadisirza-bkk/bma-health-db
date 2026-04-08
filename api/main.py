@@ -76,16 +76,14 @@ async def lifespan(app: FastAPI):
     close_pool()
 
 
-_is_production = os.getenv("ENVIRONMENT", "development") == "production"
-
 app = FastAPI(
     title="BMA Health Summary API",
     version="2.0.0",
-    description="Aggregate health screening data for Bangkok Metropolitan Administration. No PII.",
+    description="ระบบฐานข้อมูลสุขภาพ กรุงเทพมหานคร — Summary API\n\nAggregate health screening data for Bangkok Metropolitan Administration.\nNo PII. k-anonymity ≥ 5 enforced.",
     lifespan=lifespan,
-    docs_url=None if _is_production else "/docs",
-    redoc_url=None if _is_production else "/redoc",
-    openapi_url=None if _is_production else "/openapi.json",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
 )
 
 # Middleware order: CORS -> Rate Limit -> API Key
@@ -1342,6 +1340,330 @@ def multi_disease_matrix(
 
     rows = [r for r in rows if (r.get("total_screened") or 0) >= K_ANONYMITY_THRESHOLD]
     return {"data": rows}
+
+
+# =========================================================================== #
+# Age-sex pyramid
+# =========================================================================== #
+
+@app.get("/api/v2/epidemiology/age-pyramid", tags=["Epidemiology"])
+def age_pyramid(
+    district: Optional[str] = Query(None),
+    zone_code: Optional[str] = Query(None),
+):
+    """Age-sex pyramid of screened population."""
+    conditions = []
+    params = []
+    if district:
+        conditions.append("s.district_code = %s")
+        params.append(district)
+    if zone_code:
+        conditions.append("d.zone_code = %s")
+        params.append(zone_code)
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    rows = execute_query(f"""
+        SELECT s.age_group, s.sex,
+               SUM(s.total_screened) AS count
+        FROM summary_disease_age_sex s
+        JOIN ref_districts d ON s.district_code = d.dcode
+        {where}
+        GROUP BY s.age_group, s.sex
+        ORDER BY s.age_group, s.sex
+    """, tuple(params) or None)
+
+    # Pivot into {age_group, male_count, female_count}
+    age_map: dict = {}
+    for r in rows:
+        ag = r["age_group"]
+        if ag not in age_map:
+            age_map[ag] = {"age_group": ag, "male_count": 0, "female_count": 0}
+        sex = r.get("sex")
+        cnt = r.get("count") or 0
+        if sex == 1:
+            age_map[ag]["male_count"] = int(cnt)
+        elif sex == 2:
+            age_map[ag]["female_count"] = int(cnt)
+
+    result = list(age_map.values())
+    # Enforce k-anonymity: suppress rows where both counts are below threshold
+    result = [
+        r for r in result
+        if (r["male_count"] + r["female_count"]) >= K_ANONYMITY_THRESHOLD
+    ]
+
+    return {"data": result}
+
+
+# =========================================================================== #
+# Disease Control
+# =========================================================================== #
+
+@app.get("/api/v2/disease-control/screening-coverage", tags=["Disease Control"])
+def screening_coverage(zone_code: Optional[str] = Query(None)):
+    """Screening coverage rate per district (screened / population)."""
+    conditions = []
+    params = []
+    if zone_code:
+        conditions.append("d.zone_code = %s")
+        params.append(zone_code)
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    rows = execute_query(f"""
+        SELECT d.dcode, d.name_th, d.zone_code, d.population,
+               COALESCE(SUM(s.total_screened), 0) AS screened,
+               ROUND(100.0 * COALESCE(SUM(s.total_screened), 0)
+                     / NULLIF(d.population, 0), 2) AS coverage_pct
+        FROM ref_districts d
+        LEFT JOIN summary_district_disease s ON d.dcode = s.district_code
+        {where}
+        GROUP BY d.dcode, d.name_th, d.zone_code, d.population
+        ORDER BY coverage_pct DESC
+    """, tuple(params) or None)
+
+    rows = [r for r in rows if (r.get("screened") or 0) >= K_ANONYMITY_THRESHOLD]
+    return {"data": rows}
+
+
+@app.get("/api/v2/disease-control/ncd-cascade", tags=["Disease Control"])
+def ncd_cascade(disease: str = Query("diabetes")):
+    """NCD cascade: screening -> risk -> diagnosis -> treatment."""
+    _validate_disease_key(disease)
+    dk = DISEASE_KEYS[disease]
+
+    total_screened = execute_scalar(
+        "SELECT COALESCE(SUM(total_screened), 0) FROM summary_district_disease"
+    ) or 0
+
+    risk_col = dk.get("risk")
+    found_col = dk.get("found")
+
+    at_risk = None
+    diagnosed = None
+
+    if risk_col:
+        at_risk = execute_scalar(
+            f"SELECT COALESCE(SUM({risk_col}_count), 0) FROM summary_district_disease"
+        ) or 0
+    if found_col:
+        diagnosed = execute_scalar(
+            f"SELECT COALESCE(SUM({found_col}_count), 0) FROM summary_district_disease"
+        ) or 0
+
+    cascade = [
+        {
+            "step": "screened",
+            "label_th": "คัดกรอง",
+            "count": suppress_scalar_if_small(total_screened),
+            "pct_of_screened": 100.0,
+        },
+    ]
+    if at_risk is not None:
+        cascade.append({
+            "step": "at_risk",
+            "label_th": "มีความเสี่ยง",
+            "count": suppress_scalar_if_small(at_risk),
+            "pct_of_screened": round(100.0 * at_risk / total_screened, 2) if total_screened else 0,
+        })
+    if diagnosed is not None:
+        cascade.append({
+            "step": "diagnosed",
+            "label_th": "พบโรค",
+            "count": suppress_scalar_if_small(diagnosed),
+            "pct_of_screened": round(100.0 * diagnosed / total_screened, 2) if total_screened else 0,
+        })
+
+    # Treatment data not available in current schema
+    cascade.append({
+        "step": "treatment",
+        "label_th": "ได้รับการรักษา",
+        "count": None,
+        "pct_of_screened": None,
+        "note": "ข้อมูลการรักษายังไม่มีในระบบ",
+    })
+
+    return {"disease": disease, "cascade": cascade}
+
+
+# =========================================================================== #
+# Monitoring — table stats
+# =========================================================================== #
+
+@app.get("/api/v2/monitoring/table-stats", tags=["Monitoring"])
+def table_stats():
+    """Row counts and metadata per table."""
+    rows = execute_query("""
+        SELECT
+            t.tablename AS table_name,
+            COALESCE(s.n_live_tup, 0) AS row_count,
+            (SELECT COUNT(*) FROM information_schema.columns c
+             WHERE c.table_schema = 'public' AND c.table_name = t.tablename) AS column_count
+        FROM pg_catalog.pg_tables t
+        LEFT JOIN pg_stat_user_tables s ON s.relname = t.tablename
+        WHERE t.schemaname = 'public'
+        ORDER BY t.tablename
+    """)
+
+    # Add last-updated from summary tables where available
+    last_updated = execute_scalar(
+        "SELECT MAX(refreshed_at) FROM summary_district_disease"
+    )
+
+    return {
+        "tables": rows,
+        "last_updated": str(last_updated) if last_updated else None,
+    }
+
+
+# =========================================================================== #
+# KPI — screening yield
+# =========================================================================== #
+
+@app.get("/api/v2/kpi/screening-yield", tags=["KPI"])
+def screening_yield(
+    disease: str = Query("diabetes"),
+    zone_code: Optional[str] = Query(None),
+):
+    """Screening yield (% risk found / total screened) per district."""
+    _validate_disease_key(disease)
+    dk = DISEASE_KEYS[disease]
+
+    risk_col = dk.get("risk")
+    found_col = dk.get("found")
+    count_col = None
+    if risk_col:
+        count_col = f"{risk_col}_count"
+    elif found_col:
+        count_col = f"{found_col}_count"
+
+    if not count_col:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No risk/found column available for '{disease}'.",
+        )
+
+    conditions = ["s.total_screened > 0"]
+    params: list = []
+    if zone_code:
+        conditions.append("s.zone_code = %s")
+        params.append(zone_code)
+    where = "WHERE " + " AND ".join(conditions)
+
+    rows = execute_query(f"""
+        SELECT s.district_code, s.district_name, s.zone_code,
+               s.total_screened,
+               s.{count_col} AS risk_found,
+               ROUND(100.0 * s.{count_col} / NULLIF(s.total_screened, 0), 2) AS yield_pct
+        FROM summary_district_disease s
+        {where}
+        ORDER BY yield_pct DESC
+    """, tuple(params) or None)
+
+    rows = [r for r in rows if (r.get("total_screened") or 0) >= K_ANONYMITY_THRESHOLD]
+    return {"disease": disease, "data": rows}
+
+
+# =========================================================================== #
+# Public — district summary
+# =========================================================================== #
+
+@app.get("/api/v2/public/district-summary", tags=["Public"])
+def public_district_summary(
+    district: str = Query(..., description="District code"),
+    lang: str = Query("th"),
+):
+    """Simplified health summary for public. PDPA-safe, Thai language."""
+    disease = execute_query(
+        """SELECT district_code, district_name, total_screened,
+                  risk_dm_count, pct_risk_dm,
+                  risk_hpt_count, pct_risk_hpt,
+                  risk_cvd_count, pct_risk_cvd,
+                  found_obesity_count
+           FROM summary_district_disease WHERE district_code = %s""",
+        (district,),
+    )
+    if not disease:
+        raise HTTPException(status_code=404, detail="District not found")
+
+    d = disease[0]
+    total = d.get("total_screened") or 0
+    if total < K_ANONYMITY_THRESHOLD:
+        raise HTTPException(status_code=403, detail="Data suppressed for privacy (k-anonymity)")
+
+    name = d.get("district_name") or district
+
+    # Suppress individual disease counts below threshold
+    dm_count = d.get("risk_dm_count") or 0
+    hpt_count = d.get("risk_hpt_count") or 0
+    cvd_count = d.get("risk_cvd_count") or 0
+    obesity_count = d.get("found_obesity_count") or 0
+
+    dm_text = f"เบาหวาน {dm_count:,} คน ({d.get('pct_risk_dm') or 0}%)" if dm_count >= K_ANONYMITY_THRESHOLD else "เบาหวาน: ข้อมูลไม่เพียงพอ"
+    hpt_text = f"ความดันสูง {hpt_count:,} คน ({d.get('pct_risk_hpt') or 0}%)" if hpt_count >= K_ANONYMITY_THRESHOLD else "ความดันสูง: ข้อมูลไม่เพียงพอ"
+    cvd_text = f"หัวใจและหลอดเลือด {cvd_count:,} คน ({d.get('pct_risk_cvd') or 0}%)" if cvd_count >= K_ANONYMITY_THRESHOLD else "หัวใจและหลอดเลือด: ข้อมูลไม่เพียงพอ"
+    obesity_text = f"โรคอ้วน {obesity_count:,} คน" if obesity_count >= K_ANONYMITY_THRESHOLD else "โรคอ้วน: ข้อมูลไม่เพียงพอ"
+
+    summary = (
+        f"สรุปผลการคัดกรองสุขภาพ เขต{name}\n"
+        f"จำนวนผู้เข้ารับการคัดกรอง: {total:,} คน\n\n"
+        f"ผลการคัดกรองโรคเรื้อรัง:\n"
+        f"- {dm_text}\n"
+        f"- {hpt_text}\n"
+        f"- {cvd_text}\n"
+        f"- {obesity_text}\n\n"
+        f"หมายเหตุ: ข้อมูลนี้เป็นข้อมูลรวม ไม่มีข้อมูลส่วนบุคคล"
+    )
+
+    return {
+        "district_code": district,
+        "district_name": name,
+        "total_screened": total,
+        "summary_text": summary,
+        "lang": lang,
+    }
+
+
+# =========================================================================== #
+# Research — data dictionary
+# =========================================================================== #
+
+@app.get("/api/v2/research/data-dictionary", tags=["Research"])
+def data_dictionary():
+    """Auto-generated data dictionary for all public tables."""
+    rows = execute_query("""
+        SELECT
+            c.table_name,
+            c.column_name,
+            c.data_type,
+            c.is_nullable,
+            c.column_default,
+            c.ordinal_position,
+            pgd.description
+        FROM information_schema.columns c
+        LEFT JOIN pg_catalog.pg_statio_all_tables st
+            ON c.table_schema = st.schemaname AND c.table_name = st.relname
+        LEFT JOIN pg_catalog.pg_description pgd
+            ON pgd.objoid = st.relid
+            AND pgd.objsubid = c.ordinal_position
+        WHERE c.table_schema = 'public'
+        ORDER BY c.table_name, c.ordinal_position
+    """)
+
+    # Group by table
+    tables: dict = {}
+    for r in rows:
+        tn = r["table_name"]
+        if tn not in tables:
+            tables[tn] = {"table": tn, "columns": []}
+        tables[tn]["columns"].append({
+            "column": r["column_name"],
+            "type": r["data_type"],
+            "nullable": r["is_nullable"],
+            "default": r.get("column_default"),
+            "description": r.get("description"),
+        })
+
+    return {"tables": list(tables.values())}
 
 
 # --------------------------------------------------------------------------- #
