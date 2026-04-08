@@ -94,11 +94,11 @@
                 </div>
                 <div>
                     <span class="text-xs font-semibold uppercase tracking-wider text-gray-500">แถว</span>
-                    <p class="text-sm font-bold text-[#00744B]">{{ "{:,}".format(preview.row_count) }}</p>
+                    <p class="text-sm font-bold text-[#00744B]">{{ "{:,}".format(preview.total_rows) }}</p>
                 </div>
                 <div>
                     <span class="text-xs font-semibold uppercase tracking-wider text-gray-500">คอลัมน์</span>
-                    <p class="text-sm font-bold text-[#00744B]">{{ preview.col_count }}</p>
+                    <p class="text-sm font-bold text-[#00744B]">{{ preview.columns|length }}</p>
                 </div>
             </div>
         </div>
@@ -116,10 +116,10 @@
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-200">
-                        {% for row in preview.rows %}
+                        {% for row in preview.sample_rows %}
                         <tr class="hover:bg-gray-50 transition-colors">
-                            {% for cell in row %}
-                            <td class="px-4 py-2 text-gray-700 whitespace-nowrap max-w-xs truncate">{{ cell }}</td>
+                            {% for col in preview.columns %}
+                            <td class="px-4 py-2 text-gray-700 whitespace-nowrap max-w-xs truncate">{{ row.get(col, '') }}</td>
                             {% endfor %}
                         </tr>
                         {% endfor %}

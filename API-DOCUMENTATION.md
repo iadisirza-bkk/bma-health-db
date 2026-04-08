@@ -1,174 +1,198 @@
-# BMA Health DB Summary API -- Frontend Integration Guide
+# BMA Health DB -- API Documentation
 
-**Version:** 2.0.0
-**Base URL:** Configurable via environment. Default: `http://localhost:8002`
-**Content-Type:** All responses are `application/json`
-**Data Policy:** All endpoints return aggregate/summary data only. No individual patient records. No PII is ever exposed.
+> Summary API v2 for Bangkok Metropolitan Administration health screening data.
+> Serves **aggregate data only** -- no individual records, no PII.
+
+Base URL: `https://your-domain.com` (or `http://localhost:8000` in development)
 
 ---
 
 ## Table of Contents
 
-1. [Authentication](#authentication)
-2. [Rate Limiting](#rate-limiting)
-3. [k-Anonymity](#k-anonymity)
-4. [Error Handling](#error-handling)
-5. [Reference Values](#reference-values)
-6. [Endpoints -- System](#system)
-7. [Endpoints -- Summary](#summary)
-8. [Endpoints -- Zones](#zones)
-9. [Endpoints -- Districts](#districts)
-10. [Endpoints -- Filtered](#filtered)
-11. [Endpoints -- Lab](#lab)
-12. [Endpoints -- Mental Health](#mental-health)
-13. [Endpoints -- Demographics](#demographics)
-14. [Endpoints -- Trends](#trends)
-15. [Endpoints -- Search](#search)
-16. [Endpoints -- Admin](#admin)
+- [Quick Start](#quick-start)
+- [Authentication](#authentication)
+- [Rate Limiting](#rate-limiting)
+- [k-Anonymity Policy](#k-anonymity-policy)
+- [Error Handling](#error-handling)
+- [Endpoints](#endpoints)
+  - [System](#system)
+  - [Summary](#summary)
+  - [Zones](#zones)
+  - [Districts](#districts)
+  - [Trends](#trends)
+  - [Search](#search)
+  - [Admin (session auth)](#admin-session-auth)
+- [Reference Tables](#reference-tables)
+- [Frontend Integration](#frontend-integration)
+
+---
+
+## Quick Start
+
+```bash
+# Health check (no auth required)
+curl http://localhost:8000/health
+
+# Fetch screening overview
+curl -H "X-API-Key: your-api-key" http://localhost:8000/api/v2/summary/overview
+
+# List all zones with disease breakdown
+curl -H "X-API-Key: your-api-key" http://localhost:8000/api/v2/summary/zones
+
+# Get a specific district
+curl -H "X-API-Key: your-api-key" http://localhost:8000/api/v2/summary/districts/1001
+```
 
 ---
 
 ## Authentication
 
-All API endpoints (except `/health`) require the `X-API-Key` header.
+All API endpoints (except `/health`) require an API key passed via the `X-API-Key` header.
 
 ```
-X-API-Key: <your-api-key>
+X-API-Key: your-api-key
 ```
 
-Requests without a valid key receive a `401` response:
+The API key is configured via the `API_KEY` environment variable. The default development key is `changeme-dev-key` -- this must be changed in production.
+
+**Paths that do NOT require an API key:**
+- `GET /health`
+- `GET /docs` (development only)
+- `GET /redoc` (development only)
+- `GET /openapi.json` (development only)
+- All `/admin/*` paths (use session auth instead)
+- All `/static/*` paths
+
+**Admin routes** use cookie-based session authentication (see [Admin](#admin-session-auth)).
+
+### Error Response
 
 ```json
 {
   "detail": "Invalid or missing API key"
 }
 ```
-
-Admin endpoints (`/admin/*`) use a separate session-based authentication (cookie) and do not require the `X-API-Key` header.
+Status: `401 Unauthorized`
 
 ---
 
 ## Rate Limiting
 
-The API enforces per-IP rate limiting using a sliding window (default: 60 requests per minute). When exceeded, the API returns `429`:
+In-memory sliding-window rate limiter, per IP address.
+
+| Tier   | Limit                          | Window |
+|--------|--------------------------------|--------|
+| Public | 60 requests (configurable via `RATE_LIMIT_PUBLIC`) | 60 seconds |
+
+Rate limiting applies to all API endpoints. Health checks, admin routes, and static files are exempt.
+
+### Error Response
 
 ```json
 {
   "detail": "Rate limit exceeded. Try again later."
 }
 ```
+Status: `429 Too Many Requests`
 
 ---
 
-## k-Anonymity
+## k-Anonymity Policy
 
-All filtered and trend queries enforce k-anonymity with a threshold of **5**. Any group or time period with fewer than 5 individuals is suppressed (excluded from results entirely). This prevents re-identification of individuals through small-group analysis.
+All endpoints enforce **k-anonymity with k=5**. This prevents identification of individuals in small groups.
+
+**How it works:**
+
+1. **District-level endpoints** -- Districts with `total_screened < 5` are completely excluded from list results. Single-district lookups return `403 Forbidden`.
+2. **Filtered queries** -- Rows where `patient_count < 5` are removed from results.
+3. **Trend endpoints** -- Time periods with `screened_count < 5` or `total_screened < 5` are suppressed.
+4. **Lab/Mental health/Demographics** -- Districts with `total_lab_patients < 5`, `total_screened < 5`, or `total_respondents < 5` are excluded.
+
+Suppressed rows are **completely excluded** (not masked or replaced with zeros) to prevent differential attacks.
+
+### Suppression Example
+
+```json
+{
+  "detail": "Data suppressed for privacy (k-anonymity)"
+}
+```
+Status: `403 Forbidden` (when requesting a single district with insufficient data)
 
 ---
 
 ## Error Handling
 
-All errors return JSON with a `detail` field:
-
-| Status | Meaning |
-|--------|---------|
-| `400` | Invalid parameters (bad disease key, invalid granularity, etc.) |
-| `401` | Missing or invalid API key |
-| `404` | Resource not found (zone, district) |
-| `429` | Rate limit exceeded |
-| `500` | Internal server error |
-
-Example error response:
+All errors follow the standard FastAPI error format:
 
 ```json
 {
-  "detail": "Invalid disease_key 'flu'. Valid keys: ['anemia', 'cardiovascular', 'ckd', 'diabetes', 'dyslipidemia', 'hypertension', 'obesity', 'stroke']"
+  "detail": "Error description here"
 }
 ```
 
----
-
-## Reference Values
-
-### Disease Keys
-
-| Key | Description |
-|-----|-------------|
-| `diabetes` | Diabetes mellitus risk/found |
-| `hypertension` | Hypertension risk/found |
-| `cardiovascular` | Cardiovascular disease risk/found |
-| `obesity` | Obesity (BMI-based) |
-| `dyslipidemia` | Dyslipidemia (found) |
-| `stroke` | Stroke (found) |
-| `ckd` | Chronic kidney disease (lab-based) |
-| `anemia` | Anemia (lab-based) |
-
-### Zone Codes
-
-`01` through `08` (Bangkok health zones, zero-padded strings).
-
-### District Codes
-
-Standard Bangkok district codes, typically `1001` through `1050` (string values).
-
-### Sex Values
-
-| Value | Meaning |
-|-------|---------|
-| `1` | Male |
-| `2` | Female |
-
-### Smoking / Exercise Values
-
-Integer codes (typically `0` = no, `1` = yes).
-
-### Age Group Values
-
-String ranges such as `"15-29"`, `"30-44"`, `"45-59"`, `"60+"`.
+| Status | Meaning |
+|--------|---------|
+| 400 | Bad request -- invalid parameter value |
+| 401 | Missing or invalid API key |
+| 403 | Data suppressed for privacy (k-anonymity) or CSRF check failed |
+| 404 | Resource not found |
+| 429 | Rate limit exceeded |
+| 500 | Internal server error |
 
 ---
 
-## System
+## Endpoints
 
-### GET /health
+### System
 
-Health check endpoint. No authentication required.
+#### GET /health
 
-**Request:**
+Health check with database connectivity status. **No API key required.**
 
+```bash
+curl http://localhost:8000/health
 ```
-GET /health
-```
 
-No headers required.
-
-**Response (200):**
+**Response** `200 OK`:
 
 ```json
 {
   "status": "ok",
-  "timestamp": "2026-04-08T03:45:12.123456"
+  "database": "connected",
+  "timestamp": "2025-03-15T08:30:00.000000"
 }
 ```
 
+When the database is unreachable:
+
+```json
+{
+  "status": "degraded",
+  "database": "disconnected",
+  "timestamp": "2025-03-15T08:30:00.000000"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| status | string | `"ok"` or `"degraded"` |
+| database | string | `"connected"` or `"disconnected"` |
+| timestamp | string | ISO 8601 UTC timestamp |
+
 ---
 
-## Summary
+### Summary
 
-### GET /api/v2/summary/overview
+#### GET /api/v2/summary/overview
 
-City-wide screening overview with zone and disease breakdowns.
+Top-level screening overview with zone and disease breakdowns. ภาพรวมการคัดกรองสุขภาพ
 
-**Request:**
-
-```
-GET /api/v2/summary/overview
-X-API-Key: <key>
+```bash
+curl -H "X-API-Key: your-api-key" http://localhost:8000/api/v2/summary/overview
 ```
 
-No query parameters.
-
-**Response (200):**
+**Response** `200 OK`:
 
 ```json
 {
@@ -176,337 +200,588 @@ No query parameters.
   "target": 1600000,
   "zones_count": 8,
   "districts_count": 50,
-  "last_updated": "2026-04-07 18:30:00",
+  "last_updated": "2025-03-15 10:00:00+07",
   "by_zone": [
     {
       "zone_code": "01",
-      "name_th": "กลุ่มเขตกรุงเทพกลาง",
+      "name_th": "เขตสุขภาพที่ 1",
       "total_screened": 156420
     },
     {
       "zone_code": "02",
-      "name_th": "กลุ่มเขตกรุงเทพใต้",
-      "total_screened": 148350
-    },
-    {
-      "zone_code": "03",
-      "name_th": "กลุ่มเขตกรุงเทพเหนือ",
-      "total_screened": 162510
+      "name_th": "เขตสุขภาพที่ 2",
+      "total_screened": 148930
     }
   ],
   "by_disease": [
     {
       "disease_key": "diabetes",
-      "total_at_risk": 124583,
-      "pct": 10.0
+      "total_at_risk": 98452,
+      "pct": 7.9
     },
     {
       "disease_key": "hypertension",
-      "total_at_risk": 286941,
-      "pct": 23.03
+      "total_at_risk": 186734,
+      "pct": 14.99
     },
     {
       "disease_key": "cardiovascular",
-      "total_at_risk": 62291,
-      "pct": 5.0
+      "total_at_risk": 45231,
+      "pct": 3.63
     },
     {
       "disease_key": "obesity",
-      "total_at_risk": 373749,
-      "pct": 29.99
+      "total_at_risk": 312456,
+      "pct": 25.08
     },
     {
       "disease_key": "dyslipidemia",
-      "total_at_risk": 187456,
-      "pct": 15.04
+      "total_at_risk": 67890,
+      "pct": 5.45
     },
     {
       "disease_key": "stroke",
-      "total_at_risk": 12458,
-      "pct": 1.0
+      "total_at_risk": 12345,
+      "pct": 0.99
     }
   ]
 }
 ```
 
+| Field | Type | Description |
+|-------|------|-------------|
+| total_screened | integer | Total unique screenings across all districts |
+| target | integer | Target screening goal (fixed at 1,600,000) |
+| zones_count | integer | Number of health zones |
+| districts_count | integer | Number of districts |
+| last_updated | string or null | Latest `refreshed_at` from summary data |
+| by_zone | array | Zone-level screening totals |
+| by_disease | array | Disease-level risk counts and percentages |
+
+**Diseases reported:** diabetes, hypertension, cardiovascular, obesity, dyslipidemia, stroke.
+
 ---
 
-## Zones
+#### GET /api/v2/summary/filtered
 
-### GET /api/v2/summary/zones
+Query risk factor summary with demographic/behavioral filters. k-anonymity enforced.
+สรุปปัจจัยเสี่ยงตามตัวกรอง (เพศ, กลุ่มอายุ, สูบบุหรี่, ออกกำลังกาย)
 
-List all 8 health zones with screening totals and disease breakdown.
-
-**Request:**
-
-```
-GET /api/v2/summary/zones
-X-API-Key: <key>
+```bash
+curl -H "X-API-Key: your-api-key" \
+  "http://localhost:8000/api/v2/summary/filtered?district=1001&sex=1&age_group=40-49"
 ```
 
-No query parameters.
+**Query Parameters:**
 
-**Response (200):**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| district | string | null | Filter by district code (e.g. `1001`) |
+| sex | integer | null | Filter by sex (`1` = male, `2` = female) |
+| age_group | string | null | Filter by age group (e.g. `15-19`, `20-29`, `30-39`, `40-49`, `50-59`, `60-69`, `70+`) |
+| smoking | integer | null | Filter by smoking status |
+| exercise | integer | null | Filter by exercise status |
+
+**Response** `200 OK`:
+
+```json
+{
+  "filters_applied": {
+    "district": "1001",
+    "sex": 1,
+    "age_group": "40-49",
+    "smoking": null,
+    "exercise": null
+  },
+  "k_anonymity_threshold": 5,
+  "data": [
+    {
+      "district_code": "1001",
+      "sex": 1,
+      "age_group": "40-49",
+      "smoking": 0,
+      "exercise": 1,
+      "patient_count": 142,
+      "avg_sbp": 128.3,
+      "avg_dbp": 82.1,
+      "avg_weight_kg": 68.5,
+      "avg_waist_cm": 84.2,
+      "avg_bmi": 24.8
+    }
+  ]
+}
+```
+
+**k-anonymity:** Rows with `patient_count < 5` are excluded from `data`.
+
+---
+
+#### GET /api/v2/summary/lab
+
+Lab results summary by district. สรุปผลตรวจทางห้องปฏิบัติการ
+
+```bash
+# All districts
+curl -H "X-API-Key: your-api-key" http://localhost:8000/api/v2/summary/lab
+
+# Filter by district
+curl -H "X-API-Key: your-api-key" "http://localhost:8000/api/v2/summary/lab?dcode=1004"
+
+# Filter by zone
+curl -H "X-API-Key: your-api-key" "http://localhost:8000/api/v2/summary/lab?zone_code=03"
+```
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| dcode | string | null | Filter by district code |
+| zone_code | string | null | Filter by zone code |
+
+**Response** `200 OK`:
+
+```json
+[
+  {
+    "district_code": "1004",
+    "total_lab_patients": 3420,
+    "avg_hemoglobin": 13.25,
+    "avg_fbs": 102.34,
+    "avg_cholesterol": 198.56,
+    "avg_triglyceride": 145.23,
+    "avg_hdl": 52.18,
+    "avg_ldl": 124.67,
+    "avg_creatinine": 0.92,
+    "avg_egfr": 85.43,
+    "pct_anemia": 8.5,
+    "pct_ckd": 3.2
+  }
+]
+```
+
+**k-anonymity:** Districts with `total_lab_patients < 5` are excluded.
+
+---
+
+#### GET /api/v2/summary/mental-health
+
+Mental health screening summary. สรุปการคัดกรองสุขภาพจิต
+
+```bash
+curl -H "X-API-Key: your-api-key" http://localhost:8000/api/v2/summary/mental-health
+
+# Filter by district or zone
+curl -H "X-API-Key: your-api-key" "http://localhost:8000/api/v2/summary/mental-health?zone_code=05"
+```
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| dcode | string | null | Filter by district code |
+| zone_code | string | null | Filter by zone code |
+
+**Response** `200 OK`:
+
+```json
+[
+  {
+    "district_code": "1014",
+    "total_screened": 4521,
+    "pct_depression_risk": 12.3,
+    "pct_phq9_moderate": 5.8,
+    "pct_high_stress": 18.7
+  }
+]
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| pct_depression_risk | float | % screened at risk for depression |
+| pct_phq9_moderate | float | % with PHQ-9 score indicating moderate depression |
+| pct_high_stress | float | % reporting high stress levels |
+
+**k-anonymity:** Districts with `total_screened < 5` are excluded.
+
+---
+
+#### GET /api/v2/summary/demographics
+
+Demographic breakdown by district. สรุปข้อมูลประชากร (การศึกษา, อาชีพ, สิทธิ์, ที่อยู่)
+
+```bash
+curl -H "X-API-Key: your-api-key" http://localhost:8000/api/v2/summary/demographics
+
+# Filter by district or zone
+curl -H "X-API-Key: your-api-key" "http://localhost:8000/api/v2/summary/demographics?dcode=1002"
+```
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| dcode | string | null | Filter by district code |
+| zone_code | string | null | Filter by zone code |
+
+**Response** `200 OK`:
+
+```json
+[
+  {
+    "district_code": "1002",
+    "total_respondents": 8432,
+    "edu_none": 102,
+    "edu_primary": 2341,
+    "edu_secondary": 1876,
+    "edu_high_school": 1543,
+    "edu_vocational": 890,
+    "edu_bachelor": 1234,
+    "edu_postgrad": 446,
+    "occ_government": 1245,
+    "occ_private": 2678,
+    "occ_self_employed": 1456,
+    "occ_agriculture": 123,
+    "occ_unemployed": 987,
+    "occ_student": 654,
+    "occ_retired": 1289,
+    "priv_ucs": 4567,
+    "priv_sso": 2345,
+    "priv_csmbs": 1234,
+    "priv_other": 286,
+    "house_owned": 5432,
+    "house_rented": 2134,
+    "house_condo": 567,
+    "house_other": 299
+  }
+]
+```
+
+**Field categories:**
+
+| Prefix | Category | Description |
+|--------|----------|-------------|
+| edu_ | Education level | ระดับการศึกษา (none / primary / secondary / high_school / vocational / bachelor / postgrad) |
+| occ_ | Occupation | อาชีพ (government / private / self_employed / agriculture / unemployed / student / retired) |
+| priv_ | Insurance privilege | สิทธิ์การรักษา (ucs = บัตรทอง, sso = ประกันสังคม, csmbs = สวัสดิการข้าราชการ, other) |
+| house_ | Housing type | ประเภทที่อยู่อาศัย (owned / rented / condo / other) |
+
+**k-anonymity:** Districts with `total_respondents < 5` are excluded.
+
+---
+
+### Zones
+
+#### GET /api/v2/summary/zones
+
+All 8 health zones with screening totals and disease breakdown. รายชื่อเขตสุขภาพทั้ง 8 เขต
+
+```bash
+curl -H "X-API-Key: your-api-key" http://localhost:8000/api/v2/summary/zones
+```
+
+**Response** `200 OK`:
 
 ```json
 [
   {
     "zone_code": "01",
-    "name_th": "กลุ่มเขตกรุงเทพกลาง",
-    "name_en": "Central Bangkok",
-    "district_count": 7,
+    "name_th": "เขตสุขภาพที่ 1",
+    "name_en": "Health Zone 1",
+    "district_count": 6,
     "total_screened": 156420,
     "diseases": {
-      "diabetes": { "count": 15642, "pct": 10.0 },
-      "hypertension": { "count": 36028, "pct": 23.03 },
-      "cardiovascular": { "count": 7821, "pct": 5.0 },
-      "obesity": { "count": 46926, "pct": 30.0 },
-      "dyslipidemia": { "count": 23463, "pct": 15.0 },
-      "stroke": { "count": 1564, "pct": 1.0 }
+      "diabetes": { "count": 12543, "pct": 8.02 },
+      "hypertension": { "count": 23456, "pct": 14.99 },
+      "cardiovascular": { "count": 5678, "pct": 3.63 },
+      "obesity": { "count": 39210, "pct": 25.07 },
+      "dyslipidemia": { "count": 8765, "pct": 5.6 },
+      "stroke": { "count": 1567, "pct": 1.0 }
     }
   },
   {
     "zone_code": "02",
-    "name_th": "กลุ่มเขตกรุงเทพใต้",
-    "name_en": "South Bangkok",
+    "name_th": "เขตสุขภาพที่ 2",
+    "name_en": "Health Zone 2",
     "district_count": 6,
-    "total_screened": 148350,
+    "total_screened": 148930,
     "diseases": {
-      "diabetes": { "count": 14835, "pct": 10.0 },
-      "hypertension": { "count": 34120, "pct": 23.0 },
-      "cardiovascular": { "count": 7418, "pct": 5.0 },
-      "obesity": { "count": 44505, "pct": 30.0 },
-      "dyslipidemia": { "count": 22253, "pct": 15.0 },
-      "stroke": { "count": 1484, "pct": 1.0 }
+      "diabetes": { "count": 11234, "pct": 7.54 },
+      "hypertension": { "count": 21890, "pct": 14.7 },
+      "cardiovascular": { "count": 4567, "pct": 3.07 },
+      "obesity": { "count": 36789, "pct": 24.7 },
+      "dyslipidemia": { "count": 7654, "pct": 5.14 },
+      "stroke": { "count": 1234, "pct": 0.83 }
     }
   }
 ]
 ```
 
-### GET /api/v2/summary/zones/{zone_code}
+---
 
-Detail for a single zone including its districts and per-district disease data.
+#### GET /api/v2/summary/zones/{zone_code}
 
-**Request:**
+Single zone with its districts and disease data. รายละเอียดเขตสุขภาพแต่ละเขต
 
+```bash
+curl -H "X-API-Key: your-api-key" http://localhost:8000/api/v2/summary/zones/04
 ```
-GET /api/v2/summary/zones/01
-X-API-Key: <key>
-```
 
-| Path Parameter | Type | Required | Description |
-|----------------|------|----------|-------------|
-| `zone_code` | string | Yes | Zone code (`01`-`08`) |
+**Path Parameters:**
 
-**Response (200):**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| zone_code | string | Zone code: `01` through `08` |
+
+**Response** `200 OK`:
 
 ```json
 {
-  "zone_code": "01",
-  "name_th": "กลุ่มเขตกรุงเทพกลาง",
-  "name_en": "Central Bangkok",
+  "zone_code": "04",
+  "name_th": "เขตสุขภาพที่ 4",
+  "name_en": "Health Zone 4",
   "districts": [
     {
       "district_code": "1001",
       "district_name": "พระนคร",
-      "total_screened": 22345,
-      "risk_dm_count": 2234,
-      "pct_risk_dm": 10.0,
-      "risk_hpt_count": 5140,
-      "pct_risk_hpt": 23.0,
-      "risk_cvd_count": 1117,
-      "pct_risk_cvd": 5.0,
-      "risk_bmi_count": 6703,
-      "found_obesity_count": 4469,
-      "found_dyslipidemia_count": 3352,
-      "found_stroke_count": 223
+      "total_screened": 8432,
+      "risk_dm_count": 678,
+      "pct_risk_dm": 8.04,
+      "risk_hpt_count": 1245,
+      "pct_risk_hpt": 14.77,
+      "risk_cvd_count": 312,
+      "pct_risk_cvd": 3.7,
+      "risk_bmi_count": 2134,
+      "found_obesity_count": 1567,
+      "found_dyslipidemia_count": 456,
+      "found_stroke_count": 89
     },
     {
       "district_code": "1002",
       "district_name": "ดุสิต",
-      "total_screened": 19876,
-      "risk_dm_count": 1988,
-      "pct_risk_dm": 10.0,
-      "risk_hpt_count": 4571,
-      "pct_risk_hpt": 23.0,
-      "risk_cvd_count": 994,
-      "pct_risk_cvd": 5.0,
-      "risk_bmi_count": 5963,
-      "found_obesity_count": 3975,
-      "found_dyslipidemia_count": 2981,
-      "found_stroke_count": 199
+      "total_screened": 12456,
+      "risk_dm_count": 987,
+      "pct_risk_dm": 7.92,
+      "risk_hpt_count": 1876,
+      "pct_risk_hpt": 15.06,
+      "risk_cvd_count": 456,
+      "pct_risk_cvd": 3.66,
+      "risk_bmi_count": 3123,
+      "found_obesity_count": 2345,
+      "found_dyslipidemia_count": 678,
+      "found_stroke_count": 134
     }
   ]
 }
 ```
 
-**Error Responses:**
+**k-anonymity:** Districts with `total_screened < 5` are excluded from the `districts` array.
 
-| Status | Condition |
-|--------|-----------|
-| `404` | `{"detail": "Zone not found"}` |
+**Error** `404 Not Found`:
+
+```json
+{
+  "detail": "Zone not found"
+}
+```
 
 ---
 
-## Districts
+### Districts
 
-### GET /api/v2/summary/districts
+#### GET /api/v2/summary/districts
 
-List all districts with disease data. Optionally filter by zone.
+List all districts, optionally filtered by zone. รายชื่อเขตทั้งหมด
 
-**Request:**
+```bash
+# All districts
+curl -H "X-API-Key: your-api-key" http://localhost:8000/api/v2/summary/districts
 
+# Filter by zone
+curl -H "X-API-Key: your-api-key" "http://localhost:8000/api/v2/summary/districts?zone_code=03"
 ```
-GET /api/v2/summary/districts?zone_code=01
-X-API-Key: <key>
-```
 
-| Query Parameter | Type | Required | Description |
-|-----------------|------|----------|-------------|
-| `zone_code` | string | No | Filter to districts in this zone |
+**Query Parameters:**
 
-**Response (200):**
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| zone_code | string | null | Filter by zone code (`01`-`08`) |
+
+**Response** `200 OK`:
 
 ```json
 [
   {
-    "district_code": "1001",
-    "district_name": "พระนคร",
-    "zone_code": "01",
-    "total_screened": 22345,
-    "risk_dm_count": 2234,
-    "pct_risk_dm": 10.0,
-    "risk_hpt_count": 5140,
-    "pct_risk_hpt": 23.0,
-    "risk_cvd_count": 1117,
-    "pct_risk_cvd": 5.0,
-    "found_obesity_count": 4469,
-    "found_dyslipidemia_count": 3352,
-    "found_stroke_count": 223
+    "district_code": "1004",
+    "district_name": "บางรัก",
+    "zone_code": "03",
+    "total_screened": 6789,
+    "risk_dm_count": 543,
+    "pct_risk_dm": 7.99,
+    "risk_hpt_count": 1023,
+    "pct_risk_hpt": 15.07,
+    "risk_cvd_count": 245,
+    "pct_risk_cvd": 3.61,
+    "found_obesity_count": 1678,
+    "found_dyslipidemia_count": 345,
+    "found_stroke_count": 67
+  },
+  {
+    "district_code": "1007",
+    "district_name": "ปทุมวัน",
+    "zone_code": "03",
+    "total_screened": 5432,
+    "risk_dm_count": 432,
+    "pct_risk_dm": 7.95,
+    "risk_hpt_count": 812,
+    "pct_risk_hpt": 14.95,
+    "risk_cvd_count": 198,
+    "pct_risk_cvd": 3.65,
+    "found_obesity_count": 1345,
+    "found_dyslipidemia_count": 278,
+    "found_stroke_count": 54
   }
 ]
 ```
 
-### GET /api/v2/summary/districts/{dcode}
+**k-anonymity:** Districts with `total_screened < 5` are excluded.
 
-Full detail for a single district: disease summary, lab results, mental health screening, and demographics.
+---
 
-**Request:**
+#### GET /api/v2/summary/districts/{dcode}
 
+Full district detail: diseases, lab results, mental health, and demographics.
+ข้อมูลสุขภาพครบทุกมิติของเขตใดเขตหนึ่ง
+
+```bash
+curl -H "X-API-Key: your-api-key" http://localhost:8000/api/v2/summary/districts/1002
 ```
-GET /api/v2/summary/districts/1001
-X-API-Key: <key>
-```
 
-| Path Parameter | Type | Required | Description |
-|----------------|------|----------|-------------|
-| `dcode` | string | Yes | District code (e.g. `1001`) |
+**Path Parameters:**
 
-**Response (200):**
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| dcode | string | 4-digit district code (e.g. `1001`, `1002`) |
+
+**Response** `200 OK`:
 
 ```json
 {
   "disease": {
-    "district_code": "1001",
-    "zone_code": "01",
-    "district_name": "พระนคร",
-    "total_screened": 22345,
-    "risk_dm_count": 2234,
-    "pct_risk_dm": 10.0,
-    "risk_hpt_count": 5140,
-    "pct_risk_hpt": 23.0,
-    "risk_cvd_count": 1117,
-    "pct_risk_cvd": 5.0,
-    "risk_bmi_count": 6703,
-    "found_dm_count": 1341,
-    "pct_found_dm": 6.0,
-    "found_hpt_count": 3575,
-    "pct_found_hpt": 16.0,
-    "found_cvd_count": 670,
-    "pct_found_cvd": 3.0,
-    "found_obesity_count": 4469,
-    "found_dyslipidemia_count": 3352,
-    "found_stroke_count": 223
+    "district_code": "1002",
+    "zone_code": "04",
+    "district_name": "ดุสิต",
+    "total_screened": 12456,
+    "risk_dm_count": 987,
+    "pct_risk_dm": 7.92,
+    "risk_hpt_count": 1876,
+    "pct_risk_hpt": 15.06,
+    "risk_cvd_count": 456,
+    "pct_risk_cvd": 3.66,
+    "risk_bmi_count": 3123,
+    "found_dm_count": 534,
+    "pct_found_dm": 4.29,
+    "found_hpt_count": 1234,
+    "pct_found_hpt": 9.91,
+    "found_cvd_count": 234,
+    "pct_found_cvd": 1.88,
+    "found_obesity_count": 2345,
+    "found_dyslipidemia_count": 678,
+    "found_stroke_count": 134
   },
   "lab_summary": {
-    "district_code": "1001",
-    "total_lab_patients": 18500,
-    "avg_hemoglobin": 13.24,
-    "avg_hematocrit": 39.87,
-    "avg_fbs": 102.45,
-    "avg_cholesterol": 198.32,
-    "avg_triglyceride": 145.67,
-    "avg_hdl": 52.18,
-    "avg_ldl": 121.45,
-    "avg_creatinine": 1.02,
-    "avg_egfr": 82.34,
-    "avg_uric_acid": 5.89,
-    "avg_sgot": 24.56,
-    "avg_sgpt": 27.89,
-    "pct_anemia": 8.45,
-    "pct_ckd": 5.23
+    "district_code": "1002",
+    "total_lab_patients": 5678,
+    "avg_hemoglobin": 13.42,
+    "avg_hematocrit": 40.1,
+    "avg_fbs": 104.56,
+    "avg_cholesterol": 201.34,
+    "avg_triglyceride": 148.67,
+    "avg_hdl": 51.23,
+    "avg_ldl": 126.45,
+    "avg_creatinine": 0.94,
+    "avg_egfr": 83.67,
+    "avg_uric_acid": 5.8,
+    "avg_sgot": 24.3,
+    "avg_sgpt": 28.7,
+    "pct_anemia": 9.2,
+    "pct_ckd": 3.5
   },
   "mental_health": {
-    "district_code": "1001",
-    "total_screened": 20150,
-    "pct_depression_risk": 12.34,
-    "pct_phq9_moderate": 5.67,
-    "pct_high_stress": 18.90
+    "district_code": "1002",
+    "total_screened": 4567,
+    "pct_depression_risk": 11.8,
+    "pct_phq9_moderate": 5.4,
+    "pct_high_stress": 17.9
   },
   "demographics": {
-    "district_code": "1001",
-    "total_respondents": 21800,
-    "edu_none": 432,
-    "edu_primary": 5450,
-    "edu_secondary": 4360,
-    "edu_high_school": 3924,
-    "edu_vocational": 2180,
-    "edu_bachelor": 4360,
-    "edu_postgrad": 1094,
-    "occ_government": 3270,
-    "occ_private": 6540,
-    "occ_self_employed": 3924,
-    "occ_agriculture": 218,
-    "occ_unemployed": 2180,
-    "occ_student": 1526,
-    "occ_retired": 4142,
-    "priv_ucs": 10900,
-    "priv_sso": 5450,
-    "priv_csmbs": 3270,
-    "priv_other": 2180,
-    "house_owned": 10900,
-    "house_rented": 6540,
-    "house_condo": 3270,
-    "house_other": 1090
+    "district_code": "1002",
+    "total_respondents": 8432,
+    "edu_none": 102,
+    "edu_primary": 2341,
+    "edu_secondary": 1876,
+    "edu_high_school": 1543,
+    "edu_vocational": 890,
+    "edu_bachelor": 1234,
+    "edu_postgrad": 446,
+    "occ_government": 1245,
+    "occ_private": 2678,
+    "occ_self_employed": 1456,
+    "occ_agriculture": 123,
+    "occ_unemployed": 987,
+    "occ_student": 654,
+    "occ_retired": 1289,
+    "priv_ucs": 4567,
+    "priv_sso": 2345,
+    "priv_csmbs": 1234,
+    "priv_other": 286,
+    "house_owned": 5432,
+    "house_rented": 2134,
+    "house_condo": 567,
+    "house_other": 299
   }
 }
 ```
 
-Any section may be `null` if no data exists for that district.
+Any of the four sections may be `null` if no data exists for that district.
 
-**Error Responses:**
+**k-anonymity:** Returns `403` if `total_screened < 5`.
 
-| Status | Condition |
-|--------|-----------|
-| `404` | `{"detail": "District not found"}` |
+**Error** `403 Forbidden`:
 
-### GET /api/v2/summary/districts/{dcode}/disease/{disease_key}
-
-Disease-specific detail for a district with risk factor breakdown by sex, age group, smoking, and exercise.
-
-**Request:**
-
-```
-GET /api/v2/summary/districts/1001/disease/diabetes
-X-API-Key: <key>
+```json
+{
+  "detail": "Data suppressed for privacy (k-anonymity)"
+}
 ```
 
-| Path Parameter | Type | Required | Description |
-|----------------|------|----------|-------------|
-| `dcode` | string | Yes | District code |
-| `disease_key` | string | Yes | One of the valid disease keys |
+**Error** `404 Not Found`:
 
-**Response (200) -- standard diseases (diabetes, hypertension, cardiovascular, obesity, dyslipidemia, stroke):**
+```json
+{
+  "detail": "District not found"
+}
+```
+
+---
+
+#### GET /api/v2/summary/districts/{dcode}/disease/{disease_key}
+
+Disease detail for a district with risk factor breakdown.
+ข้อมูลโรคเฉพาะของเขตพร้อมปัจจัยเสี่ยง
+
+```bash
+curl -H "X-API-Key: your-api-key" \
+  http://localhost:8000/api/v2/summary/districts/1001/disease/diabetes
+```
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| dcode | string | 4-digit district code |
+| disease_key | string | One of: `diabetes`, `hypertension`, `cardiovascular`, `obesity`, `dyslipidemia`, `stroke`, `ckd`, `anemia` |
+
+**Response for vitalsign-based diseases** (diabetes, hypertension, cardiovascular, obesity, dyslipidemia, stroke) `200 OK`:
 
 ```json
 {
@@ -514,54 +789,52 @@ X-API-Key: <key>
   "disease_key": "diabetes",
   "disease_summary": {
     "district_code": "1001",
-    "zone_code": "01",
+    "zone_code": "04",
     "district_name": "พระนคร",
-    "total_screened": 22345,
-    "risk_dm_count": 2234,
-    "pct_risk_dm": 10.0,
-    "risk_hpt_count": 5140,
-    "pct_risk_hpt": 23.0,
-    "risk_cvd_count": 1117,
-    "pct_risk_cvd": 5.0,
-    "risk_bmi_count": 6703,
-    "found_dm_count": 1341,
-    "pct_found_dm": 6.0,
-    "found_hpt_count": 3575,
-    "pct_found_hpt": 16.0,
-    "found_cvd_count": 670,
-    "pct_found_cvd": 3.0,
-    "found_obesity_count": 4469,
-    "found_dyslipidemia_count": 3352,
-    "found_stroke_count": 223
+    "total_screened": 8432,
+    "risk_dm_count": 678,
+    "pct_risk_dm": 8.04,
+    "risk_hpt_count": 1245,
+    "pct_risk_hpt": 14.77,
+    "risk_cvd_count": 312,
+    "pct_risk_cvd": 3.7,
+    "risk_bmi_count": 2134,
+    "found_dm_count": 345,
+    "pct_found_dm": 4.09,
+    "found_hpt_count": 890,
+    "pct_found_hpt": 10.56,
+    "found_cvd_count": 156,
+    "pct_found_cvd": 1.85,
+    "found_obesity_count": 1567,
+    "found_dyslipidemia_count": 456,
+    "found_stroke_count": 89
   },
   "risk_factor_breakdown": [
     {
       "sex": 1,
-      "age_group": "30-44",
-      "smoking": 1,
-      "exercise": 0,
-      "patient_count": 128,
-      "avg_sbp": 132.5,
-      "avg_dbp": 84.2,
-      "avg_bmi": 27.3
+      "age_group": "40-49",
+      "smoking": 0,
+      "exercise": 1,
+      "patient_count": 87,
+      "avg_sbp": 126.4,
+      "avg_dbp": 80.2,
+      "avg_bmi": 24.3
     },
     {
       "sex": 2,
-      "age_group": "45-59",
+      "age_group": "50-59",
       "smoking": 0,
-      "exercise": 1,
-      "patient_count": 256,
-      "avg_sbp": 128.1,
-      "avg_dbp": 82.0,
-      "avg_bmi": 25.8
+      "exercise": 0,
+      "patient_count": 134,
+      "avg_sbp": 132.8,
+      "avg_dbp": 84.6,
+      "avg_bmi": 26.1
     }
   ]
 }
 ```
 
-Note: `risk_factor_breakdown` rows with `patient_count < 5` are suppressed (k-anonymity).
-
-**Response (200) -- lab-based diseases (ckd, anemia):**
+**Response for lab-based diseases** (ckd, anemia) `200 OK`:
 
 ```json
 {
@@ -570,650 +843,683 @@ Note: `risk_factor_breakdown` rows with `patient_count < 5` are suppressed (k-an
   "source": "lab",
   "lab_summary": {
     "district_code": "1001",
-    "total_lab_patients": 18500,
-    "avg_hemoglobin": 13.24,
-    "avg_hematocrit": 39.87,
-    "avg_fbs": 102.45,
-    "avg_cholesterol": 198.32,
-    "avg_triglyceride": 145.67,
-    "avg_hdl": 52.18,
-    "avg_ldl": 121.45,
-    "avg_creatinine": 1.02,
-    "avg_egfr": 82.34,
-    "avg_uric_acid": 5.89,
-    "avg_sgot": 24.56,
-    "avg_sgpt": 27.89,
-    "pct_anemia": 8.45,
-    "pct_ckd": 5.23
+    "total_lab_patients": 3210,
+    "avg_hemoglobin": 13.15,
+    "avg_hematocrit": 39.8,
+    "avg_fbs": 101.23,
+    "avg_cholesterol": 196.45,
+    "avg_triglyceride": 142.67,
+    "avg_hdl": 53.12,
+    "avg_ldl": 122.34,
+    "avg_creatinine": 0.91,
+    "avg_egfr": 86.54,
+    "avg_uric_acid": 5.6,
+    "avg_sgot": 23.4,
+    "avg_sgpt": 27.8,
+    "pct_anemia": 8.1,
+    "pct_ckd": 3.0
   }
 }
 ```
 
-**Error Responses:**
+**k-anonymity:** `risk_factor_breakdown` rows with `patient_count < 5` are excluded.
 
-| Status | Condition |
-|--------|-----------|
-| `400` | `{"detail": "Invalid disease_key 'flu'. Valid keys: [...]"}` |
-| `404` | `{"detail": "District not found"}` |
-
----
-
-## Filtered
-
-### GET /api/v2/summary/filtered
-
-Query risk factor summaries with arbitrary filters. k-anonymity is enforced: groups with fewer than 5 patients are excluded.
-
-**Request:**
-
-```
-GET /api/v2/summary/filtered?district=1001&sex=1&age_group=45-59&smoking=0&exercise=1
-X-API-Key: <key>
-```
-
-| Query Parameter | Type | Required | Description |
-|-----------------|------|----------|-------------|
-| `district` | string | No | District code |
-| `sex` | integer | No | `1` = male, `2` = female |
-| `age_group` | string | No | e.g. `"15-29"`, `"30-44"`, `"45-59"`, `"60+"` |
-| `smoking` | integer | No | `0` = no, `1` = yes |
-| `exercise` | integer | No | `0` = no, `1` = yes |
-
-All parameters are optional. Omitting all returns the full (ungrouped) summary.
-
-**Response (200):**
+**Error** `400 Bad Request`:
 
 ```json
 {
-  "filters_applied": {
-    "district": "1001",
-    "sex": 1,
-    "age_group": "45-59",
-    "smoking": 0,
-    "exercise": 1
-  },
-  "k_anonymity_threshold": 5,
-  "data": [
-    {
-      "district_code": "1001",
-      "sex": 1,
-      "age_group": "45-59",
-      "smoking": 0,
-      "exercise": 1,
-      "patient_count": 87,
-      "avg_sbp": 130.2,
-      "avg_dbp": 83.5,
-      "avg_weight_kg": 72.4,
-      "avg_waist_cm": 88.6,
-      "avg_bmi": 25.9
-    }
-  ]
+  "detail": "Invalid disease_key 'invalid'. Valid keys: ['anemia', 'cardiovascular', 'ckd', 'diabetes', 'dyslipidemia', 'hypertension', 'obesity', 'stroke']"
 }
 ```
 
-If a combination yields fewer than 5 patients, that row is suppressed entirely. The `data` array may be empty.
-
 ---
 
-## Lab
+### Trends
 
-### GET /api/v2/summary/lab
+#### GET /api/v2/trends/screening
 
-Lab result averages and prevalence rates by district.
+Time series of screening counts. แนวโน้มจำนวนการคัดกรอง
 
-**Request:**
+```bash
+# Monthly (default)
+curl -H "X-API-Key: your-api-key" http://localhost:8000/api/v2/trends/screening
 
-```
-GET /api/v2/summary/lab?dcode=1001
-X-API-Key: <key>
-```
-
-| Query Parameter | Type | Required | Description |
-|-----------------|------|----------|-------------|
-| `dcode` | string | No | Filter to a single district |
-| `zone_code` | string | No | Filter to all districts in a zone |
-
-Both parameters are optional. If both are provided, both filters apply. Omitting both returns all districts.
-
-**Response (200):**
-
-```json
-[
-  {
-    "district_code": "1001",
-    "total_lab_patients": 18500,
-    "avg_hemoglobin": 13.24,
-    "avg_fbs": 102.45,
-    "avg_cholesterol": 198.32,
-    "avg_triglyceride": 145.67,
-    "avg_hdl": 52.18,
-    "avg_ldl": 121.45,
-    "avg_creatinine": 1.02,
-    "avg_egfr": 82.34,
-    "pct_anemia": 8.45,
-    "pct_ckd": 5.23
-  }
-]
+# Quarterly, filtered by zone
+curl -H "X-API-Key: your-api-key" \
+  "http://localhost:8000/api/v2/trends/screening?granularity=quarterly&zone_code=01"
 ```
 
----
+**Query Parameters:**
 
-## Mental Health
+| Parameter | Type | Default | Constraints | Description |
+|-----------|------|---------|-------------|-------------|
+| granularity | string | `"monthly"` | `monthly` or `quarterly` | Time aggregation level |
+| zone_code | string | null | `01`-`08` | Filter by health zone |
 
-### GET /api/v2/summary/mental-health
-
-Mental health screening summary by district.
-
-**Request:**
-
-```
-GET /api/v2/summary/mental-health?zone_code=01
-X-API-Key: <key>
-```
-
-| Query Parameter | Type | Required | Description |
-|-----------------|------|----------|-------------|
-| `dcode` | string | No | Filter to a single district |
-| `zone_code` | string | No | Filter to all districts in a zone |
-
-**Response (200):**
-
-```json
-[
-  {
-    "district_code": "1001",
-    "total_screened": 20150,
-    "pct_depression_risk": 12.34,
-    "pct_phq9_moderate": 5.67,
-    "pct_high_stress": 18.90
-  },
-  {
-    "district_code": "1002",
-    "total_screened": 18430,
-    "pct_depression_risk": 11.56,
-    "pct_phq9_moderate": 4.89,
-    "pct_high_stress": 17.23
-  }
-]
-```
-
----
-
-## Demographics
-
-### GET /api/v2/summary/demographics
-
-Demographic breakdown (education, occupation, health privilege, housing) by district.
-
-**Request:**
-
-```
-GET /api/v2/summary/demographics?dcode=1001
-X-API-Key: <key>
-```
-
-| Query Parameter | Type | Required | Description |
-|-----------------|------|----------|-------------|
-| `dcode` | string | No | Filter to a single district |
-| `zone_code` | string | No | Filter to all districts in a zone |
-
-**Response (200):**
-
-```json
-[
-  {
-    "district_code": "1001",
-    "total_respondents": 21800,
-    "edu_none": 432,
-    "edu_primary": 5450,
-    "edu_secondary": 4360,
-    "edu_high_school": 3924,
-    "edu_vocational": 2180,
-    "edu_bachelor": 4360,
-    "edu_postgrad": 1094,
-    "occ_government": 3270,
-    "occ_private": 6540,
-    "occ_self_employed": 3924,
-    "occ_agriculture": 218,
-    "occ_unemployed": 2180,
-    "occ_student": 1526,
-    "occ_retired": 4142,
-    "priv_ucs": 10900,
-    "priv_sso": 5450,
-    "priv_csmbs": 3270,
-    "priv_other": 2180,
-    "house_owned": 10900,
-    "house_rented": 6540,
-    "house_condo": 3270,
-    "house_other": 1090
-  }
-]
-```
-
-**Field reference:**
-
-| Prefix | Category | Fields |
-|--------|----------|--------|
-| `edu_` | Education level | `none`, `primary`, `secondary`, `high_school`, `vocational`, `bachelor`, `postgrad` |
-| `occ_` | Occupation | `government`, `private`, `self_employed`, `agriculture`, `unemployed`, `student`, `retired` |
-| `priv_` | Health privilege | `ucs` (Universal Coverage), `sso` (Social Security), `csmbs` (Civil Servant), `other` |
-| `house_` | Housing type | `owned`, `rented`, `condo`, `other` |
-
----
-
-## Trends
-
-### GET /api/v2/trends/screening
-
-Time series of screening counts.
-
-**Request:**
-
-```
-GET /api/v2/trends/screening?granularity=monthly&zone_code=01
-X-API-Key: <key>
-```
-
-| Query Parameter | Type | Required | Default | Description |
-|-----------------|------|----------|---------|-------------|
-| `granularity` | string | No | `monthly` | `monthly` or `quarterly` |
-| `zone_code` | string | No | -- | Filter to a specific zone |
-
-**Response (200):**
+**Response** `200 OK`:
 
 ```json
 {
   "granularity": "monthly",
-  "zone_code": "01",
+  "zone_code": null,
   "data": [
-    {
-      "period": "2025-10-01",
-      "screened_count": 18432
-    },
-    {
-      "period": "2025-11-01",
-      "screened_count": 21567
-    },
-    {
-      "period": "2025-12-01",
-      "screened_count": 19823
-    },
-    {
-      "period": "2026-01-01",
-      "screened_count": 24105
-    },
-    {
-      "period": "2026-02-01",
-      "screened_count": 22891
-    },
-    {
-      "period": "2026-03-01",
-      "screened_count": 25340
-    }
+    { "period": "2024-10-01", "screened_count": 45678 },
+    { "period": "2024-11-01", "screened_count": 52341 },
+    { "period": "2024-12-01", "screened_count": 48923 },
+    { "period": "2025-01-01", "screened_count": 56789 },
+    { "period": "2025-02-01", "screened_count": 61234 }
   ]
 }
 ```
 
-The `period` field is a date string representing the start of the time bucket (first day of the month or quarter). Periods with fewer than 5 screened individuals are suppressed.
+**k-anonymity:** Periods with `screened_count < 5` are excluded.
 
-**Error Responses:**
+**Error** `400 Bad Request`:
 
-| Status | Condition |
-|--------|-----------|
-| `400` | `{"detail": "granularity must be one of ['monthly', 'quarterly']"}` |
-
-### GET /api/v2/trends/disease/{disease_key}
-
-Time series of disease prevalence rates.
-
-**Request:**
-
-```
-GET /api/v2/trends/disease/hypertension?district=1001&granularity=monthly
-X-API-Key: <key>
+```json
+{
+  "detail": "granularity must be one of ['monthly', 'quarterly']"
+}
 ```
 
-| Path Parameter | Type | Required | Description |
-|----------------|------|----------|-------------|
-| `disease_key` | string | Yes | Valid disease key (not `ckd` or `anemia`) |
+---
 
-| Query Parameter | Type | Required | Default | Description |
-|-----------------|------|----------|---------|-------------|
-| `district` | string | No | -- | Filter to a single district |
-| `granularity` | string | No | `monthly` | `monthly` or `quarterly` |
+#### GET /api/v2/trends/disease/{disease_key}
 
-**Response (200):**
+Time series of disease prevalence. แนวโน้มอัตราความเสี่ยงโรค
+
+```bash
+curl -H "X-API-Key: your-api-key" \
+  "http://localhost:8000/api/v2/trends/disease/hypertension?granularity=monthly&district=1002"
+```
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| disease_key | string | One of: `diabetes`, `hypertension`, `cardiovascular`, `obesity`, `dyslipidemia`, `stroke` |
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Constraints | Description |
+|-----------|------|---------|-------------|-------------|
+| granularity | string | `"monthly"` | `monthly` or `quarterly` | Time aggregation level |
+| district | string | null | 4-digit district code | Filter by district |
+
+**Response** `200 OK`:
 
 ```json
 {
   "disease_key": "hypertension",
   "granularity": "monthly",
-  "district": "1001",
+  "district": "1002",
   "data": [
     {
-      "period": "2025-10-01",
-      "total_screened": 18432,
-      "at_risk_count": 4240,
-      "pct": 23.01
+      "period": "2024-10-01",
+      "total_screened": 8765,
+      "at_risk_count": 1312,
+      "pct": 14.97
     },
     {
-      "period": "2025-11-01",
-      "total_screened": 21567,
-      "at_risk_count": 4961,
-      "pct": 23.0
-    },
-    {
-      "period": "2025-12-01",
-      "total_screened": 19823,
-      "at_risk_count": 4559,
-      "pct": 23.0
-    },
-    {
-      "period": "2026-01-01",
-      "total_screened": 24105,
-      "at_risk_count": 5544,
-      "pct": 23.0
+      "period": "2024-11-01",
+      "total_screened": 9876,
+      "at_risk_count": 1523,
+      "pct": 15.42
     }
   ]
 }
 ```
 
-Periods with `total_screened < 5` are suppressed.
+**k-anonymity:** Periods with `total_screened < 5` are excluded.
 
-**Error Responses:**
+**Unsupported disease keys** (`ckd`, `anemia`) return:
 
-| Status | Condition |
-|--------|-----------|
-| `400` | Invalid `disease_key`, invalid `granularity`, or unsupported disease (`ckd`, `anemia`) |
-| `400` | `{"detail": "Trend data not available for 'ckd'. Use /api/v2/summary/lab instead."}` |
+```json
+{
+  "detail": "Trend data not available for 'ckd'. Use /api/v2/summary/lab instead."
+}
+```
+Status: `400 Bad Request`
 
 ---
 
-## Search
+### Search
 
-### GET /api/v2/search/districts
+#### GET /api/v2/search/districts
 
-Search and rank districts by disease prevalence. Useful for finding hotspots.
+Search and rank districts by disease prevalence. ค้นหาและจัดอันดับเขตตามอัตราความชุกของโรค
 
-**Request:**
+```bash
+# Top 10 districts by diabetes prevalence
+curl -H "X-API-Key: your-api-key" \
+  "http://localhost:8000/api/v2/search/districts?disease=diabetes&sort_by=pct_desc&limit=10"
 
+# Districts with hypertension > 20%
+curl -H "X-API-Key: your-api-key" \
+  "http://localhost:8000/api/v2/search/districts?disease=hypertension&min_pct=20"
 ```
-GET /api/v2/search/districts?disease=diabetes&min_pct=10&max_pct=30&sort_by=pct_desc&limit=10
-X-API-Key: <key>
-```
 
-| Query Parameter | Type | Required | Default | Description |
-|-----------------|------|----------|---------|-------------|
-| `disease` | string | **Yes** | -- | Disease key to rank by |
-| `min_pct` | float | No | -- | Minimum prevalence percentage (0-100) |
-| `max_pct` | float | No | -- | Maximum prevalence percentage (0-100) |
-| `sort_by` | string | No | `pct_desc` | Sort order: `pct_desc`, `pct_asc`, `count_desc`, `count_asc` |
-| `limit` | integer | No | `50` | Max results (1-200) |
+**Query Parameters:**
 
-**Response (200) -- standard diseases:**
+| Parameter | Type | Default | Constraints | Description |
+|-----------|------|---------|-------------|-------------|
+| disease | string | **required** | Valid disease key | Disease to rank by |
+| min_pct | float | null | 0-100 | Minimum prevalence % |
+| max_pct | float | null | 0-100 | Maximum prevalence % |
+| sort_by | string | `"pct_desc"` | `pct_desc`, `pct_asc`, `count_desc`, `count_asc` | Sort order |
+| limit | integer | 50 | 1-200 | Max results |
+
+**Response** `200 OK` (for vitalsign-based diseases):
 
 ```json
 {
   "disease": "diabetes",
   "results": [
     {
-      "district_code": "1038",
+      "district_code": "1003",
       "district_name": "หนองจอก",
-      "zone_code": "07",
-      "total_screened": 28456,
-      "disease_count": 5691,
-      "disease_pct": 20.0
+      "zone_code": "08",
+      "total_screened": 24567,
+      "disease_count": 2456,
+      "disease_pct": 10.0
     },
     {
-      "district_code": "1027",
+      "district_code": "1042",
       "district_name": "คลองสามวา",
-      "zone_code": "06",
-      "total_screened": 31200,
-      "disease_count": 5928,
-      "disease_pct": 19.0
-    },
-    {
-      "district_code": "1015",
-      "district_name": "บางกะปิ",
-      "zone_code": "03",
-      "total_screened": 24890,
-      "disease_count": 4482,
-      "disease_pct": 18.0
+      "zone_code": "08",
+      "total_screened": 28901,
+      "disease_count": 2745,
+      "disease_pct": 9.5
     }
   ]
 }
 ```
 
-**Response (200) -- lab-based diseases (ckd, anemia):**
+**Response** `200 OK` (for lab-based diseases: ckd, anemia):
 
 ```json
 {
   "disease": "ckd",
   "results": [
     {
-      "district_code": "1038",
-      "district_name": "หนองจอก",
-      "zone_code": "07",
-      "total_lab_patients": 22100,
-      "disease_pct": 8.45
+      "district_code": "1031",
+      "district_name": "จอมทอง",
+      "zone_code": "02",
+      "total_lab_patients": 4567,
+      "disease_pct": 5.2
     }
   ]
 }
 ```
 
-Note: Lab-based diseases do not include `disease_count` since prevalence is derived from lab analysis.
-
-**Error Responses:**
-
-| Status | Condition |
-|--------|-----------|
-| `400` | Invalid `disease_key` |
+**k-anonymity:** Districts with `total_screened < 5` (or `total_lab_patients < 5` for lab diseases) are excluded.
 
 ---
 
-## Admin
+### Admin (session auth)
 
-Admin endpoints use session-based authentication (login form, not API key). These are intended for internal use by data administrators, not for frontend integration.
+Admin routes are mounted at `/admin` and use cookie-based session authentication. They are exempt from API key checks and rate limiting.
 
-### GET /admin/
+**Login flow:**
+1. `GET /admin/login` -- renders HTML login form
+2. `POST /admin/login` -- validates password, sets `admin_session` cookie (24h expiry)
+3. All subsequent `/admin/*` requests require the session cookie
 
-Redirects to the admin dashboard. Requires an active session cookie.
+**Security features:**
+- CSRF protection on all POST requests (cookie + form token)
+- Login brute-force protection: max 5 attempts per IP per 5-minute window
+- Session tokens are 32-byte random hex, stored server-side
+- Cookie attributes: `HttpOnly`, `SameSite=Strict`, `Secure` (when `SECURE_COOKIES=true`)
 
-### GET /admin/login
+---
 
-Renders the login form (HTML page).
+#### GET /admin/login
 
-### POST /admin/login
+Render the login form. If already authenticated, redirects to `/admin/dashboard`.
 
-Authenticates with a password and sets a session cookie.
+#### POST /admin/login
 
-**Request:**
+Authenticate with password. Set via `ADMIN_PASSWORD` environment variable (default: `admin`).
 
-```
-POST /admin/login
-Content-Type: application/x-www-form-urlencoded
+| Form Field | Type | Description |
+|------------|------|-------------|
+| password | string | Admin password |
+| csrf_token | string | CSRF token from cookie |
 
-password=<admin-password>
-```
+**Success:** Redirects to `/admin/dashboard` with `admin_session` cookie set.
 
-**Response:** Redirects to `/admin/dashboard` on success, or renders login page with error on failure.
+**Errors:**
+- `401` -- Invalid password
+- `429` -- Too many login attempts (5 per 5 minutes per IP)
+- `403` -- CSRF validation failed
 
-### POST /admin/upload
+---
 
-Upload a CSV file for preview before import. Requires an active session cookie and CSRF token.
+#### GET /admin/logout
 
-**Request:**
+Clear session cookie and redirect to login.
 
-```
-POST /admin/upload
-Content-Type: multipart/form-data
+---
 
-file: <csv-file>
-file_type: auto | pt | pthistory | vitalsignslf | homevisit | homehealth | labhealth | labhealthext
-csrf_token: <csrf-token>
-```
+#### GET /admin/dashboard
 
-Supported file types are auto-detected from CSV column headers. Max file size: 50 MB.
+Main admin dashboard with table row counts and materialized view status. Renders HTML.
 
-**Response:** HTML page with upload preview (column list, sample rows, row count). PII columns are stripped from the preview.
+---
 
-### POST /admin/import
+#### POST /admin/upload
 
-Trigger ETL import for a previously uploaded CSV. Runs in a background thread.
+Upload a CSV file for import preview. การอัปโหลดไฟล์ CSV
 
-**Request:**
+| Form Field | Type | Description |
+|------------|------|-------------|
+| file | file | CSV file (max 50 MB). Supports UTF-8, TIS-620, CP874 encodings |
+| file_type | string | `auto` (default), `pt`, `pthistory`, `vitalsignslf`, `homevisit`, `homehealth`, `labhealth`, `labhealthext` |
+| csrf_token | string | CSRF token |
 
-```
-POST /admin/import
-Content-Type: application/x-www-form-urlencoded
+**Auto-detection** identifies file type from column headers:
 
-upload_id=<upload-id-from-preview>
-csrf_token=<csrf-token>
-```
+| File Type | Target Table | Detection Columns |
+|-----------|-------------|-------------------|
+| pt | raw_patients | `IDCARD` |
+| pthistory | raw_visits | `RLGN`, `LGBTQ` |
+| vitalsignslf | raw_vitalsigns | `HBPN`, `RISKDM` |
+| homevisit | raw_homevisit | `SELFOUR`, `DISTYPE1` |
+| homehealth | raw_homehealth | `EXCERCISE`, `CGTDS` |
+| labhealth | raw_lab_results | `CBCRS`, `HMGB` |
+| labhealthext | raw_lab_extended | `SCRRES01`, `PTGRIGHT` |
 
-**Response:** Redirects to `/admin/history` with a flash message indicating the import has started.
+PII columns (IDCARD, FNAME, LNAME, PHONE, etc.) are **never** shown in the upload preview.
 
-### POST /admin/refresh
+**Success:** Renders preview page with upload_id, column list, sample rows (max 10), and "Confirm Import" button.
 
-Manually refresh all materialized views (summary tables).
+---
 
-**Request:**
+#### POST /admin/import
 
-```
-POST /admin/refresh
-Content-Type: application/x-www-form-urlencoded
+Start a background ETL import for a previously uploaded CSV. เริ่มนำเข้าข้อมูล
 
-csrf_token=<csrf-token>
-```
+| Form Field | Type | Description |
+|------------|------|-------------|
+| upload_id | string | ID from the upload preview step |
+| csrf_token | string | CSRF token |
 
-**Response:** Redirects to `/admin/dashboard` with a success or error flash message.
+**Behavior:**
+1. Creates an `import_history` record with `status = 'running'`
+2. Launches a background thread to run ETL
+3. Refreshes all materialized views after successful import
+4. Redirects to `/admin/history` with flash message
 
-### GET /admin/history
+Upload cache entries expire after 1 hour.
 
-HTML page showing the 50 most recent import jobs with status, row counts, and timing.
+---
 
-### GET /admin/logs
+#### POST /admin/refresh
 
-HTML page showing formatted import log lines.
+Manually refresh all materialized views. รีเฟรชข้อมูลสรุป
 
-### GET /admin/api/table-counts
+| Form Field | Type | Description |
+|------------|------|-------------|
+| csrf_token | string | CSRF token |
 
-JSON endpoint for AJAX dashboard refresh. Requires session cookie.
+Redirects to `/admin/dashboard` with success/error flash message.
 
-**Response (200):**
+---
+
+#### POST /admin/erasure
+
+Process a PDPA data erasure request. ลบข้อมูลผู้ป่วยตาม พ.ร.บ.คุ้มครองข้อมูลส่วนบุคคล (PDPA มาตรา 33)
+
+| Form Field | Type | Description |
+|------------|------|-------------|
+| idcard_hash | string | SHA-256 hash of the patient's ID card number |
+| csrf_token | string | CSRF token |
+
+**Behavior:**
+1. Calls `execute_patient_erasure(idcard_hash)` database function
+2. Deletes all patient data from: `raw_lab_extended`, `raw_lab_results`, `raw_homehealth`, `raw_homevisit`, `raw_vitalsigns`, `raw_visits`, `raw_patients`
+3. Logs the erasure in `erasure_requests` table
+4. Refreshes all materialized views
+5. Redirects to `/admin/dashboard` with count of deleted records
+
+**PDPA Compliance:**
+- Implements Thailand PDPA Section 33 (right to erasure / สิทธิในการลบข้อมูล)
+- All data for the patient is permanently deleted across all tables
+- Erasure is logged for audit purposes
+- Data retention policy: 7 years for health records per Thai MOH guidelines, 3 years for import history
+
+---
+
+#### GET /admin/history
+
+Show recent import history (last 50 entries). Renders HTML table with:
+- Filename, table name, file type
+- Rows imported/skipped, status (success/error/running)
+- Error message (if any), start time, completion time, duration
+
+---
+
+#### GET /admin/logs
+
+Show recent import logs (last 100 entries). Renders formatted log lines.
+
+---
+
+#### GET /admin/api/table-counts
+
+JSON endpoint for AJAX dashboard refresh. Returns raw table and materialized view row counts.
 
 ```json
 {
   "raw_tables": [
-    { "name": "raw_patients", "count": 425000 },
-    { "name": "raw_vitalsigns", "count": 1245832 },
-    { "name": "raw_lab_results", "count": 890000 },
-    { "name": "raw_visits", "count": 1100000 }
+    { "name": "raw_patients", "count": 156789 },
+    { "name": "raw_vitalsigns", "count": 1245832 }
   ],
   "materialized_views": [
     { "name": "summary_district_disease", "count": 50 },
-    { "name": "summary_district_lab", "count": 50 },
-    { "name": "summary_district_mental", "count": 50 },
-    { "name": "summary_district_demographics", "count": 50 },
-    { "name": "summary_district_risk_factors", "count": 2400 }
+    { "name": "summary_district_lab", "count": 48 }
   ]
 }
 ```
 
-### GET /admin/api/import-status/{history_id}
+---
 
-Poll the status of a running import job. Requires session cookie.
+#### GET /admin/api/import-status/{history_id}
 
-**Response (200):**
-
-```json
-{
-  "id": "42",
-  "filename": "vitalsignslf.csv",
-  "table_name": "raw_vitalsigns",
-  "file_type": "vitalsignslf",
-  "status": "success",
-  "rows_imported": "125000",
-  "rows_skipped": "0",
-  "error_message": null,
-  "started_at": "2026-04-08 10:30:00",
-  "completed_at": "2026-04-08 10:32:15",
-  "duration_seconds": "135.42",
-  "uploaded_by": null
-}
-```
-
-Note: All values are returned as strings (or null).
-
-| Status | Condition |
-|--------|-----------|
-| `404` | `{"detail": "Import job not found"}` |
+Poll the status of a running import job. Returns all fields from `import_history` as JSON.
 
 ---
 
-## Frontend Integration Quick Start
+### Frontend Integration: /districts-live
 
-### 1. Set up your API client
+The BMA Health frontend consumes data via the `/api/health/districts-live` endpoint on the **bma-health backend** (not directly from the Summary API). This endpoint returns the full `HealthDataMap` -- the same format as `district_health_data.json` -- with live data sourced from the Summary API via the `data_adapter`.
 
-```javascript
-const API_BASE = process.env.REACT_APP_API_URL || "http://localhost:8002";
-const API_KEY = process.env.REACT_APP_API_KEY;
+```
+Frontend  -->  bma-health backend (/api/health/districts-live)  -->  Summary API (/api/v2/summary/*)
+```
 
-async function apiFetch(path, params = {}) {
-  const url = new URL(path, API_BASE);
-  Object.entries(params).forEach(([k, v]) => {
-    if (v !== undefined && v !== null) url.searchParams.set(k, v);
-  });
+The frontend uses `useHealthData()` (React Query) which fetches from `/api/health/districts-live` when `DATA_SOURCE=api`, or falls back to the static JSON file.
 
-  const res = await fetch(url, {
+---
+
+## Reference Tables
+
+### Disease Keys
+
+8 disease keys are recognized by the API. Each maps to specific database columns.
+
+| Key | Thai Name | Risk Column | Found Column | Pct Column | Trend Support |
+|-----|-----------|-------------|-------------|------------|---------------|
+| `diabetes` | เบาหวาน | risk_dm | found_dm | pct_risk_dm | Yes |
+| `hypertension` | ความดันโลหิตสูง | risk_hpt | found_hpt | pct_risk_hpt | Yes |
+| `cardiovascular` | โรคหัวใจและหลอดเลือด | risk_cvd | found_cvd | pct_risk_cvd | Yes |
+| `obesity` | โรคอ้วน | risk_bmi | found_obesity | -- | Yes |
+| `dyslipidemia` | ไขมันในเลือดสูง | -- | found_dyslipidemia | -- | Yes |
+| `stroke` | โรคหลอดเลือดสมอง | -- | found_stroke | -- | Yes |
+| `ckd` | โรคไตเรื้อรัง | -- | -- | -- | No (use /summary/lab) |
+| `anemia` | โรคโลหิตจาง | -- | -- | -- | No (use /summary/lab) |
+
+---
+
+### Zone Mapping
+
+Bangkok is divided into 8 health zones (เขตสุขภาพ), each managed by a facilitator hospital.
+
+| Zone Code | Thai Name | English Name | Facilitator Hospital | Districts |
+|-----------|-----------|-------------|---------------------|-----------|
+| 01 | เขตสุขภาพที่ 1 | Health Zone 1 | รพ.ราชพิพัฒน์ | ทวีวัฒนา, ตลิ่งชัน, บางแค, ภาษีเจริญ, หนองแขม, บางบอน |
+| 02 | เขตสุขภาพที่ 2 | Health Zone 2 | รพ.ตากสิน | บางกอกน้อย, บางกอกใหญ่, คลองสาน, ธนบุรี, จอมทอง, บางขุนเทียน |
+| 03 | เขตสุขภาพที่ 3 | Health Zone 3 | รพ.เจริญกรุงประชารักษ์ | ปทุมวัน, บางรัก, สาทร, บางคอแหลม, ยานนาวา, ราษฎร์บูรณะ, ทุ่งครุ, คลองเตย, วัฒนา, พระโขนง |
+| 04 | เขตสุขภาพที่ 4 | Health Zone 4 | รพ.วชิรพยาบาล | บางซื่อ, ดุสิต, บางพลัด, พระนคร |
+| 05 | เขตสุขภาพที่ 5 | Health Zone 5 | รพ.กลาง | พญาไท, ราชเทวี, ดินแดง, ห้วยขวาง, วังทองหลาง, สัมพันธวงศ์, ป้อมปราบศัตรูพ่าย |
+| 06 | เขตสุขภาพที่ 6 | Health Zone 6 | รพ.กลาง | ดอนเมือง, สายไหม, หลักสี่, บางเขน, จตุจักร, ลาดพร้าว |
+| 07 | เขตสุขภาพที่ 7 | Health Zone 7 | รพ.สิรินธร | บางกะปิ, สะพานสูง, สวนหลวง, ประเวศ, บางนา, ลาดกระบัง |
+| 08 | เขตสุขภาพที่ 8 | Health Zone 8 | รพ.เวชการุณย์รัศมิ์ | คลองสามวา, หนองจอก, คันนายาว, บึงกุ่ม, มีนบุรี |
+
+---
+
+### District Codes
+
+All 50 Bangkok districts with their codes and zone assignments.
+
+| District Code | Zone | Thai Name | English Name |
+|---------------|------|-----------|-------------|
+| 1001 | 04 | พระนคร | Phra Nakhon |
+| 1002 | 04 | ดุสิต | Dusit |
+| 1003 | 08 | หนองจอก | Nong Chok |
+| 1004 | 03 | บางรัก | Bang Rak |
+| 1005 | 06 | บางเขน | Bang Khen |
+| 1006 | 07 | บางกะปิ | Bang Kapi |
+| 1007 | 03 | ปทุมวัน | Pathum Wan |
+| 1008 | 05 | ป้อมปราบศัตรูพ่าย | Pom Prap Sattru Phai |
+| 1009 | 03 | พระโขนง | Phra Khanong |
+| 1010 | 08 | มีนบุรี | Min Buri |
+| 1011 | 07 | ลาดกระบัง | Lat Krabang |
+| 1012 | 03 | ยานนาวา | Yan Nawa |
+| 1013 | 05 | สัมพันธวงศ์ | Samphanthawong |
+| 1014 | 05 | พญาไท | Phaya Thai |
+| 1015 | 02 | ธนบุรี | Thon Buri |
+| 1016 | 02 | บางกอกใหญ่ | Bangkok Yai |
+| 1017 | 05 | ห้วยขวาง | Huai Khwang |
+| 1018 | 02 | คลองสาน | Khlong San |
+| 1019 | 01 | ตลิ่งชัน | Taling Chan |
+| 1020 | 02 | บางกอกน้อย | Bangkok Noi |
+| 1021 | 02 | บางขุนเทียน | Bang Khun Thian |
+| 1022 | 01 | ภาษีเจริญ | Phasi Charoen |
+| 1023 | 01 | หนองแขม | Nong Khaem |
+| 1024 | 03 | ราษฎร์บูรณะ | Rat Burana |
+| 1025 | 04 | บางพลัด | Bang Phlat |
+| 1026 | 05 | ดินแดง | Din Daeng |
+| 1027 | 08 | บึงกุ่ม | Bueng Kum |
+| 1028 | 03 | สาทร | Sathon |
+| 1029 | 04 | บางซื่อ | Bang Sue |
+| 1030 | 06 | จตุจักร | Chatuchak |
+| 1031 | 02 | จอมทอง | Chom Thong |
+| 1032 | 06 | ดอนเมือง | Don Mueang |
+| 1033 | 05 | ราชเทวี | Ratchathewi |
+| 1034 | 06 | ลาดพร้าว | Lat Phrao |
+| 1035 | 03 | วัฒนา | Watthana |
+| 1036 | 01 | บางแค | Bang Khae |
+| 1037 | 06 | หลักสี่ | Lak Si |
+| 1038 | 06 | สายไหม | Sai Mai |
+| 1039 | 08 | คันนายาว | Khan Na Yao |
+| 1040 | 07 | สะพานสูง | Saphan Sung |
+| 1041 | 05 | วังทองหลาง | Wang Thonglang |
+| 1042 | 08 | คลองสามวา | Khlong Sam Wa |
+| 1043 | 07 | บางนา | Bang Na |
+| 1044 | 01 | ทวีวัฒนา | Thawi Watthana |
+| 1045 | 03 | ทุ่งครุ | Thung Khru |
+| 1046 | 01 | บางบอน | Bang Bon |
+| 1047 | 03 | คลองเตย | Khlong Toei |
+| 1048 | 07 | ประเวศ | Prawet |
+| 1049 | 07 | สวนหลวง | Suan Luang |
+| 1050 | 03 | บางคอแหลม | Bang Kho Laem |
+
+---
+
+### Risk Factor Values
+
+Values used in `summary_district_risk_factors` and the filtered query endpoint.
+
+| Field | Values | Description |
+|-------|--------|-------------|
+| sex | `1` = male, `2` = female | เพศ |
+| age_group | `15-19`, `20-29`, `30-39`, `40-49`, `50-59`, `60-69`, `70+` | กลุ่มอายุ |
+| smoking | `0` = no, `1` = yes | สูบบุหรี่ |
+| exercise | `0` = no, `1` = yes | ออกกำลังกาย |
+
+---
+
+## Frontend Integration
+
+### TypeScript Fetch Example
+
+```typescript
+const API_BASE = "http://localhost:8000";
+const API_KEY = "your-api-key";
+
+interface OverviewResponse {
+  total_screened: number;
+  target: number;
+  zones_count: number;
+  districts_count: number;
+  last_updated: string | null;
+  by_zone: Array<{
+    zone_code: string;
+    name_th: string;
+    total_screened: number;
+  }>;
+  by_disease: Array<{
+    disease_key: string;
+    total_at_risk: number;
+    pct: number;
+  }>;
+}
+
+async function fetchOverview(): Promise<OverviewResponse> {
+  const res = await fetch(`${API_BASE}/api/v2/summary/overview`, {
     headers: { "X-API-Key": API_KEY },
   });
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+  return res.json();
+}
 
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.detail || `HTTP ${res.status}`);
-  }
+interface DistrictSummary {
+  district_code: string;
+  district_name: string;
+  zone_code: string;
+  total_screened: number;
+  risk_dm_count: number;
+  pct_risk_dm: number;
+  risk_hpt_count: number;
+  pct_risk_hpt: number;
+  risk_cvd_count: number;
+  pct_risk_cvd: number;
+  found_obesity_count: number;
+  found_dyslipidemia_count: number;
+  found_stroke_count: number;
+}
+
+async function fetchDistricts(zoneCode?: string): Promise<DistrictSummary[]> {
+  const params = zoneCode ? `?zone_code=${zoneCode}` : "";
+  const res = await fetch(`${API_BASE}/api/v2/summary/districts${params}`, {
+    headers: { "X-API-Key": API_KEY },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
 ```
 
-### 2. Example calls
+### React Query Hook Example
 
-```javascript
-// City overview
-const overview = await apiFetch("/api/v2/summary/overview");
+```typescript
+import { useQuery } from "@tanstack/react-query";
 
-// All zones
-const zones = await apiFetch("/api/v2/summary/zones");
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY ?? "";
 
-// Districts in zone 03
-const districts = await apiFetch("/api/v2/summary/districts", { zone_code: "03" });
+async function apiFetch<T>(path: string): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: { "X-API-Key": API_KEY },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
 
-// Full district detail
-const detail = await apiFetch("/api/v2/summary/districts/1015");
+// Overview
+export function useOverview() {
+  return useQuery({
+    queryKey: ["overview"],
+    queryFn: () => apiFetch<OverviewResponse>("/api/v2/summary/overview"),
+    staleTime: 5 * 60 * 1000, // 5 minutes
+  });
+}
 
-// Screening trends (quarterly, zone 01)
-const trends = await apiFetch("/api/v2/trends/screening", {
-  granularity: "quarterly",
-  zone_code: "01",
-});
+// Districts (optionally filtered by zone)
+export function useDistricts(zoneCode?: string) {
+  return useQuery({
+    queryKey: ["districts", zoneCode],
+    queryFn: () => {
+      const params = zoneCode ? `?zone_code=${zoneCode}` : "";
+      return apiFetch<DistrictSummary[]>(`/api/v2/summary/districts${params}`);
+    },
+    staleTime: 5 * 60 * 1000,
+  });
+}
 
-// Disease hotspot search
-const hotspots = await apiFetch("/api/v2/search/districts", {
-  disease: "hypertension",
-  min_pct: 25,
-  sort_by: "pct_desc",
-  limit: 10,
-});
+// Zone detail
+export function useZoneDetail(zoneCode: string) {
+  return useQuery({
+    queryKey: ["zone", zoneCode],
+    queryFn: () => apiFetch(`/api/v2/summary/zones/${zoneCode}`),
+    enabled: !!zoneCode,
+  });
+}
 
-// Filtered risk factors
-const filtered = await apiFetch("/api/v2/summary/filtered", {
-  district: "1001",
-  sex: 2,
-  age_group: "45-59",
-});
+// Disease trends
+export function useDiseaseTrend(diseaseKey: string, district?: string) {
+  return useQuery({
+    queryKey: ["trend", diseaseKey, district],
+    queryFn: () => {
+      const params = new URLSearchParams({ granularity: "monthly" });
+      if (district) params.set("district", district);
+      return apiFetch(`/api/v2/trends/disease/${diseaseKey}?${params}`);
+    },
+    enabled: !!diseaseKey,
+  });
+}
+
+// Search districts by disease
+export function useDistrictSearch(disease: string, sortBy = "pct_desc", limit = 50) {
+  return useQuery({
+    queryKey: ["search", disease, sortBy, limit],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        disease,
+        sort_by: sortBy,
+        limit: String(limit),
+      });
+      return apiFetch(`/api/v2/search/districts?${params}`);
+    },
+    enabled: !!disease,
+  });
+}
 ```
 
-### 3. Handle suppressed data
+### Environment Variables
 
-Due to k-anonymity enforcement, some queries may return empty `data` arrays or fewer rows than expected. Your UI should display an appropriate message such as "Data suppressed for privacy (fewer than 5 individuals in this group)."
+Configure the API connection in your frontend `.env`:
+
+```bash
+# Summary API (bma-health-db)
+NEXT_PUBLIC_API_URL=http://localhost:8000
+NEXT_PUBLIC_API_KEY=your-api-key
+
+# Or use the bma-health backend proxy
+NEXT_PUBLIC_API_URL=http://localhost:8080
+DATA_SOURCE=api
+```
+
+---
+
+## Configuration Reference
+
+All configuration is via environment variables.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DATABASE_URL` | `postgresql://postgres:bma_health_dev@localhost:5433/bma_health` | PostgreSQL connection string |
+| `API_KEY` | `changeme-dev-key` | API key for X-API-Key header (must change in production) |
+| `ADMIN_PASSWORD` | `admin` | Admin panel password (must change in production) |
+| `SECRET_KEY` | `change-me-in-production-use-random-secret` | Secret key (must change in production) |
+| `CORS_ORIGINS` | `http://localhost:3000,http://localhost:5173` | Comma-separated allowed origins |
+| `RATE_LIMIT_PUBLIC` | `60` | Max requests per minute per IP |
+| `RATE_LIMIT_ANALYST` | `300` | Max requests per minute (analyst tier, reserved) |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis URL (reserved for future use) |
+| `ENVIRONMENT` | `development` | Set to `production` to enforce secure defaults and disable docs |
+| `SECURE_COOKIES` | `false` | Set to `true` for HTTPS cookie flag on admin sessions |
+| `CURRENT_YEAR` | Current year | Override year for ETL imports |
+
+In production (`ENVIRONMENT=production`):
+- Swagger UI (`/docs`), ReDoc (`/redoc`), and OpenAPI schema (`/openapi.json`) are disabled
+- Default API_KEY, ADMIN_PASSWORD, and SECRET_KEY cause a fatal startup error
