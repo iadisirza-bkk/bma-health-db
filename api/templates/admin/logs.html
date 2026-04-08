@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% set active_page = "logs" %}
+
+{% block title %}Logs - BMA Health Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+    <!-- Page Header -->
+    <div class="flex items-center justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-800">Logs</h1>
+            <p class="text-sm text-gray-500 mt-1">บันทึกการทำงานของระบบ</p>
+        </div>
+        <a href="/admin/logs"
+           class="inline-flex items-center gap-2 bg-white border border-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 transition-colors">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            Refresh
+        </a>
+    </div>
+
+    <!-- Log Output -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+        {% if logs %}
+        <div class="bg-slate-900 rounded-xl overflow-hidden">
+            <div class="flex items-center justify-between px-4 py-2.5 bg-slate-800 border-b border-slate-700">
+                <span class="text-xs text-slate-400 font-medium">System Logs</span>
+                <span class="text-xs text-slate-500">{{ logs | length }} lines</span>
+            </div>
+            <pre id="logOutput" class="p-4 text-sm text-green-400 font-mono overflow-x-auto max-h-[600px] overflow-y-auto leading-relaxed">{% for line in logs %}{{ line }}
+{% endfor %}</pre>
+        </div>
+        {% else %}
+        <div class="py-16 text-center">
+            <svg class="w-12 h-12 mx-auto text-gray-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+            <p class="text-gray-400 text-sm">ไม่มี logs</p>
+        </div>
+        {% endif %}
+    </div>
+
+</div>
+
+<script>
+    // Auto-scroll to bottom of log output
+    const logOutput = document.getElementById('logOutput');
+    if (logOutput) {
+        logOutput.scrollTop = logOutput.scrollHeight;
+    }
+</script>
+{% endblock %}

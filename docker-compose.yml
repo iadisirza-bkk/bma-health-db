@@ -1,0 +1,58 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bma-health-db
+    environment:
+      POSTGRES_DB: bma_health
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-bma_health_dev}
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d/migrations
+      - ./db/seeds:/docker-entrypoint-initdb.d/seeds
+      - ./db/init.sh:/docker-entrypoint-initdb.d/00_init.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d bma_health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: bma-health-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: bma-health-api
+    ports:
+      - "8001:8001"
+    environment:
+      DATABASE_URL: postgresql://postgres:${DB_PASSWORD:-bma_health_dev}@postgres:5432/bma_health
+      REDIS_URL: redis://redis:6379/0
+      API_KEY: ${API_KEY:-dev-api-key}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      SECRET_KEY: ${SECRET_KEY:-change-me-in-production-use-random-secret}
+    volumes:
+      - ./etl:/app/etl
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  pgdata:
