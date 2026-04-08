@@ -60,7 +60,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         path = request.url.path
-        if path in _PUBLIC_PATHS or path.startswith("/admin"):
+        if path in _PUBLIC_PATHS or path.startswith("/admin") or path.startswith("/static"):
             return await call_next(request)
 
         provided = request.headers.get("X-API-Key")
@@ -113,7 +113,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         path = request.url.path
-        if path in _PUBLIC_PATHS or path.startswith("/admin"):
+        if path in _PUBLIC_PATHS or path.startswith("/admin") or path.startswith("/static"):
             return await call_next(request)
 
         client_ip = request.client.host if request.client else "unknown"

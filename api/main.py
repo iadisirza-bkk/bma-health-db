@@ -96,6 +96,12 @@ app.add_middleware(AuditMiddleware)
 
 app.include_router(admin_router)
 
+# Serve static files (fonts, logo)
+from fastapi.staticfiles import StaticFiles
+_static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.isdir(_static_dir):
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
 TARGET_SCREENED = 1_600_000
 
 # --------------------------------------------------------------------------- #

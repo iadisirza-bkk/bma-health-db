@@ -17,6 +17,7 @@
                     },
                     fontFamily: {
                         sans: ["'Google Sans'", "'Noto Sans Thai'", 'sans-serif'],
+                        display: ["'SaoChingcha'", "'Google Sans'", "'Noto Sans Thai'", 'sans-serif'],
                     },
                 }
             }
@@ -24,6 +25,9 @@
     </script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@300;400;500;600;700&display=swap');
+        @font-face { font-family: 'SaoChingcha'; src: url('/static/fonts/SaoChingcha-Light.otf') format('opentype'); font-weight: 300; }
+        @font-face { font-family: 'SaoChingcha'; src: url('/static/fonts/SaoChingcha-Regular.otf') format('opentype'); font-weight: 400; }
+        @font-face { font-family: 'SaoChingcha'; src: url('/static/fonts/SaoChingcha-Bold.otf') format('opentype'); font-weight: 700; }
     </style>
 </head>
 <body class="min-h-screen bg-gradient-to-br from-[#00744B] to-[#005C3B] flex items-center justify-center px-4 font-sans">
@@ -33,10 +37,8 @@
         <div class="bg-white rounded-2xl shadow-2xl p-8">
             <!-- Logo / Header -->
             <div class="text-center mb-8">
-                <div class="w-16 h-16 rounded-full bg-bma-green-light mx-auto flex items-center justify-center mb-4">
-                    <span class="text-bma-green text-xl font-bold tracking-wider">BMA</span>
-                </div>
-                <h1 class="text-2xl font-bold text-[#0f172a]">BMA Health DB</h1>
+                <img src="/static/images/logo-bma-256.png" alt="BMA" class="w-20 h-20 mx-auto mb-4">
+                <h1 class="text-2xl font-display font-bold text-[#0f172a]">BMA Health DB</h1>
                 <p class="text-[#475569] text-sm mt-1">ระบบจัดการฐานข้อมูลสุขภาพ</p>
             </div>
 
