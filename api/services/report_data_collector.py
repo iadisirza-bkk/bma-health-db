@@ -559,7 +559,9 @@ def collect_report_data() -> ReportData:
                         "means": [],
                         "pct_above": [],
                     }
-                indicator_agg[ind_key]["means"].append(ind_data.get("mean", 0))
+                mean_val = ind_data.get("mean")
+                if mean_val is not None:
+                    indicator_agg[ind_key]["means"].append(mean_val)
                 pct_above = ind_data.get("pct_above_cutoff")
                 if pct_above is not None:
                     indicator_agg[ind_key]["pct_above"].append(pct_above)

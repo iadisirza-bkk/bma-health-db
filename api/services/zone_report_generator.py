@@ -60,9 +60,10 @@ def generate_zone_report(zone_code: str, lang: str = "th") -> Path:
             zone_disease_sums[dk] = zone_disease_sums.get(dk, 0) + dv["pct_at_risk"] * d["total_screened"]
 
     disease_risks = []
+    first_district = next((data[dc] for dc in zone["dcodes"] if dc in data), None)
     for dk, total_weighted in sorted(zone_disease_sums.items(), key=lambda x: x[1], reverse=True):
         pct = round(total_weighted / zone_total, 1) if zone_total > 0 else 0
-        name = data[zone["dcodes"][0]]["diseases"].get(dk, {}).get("name", dk) if zone["dcodes"] else dk
+        name = first_district["diseases"].get(dk, {}).get("name", dk) if first_district else dk
         disease_risks.append({"name": name, "pct": pct})
 
     top = disease_risks[0] if disease_risks else {"name": "N/A", "pct": 0}
