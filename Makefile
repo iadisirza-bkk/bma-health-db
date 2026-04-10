@@ -212,6 +212,30 @@ format: ## Auto-format code (ruff)
 	cd $(API_DIR) && $(PYTHON) -m ruff format .
 
 # ---------------------------------------------------------------------------
+# ETL & Data Import
+# ---------------------------------------------------------------------------
+
+.PHONY: etl
+etl: ## Run full ETL import from minimal_data/portal_top CSVs
+	cd $(API_DIR) && $(PYTHON) ../etl/import_csv.py \
+		--data-dir ../minimal_data/portal_top \
+		--db-url "$(DB_URL)"
+
+.PHONY: etl-backfill
+etl-backfill: ## Backfill district_code + refresh views (no re-import)
+	@echo "Backfilling district codes and refreshing views..."
+	@cd $(API_DIR) && $(PYTHON) -c "\
+	import sys; sys.path.insert(0,'.'); \
+	import psycopg2, importlib.util; \
+	spec = importlib.util.spec_from_file_location('etl','../etl/import_csv.py'); \
+	etl = importlib.util.module_from_spec(spec); spec.loader.exec_module(etl); \
+	conn = psycopg2.connect('$(DB_URL)'); conn.autocommit = False; \
+	cur = conn.cursor(); \
+	etl.refresh_all_summaries(cur); conn.commit(); conn.close(); \
+	from services.data_adapter import invalidate_cache; invalidate_cache(); \
+	print('Done.')"
+
+# ---------------------------------------------------------------------------
 # Chat / Agent
 # ---------------------------------------------------------------------------
 
