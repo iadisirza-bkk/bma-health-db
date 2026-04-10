@@ -65,12 +65,13 @@ def parse_date_only(val):
     return dt.date() if dt else None
 
 
-def safe_int(val):
+def safe_int(val, lo=-32768, hi=32767):
+    """Parse int; return None if outside [lo, hi]. Default range = SMALLINT."""
     if pd.isna(val) or str(val).strip() == "":
         return None
     try:
         v = int(float(val))
-        if v < -2147483648 or v > 2147483647:
+        if v < lo or v > hi:
             return None
         return v
     except (ValueError, TypeError, OverflowError):
@@ -400,14 +401,14 @@ def import_homevisit(cur, df, patient_map: Dict[str, int]):
             disability,
             safe_int(r.get("EDU")),
             safe_int(r.get("OCCPTN")),
-            safe_int(r.get("PROVINCE")),
-            safe_int(r.get("DISTRICT")),
-            safe_int(r.get("SUBDISTRICT")),
+            safe_int(r.get("PROVINCE"), 0, 99999),
+            safe_int(r.get("DISTRICT"), 0, 99999),
+            safe_int(r.get("SUBDISTRICT"), 0, 999999),
             safe_int(r.get("HOMETYPE")),
             safe_int(r.get("PRVLG")),
-            safe_int(r.get("CRPROVINCE")),
-            safe_int(r.get("CRDISTRICT")),
-            safe_int(r.get("WRKDISTRICT")),
+            safe_int(r.get("CRPROVINCE"), 0, 99999),
+            safe_int(r.get("CRDISTRICT"), 0, 99999),
+            safe_int(r.get("WRKDISTRICT"), 0, 99999),
             safe_int(r.get("WRKTYPE")),
             safe_int(r.get("WRKJOURNEY")),
             safe_int(r.get("HEALTHUSE")),
@@ -535,12 +536,12 @@ def import_lab_results(cur, df, patient_map: Dict[str, int]):
             safe_str(r.get("HPTCODE")),
             safe_int(r.get("PRVLG")),
             safe_int(r.get("CBCRS")),
-            safe_int(r.get("WBC")),
-            safe_int(r.get("RBC")),
+            safe_int(r.get("WBC"), 0, 999999),
+            safe_int(r.get("RBC"), 0, 999999),
             safe_float(r.get("HMGB"), 0, 30),         # hemoglobin g/dL
             safe_float(r.get("HMTC"), 0, 80),          # hematocrit %
             safe_float(r.get("MCV"), 0, 200),           # MCV fL
-            safe_int(r.get("PITCNT")),
+            safe_int(r.get("PITCNT"), 0, 9999999),
             safe_int(r.get("BLDSGTYPE")),
             safe_int(r.get("BLDSGRS")),
             safe_float(r.get("DTX"), 0, 999),
