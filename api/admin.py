@@ -327,9 +327,16 @@ def _run_import(upload_id: str, history_id: int):
             importer_fn(cur, df, patient_map)
             rows_imported = len(df)
 
-        # Refresh materialized views after import
-        etl.refresh_all_summaries(cur)
+        # Commit data FIRST — safe even if view refresh fails
         conn.commit()
+
+        # Refresh materialized views (non-fatal)
+        try:
+            etl.refresh_all_summaries(cur)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            logger.warning("View refresh failed after import (non-fatal — data is saved)")
 
         # Flush Redis cache + in-memory data_adapter cache
         try:
@@ -1097,9 +1104,16 @@ def _run_bundle_import(files_data: dict, history_id: int):
 
             steps_done.append(f"{fname}({file_type})")
 
-        # Refresh materialized views
-        etl.refresh_all_summaries(cur)
+        # Commit data FIRST — so it's safe even if view refresh fails
         conn.commit()
+
+        # Refresh materialized views (non-fatal if it fails)
+        try:
+            etl.refresh_all_summaries(cur)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            logger.warning("View refresh failed after bundle import (non-fatal — data is saved)")
 
         # Flush caches
         try:
