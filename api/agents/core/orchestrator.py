@@ -313,14 +313,15 @@ class OpenMultiAgent:
             yield format_sse({"type": "agent_start", "agent": "synthesizer", "label": "กำลังสรุปคำตอบ...", "icon": "sparkle"})
 
             tool_results = [m["content"] for m in messages if m.get("role") == "tool" and m.get("content")]
-            if not tool_results:
-                # Tools returned nothing — refuse instead of hallucinating
-                yield format_sse({"type": "content", "text": "ขออภัยค่ะ ระบบดึงข้อมูลไม่ได้ในขณะนี้ กรุณาลองถามใหม่อีกครั้ง หรือเจาะจงคำถามให้มากขึ้น เช่น \"เบาหวานเขตไหนเยอะสุด\""})
+            # Check if tools returned actual data (not just "ไม่พบข้อมูล")
+            useful_results = [r for r in tool_results if "ไม่พบข้อมูล" not in r and "ไม่รู้จัก" not in r and len(r.strip()) > 20]
+            if not useful_results:
+                yield format_sse({"type": "content", "text": "ขออภัยค่ะ ไม่พบข้อมูลที่ตรงกับคำถามนี้ในระบบ ลองถามแบบเจาะจงขึ้น เช่น:\n- \"เบาหวานเขตไหนเยอะสุด\"\n- \"ภาพรวมโรคทั้งหมด\"\n- \"เปรียบเทียบโซน 1 กับ 3\""})
                 yield format_sse({"type": "agent_done", "agent": "synthesizer"})
                 yield format_sse({"type": "done"})
                 self.cb.record_success()
                 return
-            tool_context = "\n".join(tool_results)
+            tool_context = "\n".join(useful_results)
 
             # --- Gap #4 fix: inject sample size context ---
             sample_note = ""
