@@ -594,8 +594,8 @@ async def upload_csv(
 
     # Read file content
     try:
-        # Enforce max file size (50 MB)
-        MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
+        # Enforce max file size (500 MB)
+        MAX_UPLOAD_SIZE = 500 * 1024 * 1024  # 500 MB
         raw_bytes = await file.read()
         if len(raw_bytes) > MAX_UPLOAD_SIZE:
             return templates.TemplateResponse(
@@ -604,7 +604,7 @@ async def upload_csv(
                     "request": request,
                     "file_types": FILE_TYPE_MAP,
                     "preview": None,
-                    "messages": [{"type": "error", "text": f"File too large. Maximum size is 50 MB."}],
+                    "messages": [{"type": "error", "text": f"File too large. Maximum size is 500 MB."}],
                     "csrf_token": csrf_token,
                 },
             )
@@ -1177,10 +1177,10 @@ async def upload_bundle_submit(request: Request):
             continue
 
         # Read content
-        MAX_UPLOAD_SIZE = 50 * 1024 * 1024
+        MAX_UPLOAD_SIZE = 500 * 1024 * 1024
         raw_bytes = await upload_file.read()
         if len(raw_bytes) > MAX_UPLOAD_SIZE:
-            errors.append(f"{upload_file.filename}: ไฟล์ใหญ่เกิน 50 MB")
+            errors.append(f"{upload_file.filename}: ไฟล์ใหญ่เกิน 500 MB")
             continue
 
         for encoding in ("utf-8", "tis-620", "cp874", "latin-1"):
