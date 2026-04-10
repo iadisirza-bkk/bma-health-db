@@ -61,6 +61,17 @@ _REFUSAL_RESPONSE = (
 )
 
 
+SYNTH_PROMPT = (
+    "ตอบภาษาไทย Markdown กระชับ <=200 คำ\n"
+    "กฎเด็ดขาด:\n"
+    "1. คัดลอกตัวเลขจากข้อมูล API ที่ให้มาตรงๆ ห้ามปัดเศษ ห้ามประมาณ ห้ามคำนวณเอง\n"
+    "2. ถ้าข้อมูลบอก 333,841 ต้องเขียน 333,841 ไม่ใช่ 333,900\n"
+    "3. ถ้าข้อมูลไม่มีตัวเลขนั้น ห้ามใส่ ให้ข้ามไป\n"
+    "4. ห้ามคำนวณจำนวนคนจาก % เด็ดขาด\n"
+    "5. ห้ามเพิ่มข้อมูลที่ไม่ได้มาจาก API ถ้าข้อมูลให้มาไม่พอ ให้บอกว่ามีข้อมูลแค่นี้"
+)
+
+
 def _is_on_topic(message: str) -> bool:
     """Quick keyword check — returns True if message likely relates to BMA health screening."""
     lower = message.lower()
@@ -91,16 +102,8 @@ class OpenMultiAgent:
             adapter=self.adapter,
             tools=self.registry,
         )
-        _synth_prompt = (
-            "ตอบภาษาไทย Markdown กระชับ <=200 คำ\n"
-            "กฎเด็ดขาด:\n"
-            "1. คัดลอกตัวเลขจากข้อมูลที่ให้มาตรงๆ ห้ามปัดเศษ ห้ามประมาณ ห้ามคำนวณเอง\n"
-            "2. ถ้าข้อมูลบอก 333,841 ต้องเขียน 333,841 ไม่ใช่ 333,900\n"
-            "3. ถ้าข้อมูลไม่มีตัวเลขนั้น ห้ามใส่ ให้ข้ามไป\n"
-            "4. ห้ามคำนวณจำนวนคนจาก % เด็ดขาด"
-        )
         synthesizer = Agent(
-            config=AgentConfig(name="synthesizer", role="สรุปคำตอบ", system_prompt=_synth_prompt, icon="sparkle"),
+            config=AgentConfig(name="synthesizer", role="สรุปคำตอบ", system_prompt=SYNTH_PROMPT, icon="sparkle"),
             adapter=self.adapter,
         )
         return Team(agents={"analyst": analyst, "synthesizer": synthesizer})
@@ -131,7 +134,7 @@ class OpenMultiAgent:
                 tool_context = "\n".join(r.text[:1500] for r in results if r.text)
                 if tool_context:
                     synth_msgs = [
-                        {"role": "system", "content": "ตอบภาษาไทย Markdown กระชับ <=200 คำ คัดลอกตัวเลขจากข้อมูลตรงๆ ห้ามปัดเศษ ห้ามประมาณ ห้ามคำนวณเอง"},
+                        {"role": "system", "content": SYNTH_PROMPT},
                         {"role": "user", "content": f"ข้อมูล:\n{tool_context}\n\nสรุปข้อมูลนี้ตอบคำถาม: {user_message}"},
                     ]
                     synth_resp = await self.adapter.chat(synth_msgs)
@@ -248,23 +251,16 @@ class OpenMultiAgent:
                 return
             yield format_sse({"type": "agent_done", "agent": "analyst"})
 
-            # No tools -> direct answer or re-stream
+            # No tools -> FORCE a default tool call instead of letting LLM hallucinate
             if not response.tool_calls:
-                yield format_sse({"type": "agent_start", "agent": "synthesizer", "label": "กำลังเขียนคำตอบ...", "icon": "sparkle"})
-                content = response.content.strip()
-                if content:
-                    yield format_sse({"type": "content", "text": content})
-                else:
-                    synth_msgs = [
-                        {"role": "system", "content": "ตอบภาษาไทย Markdown กระชับ <=200 คำ"},
-                        {"role": "user", "content": user_message},
-                    ]
-                    async for token in synthesizer.stream(synth_msgs):
-                        yield format_sse({"type": "content", "text": token})
-                yield format_sse({"type": "agent_done", "agent": "synthesizer"})
-                yield format_sse({"type": "done"})
-                self.cb.record_success()
-                return
+                logger.warning("LLM skipped tools — forcing query_health_data")
+                response.tool_calls = [{
+                    "id": "forced_tool",
+                    "function": {
+                        "name": "query_health_data",
+                        "arguments": json.dumps({"group_by": "disease", "chart_type": "donut"}),
+                    },
+                }]
 
             # ===== Phase 2: Execute tools =====
             all_viz = []
@@ -317,7 +313,14 @@ class OpenMultiAgent:
             yield format_sse({"type": "agent_start", "agent": "synthesizer", "label": "กำลังสรุปคำตอบ...", "icon": "sparkle"})
 
             tool_results = [m["content"] for m in messages if m.get("role") == "tool" and m.get("content")]
-            tool_context = "\n".join(tool_results) if tool_results else "ไม่มีข้อมูล"
+            if not tool_results:
+                # Tools returned nothing — refuse instead of hallucinating
+                yield format_sse({"type": "content", "text": "ขออภัยค่ะ ระบบดึงข้อมูลไม่ได้ในขณะนี้ กรุณาลองถามใหม่อีกครั้ง หรือเจาะจงคำถามให้มากขึ้น เช่น \"เบาหวานเขตไหนเยอะสุด\""})
+                yield format_sse({"type": "agent_done", "agent": "synthesizer"})
+                yield format_sse({"type": "done"})
+                self.cb.record_success()
+                return
+            tool_context = "\n".join(tool_results)
 
             # --- Gap #4 fix: inject sample size context ---
             sample_note = ""
@@ -330,8 +333,8 @@ class OpenMultiAgent:
                 pass
 
             synth_messages = [
-                {"role": "system", "content": "ตอบภาษาไทย Markdown กระชับ <=200 คำ ถ้ามีหมายเหตุเรื่องขนาดตัวอย่างให้ระบุด้วย"},
-                {"role": "user", "content": f"ข้อมูล:\n{tool_context}{sample_note}\n\nสรุปข้อมูลนี้ตอบคำถาม: {user_message}"},
+                {"role": "system", "content": SYNTH_PROMPT},
+                {"role": "user", "content": f"ข้อมูลจาก API (ห้ามใช้ตัวเลขอื่นนอกจากนี้):\n{tool_context}{sample_note}\n\nสรุปข้อมูลนี้ตอบคำถาม: {user_message}"},
             ]
 
             try:
