@@ -52,6 +52,12 @@ class ReportCategory(BaseModel):
     reports: list[ReportDashboardItem] = Field(default_factory=list)
 
 
+class GenerationError(BaseModel):
+    """A single report generation error with reason."""
+    report: str = Field(description="Report label (e.g. 'whitepaper/th', 'zone/1')")
+    reason: str = Field(description="Error message explaining why generation failed")
+
+
 class GenerationProgress(BaseModel):
     """Real-time progress of background report generation."""
     running: bool = Field(default=False)
@@ -61,7 +67,7 @@ class GenerationProgress(BaseModel):
     current: str = Field(default="", description="Label of report currently being generated")
     started_at: Optional[str] = Field(default=None, description="ISO 8601 UTC")
     finished_at: Optional[str] = Field(default=None, description="ISO 8601 UTC")
-    errors: list[str] = Field(default_factory=list)
+    errors: list[GenerationError] = Field(default_factory=list)
 
 
 class SchedulerInfo(BaseModel):

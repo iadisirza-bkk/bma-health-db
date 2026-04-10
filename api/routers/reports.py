@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse
 import config
 from schemas.reports import (
     ReportGenerateResponse, ReportInfo, ReportStatusResponse,
-    ReportDashboardResponse, GenerationProgress, SchedulerInfo,
+    ReportDashboardResponse, GenerationProgress, GenerationError, SchedulerInfo,
     ReportCategory, ReportDashboardItem, DashboardSummary,
 )
 from services.report_generator import LANGS, REPORT_TYPES, report_generator
@@ -351,6 +351,12 @@ async def get_dashboard():
     total = raw_progress.get("total", 0)
     completed = raw_progress.get("completed", 0)
     percent = round((completed / total) * 100, 1) if total > 0 else 0.0
+    raw_errors = raw_progress.get("errors", [])
+    errors = [
+        GenerationError(report=e["report"], reason=e["reason"])
+        if isinstance(e, dict) else GenerationError(report=str(e), reason="Unknown error")
+        for e in raw_errors
+    ]
     generation = GenerationProgress(
         running=raw_progress.get("running", False),
         percent=percent,
@@ -359,7 +365,7 @@ async def get_dashboard():
         current=raw_progress.get("current", ""),
         started_at=raw_progress.get("started_at"),
         finished_at=raw_progress.get("finished_at"),
-        errors=raw_progress.get("errors", []),
+        errors=errors,
     )
 
     # Scheduler info

@@ -227,7 +227,7 @@ class ReportGenerator:
                     paths.append(self.generate(lang, rtype))
                 except Exception as e:
                     logger.error("Failed %s: %s", label, e)
-                    self._generation_progress["errors"].append(label)
+                    self._generation_progress["errors"].append({"report": label, "reason": str(e)})
                 self._generation_progress["completed"] += 1
 
         # 2. Disease slides (9 diseases, Thai only)
@@ -240,7 +240,7 @@ class ReportGenerator:
                     paths.append(result)
             except Exception as e:
                 logger.error("Failed %s: %s", label, e)
-                self._generation_progress["errors"].append(label)
+                self._generation_progress["errors"].append({"report": label, "reason": str(e)})
             self._generation_progress["completed"] += 1
 
         # 3. Zone reports (8 zones, Thai only)
@@ -253,7 +253,7 @@ class ReportGenerator:
                     paths.append(result)
             except Exception as e:
                 logger.error("Failed %s: %s", label, e)
-                self._generation_progress["errors"].append(label)
+                self._generation_progress["errors"].append({"report": label, "reason": str(e)})
             self._generation_progress["completed"] += 1
 
         # 4. MSD Comprehensive Report
@@ -267,7 +267,7 @@ class ReportGenerator:
                 paths.append(result)
         except Exception as e:
             logger.error("Failed %s: %s", label, e)
-            self._generation_progress["errors"].append(label)
+            self._generation_progress["errors"].append({"report": label, "reason": str(e)})
         self._generation_progress["completed"] += 1
 
         # Done
