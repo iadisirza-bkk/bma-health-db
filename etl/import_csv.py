@@ -23,27 +23,22 @@ from psycopg2.extras import execute_values as _pg_execute_values
 
 
 def execute_values(cur, sql, rows, page_size=500):
-    """Wrapper around psycopg2 execute_values that skips bad rows instead of failing.
-
-    On batch error: retries rows one-by-one, skipping those that fail.
-    """
+    """Wrapper: skip bad rows instead of failing the whole import."""
     try:
-        cur.execute("SAVEPOINT batch_sp")
+        cur.execute("SAVEPOINT ev_batch")
         _pg_execute_values(cur, sql, rows, page_size=page_size)
-        cur.execute("RELEASE SAVEPOINT batch_sp")
-    except (psycopg2.errors.NumericValueOutOfRange,
-            psycopg2.errors.StringDataRightTruncation,
-            psycopg2.errors.DataException) as batch_err:
-        # Batch failed — rollback to before the batch, then insert one-by-one
-        cur.execute("ROLLBACK TO SAVEPOINT batch_sp")
+        cur.execute("RELEASE SAVEPOINT ev_batch")
+    except Exception:
+        cur.execute("ROLLBACK TO SAVEPOINT ev_batch")
+        # Batch failed — retry one-by-one
         skipped = 0
         for row in rows:
             try:
-                cur.execute("SAVEPOINT row_sp")
+                cur.execute("SAVEPOINT ev_row")
                 _pg_execute_values(cur, sql, [row])
-                cur.execute("RELEASE SAVEPOINT row_sp")
+                cur.execute("RELEASE SAVEPOINT ev_row")
             except Exception:
-                cur.execute("ROLLBACK TO SAVEPOINT row_sp")
+                cur.execute("ROLLBACK TO SAVEPOINT ev_row")
                 skipped += 1
         if skipped:
             print(f"    Skipped {skipped} bad rows (of {len(rows)})")
