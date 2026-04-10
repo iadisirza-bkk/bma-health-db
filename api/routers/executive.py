@@ -107,7 +107,9 @@ def yoy_comparison(
             COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_hpt) AS risk_hpt,
             COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_obesity) AS found_obesity
         FROM raw_vitalsigns v
-        WHERE v.cancel_status IS DISTINCT FROM 1 AND v.visit_date IS NOT NULL
+        WHERE v.cancel_status IS DISTINCT FROM 1
+          AND v.visit_date IS NOT NULL
+          AND v.visit_date >= '2024-01-01'
         GROUP BY DATE_TRUNC('{trunc}', v.visit_date)
         HAVING COUNT(DISTINCT v.patient_id) >= %s
         ORDER BY period

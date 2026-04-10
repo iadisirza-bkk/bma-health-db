@@ -48,10 +48,12 @@ _ON_TOPIC_KEYWORDS = {
     "สูบบุหรี่", "เหล้า", "แอลกอฮอล์", "ออกกำลังกาย", "พฤติกรรม",
     "ซึมเศร้า", "สุขภาพจิต", "PHQ", "ความเครียด",
     "รพ.", "โรงพยาบาล", "1555", "คำแนะนำ",
+    # Time/context terms (allow follow-up corrections)
+    "ปี", "ปีนี้", "ปีที่แล้ว", "เดือน", "ไตรมาส", "2024", "2025", "2026",
     # English health terms
     "health", "screening", "diabetes", "hypertension", "obesity", "disease",
     "risk", "district", "zone", "bangkok", "report", "chart", "compare",
-    "prevalence", "lab", "cholesterol", "bmi", "blood",
+    "prevalence", "lab", "cholesterol", "bmi", "blood", "year", "trend",
 }
 
 _REFUSAL_RESPONSE = (
