@@ -1,0 +1,228 @@
+% =====================================================================
+% ส่วนที่ 4ง: ข้อมูลเศรษฐกิจสังคม (Socioeconomic Profile) — TOR 1.1.2
+% =====================================================================
+\section{ข้อมูลเศรษฐกิจสังคมและประชากรศาสตร์ (Socioeconomic \& Demographic Profile)}
+
+\subsection{อาชีพ (Occupation --- 14 ประเภท)}
+
+\begin{table}[H]
+\centering
+\caption{การกระจายอาชีพของผู้เข้ารับการคัดกรอง << data.total_screened|number_format >> คน}
+\small
+\begin{tabular}{clrr}
+\toprule
+\textbf{\#} & \textbf{อาชีพ (Occupation)} & \textbf{จำนวน (คน)} & \textbf{ร้อยละ (\%)} \\
+\midrule
+<% for occ in data.occupation_distribution %>
+<< loop.index >> & << occ.name_th >> & << occ.count|number_format >> & << occ.pct >>\% \\
+<% endfor %>
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{ระดับการศึกษา (Education Level)}
+
+\begin{table}[H]
+\centering
+\caption{การกระจายระดับการศึกษาของผู้เข้ารับการคัดกรอง}
+\begin{tabular}{clrr}
+\toprule
+\textbf{\#} & \textbf{ระดับการศึกษา (Education)} & \textbf{จำนวน (คน)} & \textbf{ร้อยละ (\%)} \\
+\midrule
+<% for edu in data.education_distribution %>
+<< loop.index >> & << edu.name_th >> & << edu.count|number_format >> & << edu.pct >>\% \\
+<% endfor %>
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{ประเภทที่พักอาศัย (Housing Type --- 9 ประเภท)}
+
+\begin{table}[H]
+\centering
+\caption{การกระจายประเภทที่พักอาศัยของผู้เข้ารับการคัดกรอง}
+\begin{tabular}{clrr}
+\toprule
+\textbf{\#} & \textbf{ประเภทที่พัก (Housing Type)} & \textbf{จำนวน (คน)} & \textbf{ร้อยละ (\%)} \\
+\midrule
+<% for h in data.housing_distribution %>
+<< loop.index >> & << h.name_th >> & << h.count|number_format >> & << h.pct >>\% \\
+<% endfor %>
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{สิทธิ์การรักษาพยาบาล (Health Insurance --- 9 ประเภท)}
+
+\begin{table}[H]
+\centering
+\caption{การกระจายสิทธิ์การรักษาพยาบาลของผู้เข้ารับการคัดกรอง}
+\begin{tabular}{clrr}
+\toprule
+\textbf{\#} & \textbf{สิทธิ์การรักษา (Insurance)} & \textbf{จำนวน (คน)} & \textbf{ร้อยละ (\%)} \\
+\midrule
+<% for ins in data.insurance_distribution %>
+<< loop.index >> & << ins.name_th >> & << ins.count|number_format >> & << ins.pct >>\% \\
+<% endfor %>
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{พฤติกรรมการบริโภคอาหาร (Dietary Habits)}
+
+\begin{table}[H]
+\centering
+\caption{พฤติกรรมการบริโภคอาหาร 4 ประเภท (ร้อยละ)}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{ประเภทอาหาร} & \textbf{ไม่กิน} & \textbf{สัปดาห์ละครั้ง} & \textbf{วันเว้นวัน} & \textbf{ทุกวัน} \\
+\midrule
+อาหารทอด/ไขมัน (Fried/Fatty) & << data.diet_distribution.fried_fatty.never >>\% & << data.diet_distribution.fried_fatty.weekly >>\% & << data.diet_distribution.fried_fatty.alternate_day >>\% & << data.diet_distribution.fried_fatty.daily >>\% \\
+เครื่องดื่มหวาน (Sweet Drinks) & << data.diet_distribution.sweet_drink.never >>\% & << data.diet_distribution.sweet_drink.weekly >>\% & << data.diet_distribution.sweet_drink.alternate_day >>\% & << data.diet_distribution.sweet_drink.daily >>\% \\
+อาหารเค็ม/แปรรูป (Salty/Preserved) & << data.diet_distribution.salty_preserved.never >>\% & << data.diet_distribution.salty_preserved.weekly >>\% & << data.diet_distribution.salty_preserved.alternate_day >>\% & << data.diet_distribution.salty_preserved.daily >>\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{การฉีดวัคซีน (Vaccination Coverage)}
+
+\begin{table}[H]
+\centering
+\caption{สถานะการฉีดวัคซีนของผู้เข้ารับการคัดกรอง}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{วัคซีน (Vaccine)} & \textbf{ไม่เคยฉีด (\%)} & \textbf{นานกว่า 1 ปี (\%)} & \textbf{ฉีดทุกปี (\%)} \\
+\midrule
+โควิด-19 (COVID-19) & << data.vaccination.covid_never >>\% & << data.vaccination.covid_over_1yr >>\% & << data.vaccination.covid_annual >>\% \\
+ไข้หวัดใหญ่ (Influenza) & << data.vaccination.influenza_never >>\% & << data.vaccination.influenza_over_1yr >>\% & << data.vaccination.influenza_annual >>\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{ประวัติโรคในครอบครัว (Family History)}
+
+\begin{table}[H]
+\centering
+\caption{ร้อยละผู้ที่มีบิดา/มารดาเป็นโรค (Family History Positive)}
+\begin{tabular}{clr}
+\toprule
+\textbf{\#} & \textbf{โรคในครอบครัว (Family Disease)} & \textbf{\% บวก} \\
+\midrule
+<% for fh in data.family_history %>
+<< loop.index >> & << fh.name_th >> & << fh.parent_positive_pct >>\% \\
+<% endfor %>
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{สถานะ LGBTQ+ (LGBTQ+ Status)}
+
+\begin{table}[H]
+\centering
+\caption{การกระจายสถานะ LGBTQ+ ในกลุ่มผู้คัดกรอง}
+\begin{tabular}{lr}
+\toprule
+\textbf{สถานะ} & \textbf{ร้อยละ (\%)} \\
+\midrule
+ใช่ (Yes) & << data.lgbtq.yes >>\% \\
+ไม่ใช่ (No) & << data.lgbtq.no >>\% \\
+ไม่ระบุ (Not Specified) & << data.lgbtq.not_specified >>\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{ความต้องการบริการ (Service Requests)}
+
+\begin{table}[H]
+\centering
+\caption{ความต้องการบริการสุขภาพเพิ่มเติม (request1--request7)}
+\begin{tabular}{clr}
+\toprule
+\textbf{\#} & \textbf{ความต้องการ (Request)} & \textbf{ร้อยละ (\%)} \\
+\midrule
+<% for req in data.service_requests %>
+<< loop.index >> & << req.name_th >> & << req.pct >>\% \\
+<% endfor %>
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{สัตว์เลี้ยง (Pet Ownership)}
+
+สัดส่วนผู้เลี้ยงสัตว์: สุนัข << data.pet_data.dog_pct >>\%, แมว << data.pet_data.cat_pct >>\%,
+อื่นๆ << data.pet_data.other_pct >>\%, ไม่เลี้ยง << data.pet_data.none_pct >>\%
+(ข้อมูลเพื่อประเมินความเสี่ยงโรคจากสัตว์ (Zoonotic Disease Risk))
+
+% --- แผนภูมิประกอบส่วนเศรษฐกิจสังคม ---
+
+\IfFileExists{charts/bar_occupation.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{charts/bar_occupation.png}
+\caption{แผนภูมิแท่ง (Bar Chart) การกระจายอาชีพของผู้เข้ารับการคัดกรอง}
+\label{fig:bar_occupation}
+\end{figure}
+}{}
+
+\IfFileExists{charts/bar_education.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{charts/bar_education.png}
+\caption{แผนภูมิแท่ง (Bar Chart) การกระจายระดับการศึกษาของผู้เข้ารับการคัดกรอง}
+\label{fig:bar_education}
+\end{figure}
+}{}
+
+\IfFileExists{charts/pie_housing.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.55\textwidth]{charts/pie_housing.png}
+\caption{แผนภูมิวงกลม (Pie Chart) การกระจายประเภทที่พักอาศัย}
+\label{fig:pie_housing}
+\end{figure}
+}{}
+
+\IfFileExists{charts/pie_insurance.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.55\textwidth]{charts/pie_insurance.png}
+\caption{แผนภูมิวงกลม (Pie Chart) การกระจายสิทธิ์การรักษาพยาบาล}
+\label{fig:pie_insurance}
+\end{figure}
+}{}
+
+\IfFileExists{charts/bar_diet.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{charts/bar_diet.png}
+\caption{แผนภูมิแท่ง (Bar Chart) พฤติกรรมการบริโภคอาหาร 4 ประเภท}
+\label{fig:bar_diet}
+\end{figure}
+}{}
+
+\IfFileExists{charts/bar_vaccination.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{charts/bar_vaccination.png}
+\caption{แผนภูมิแท่ง (Bar Chart) สถานะการฉีดวัคซีนของผู้เข้ารับการคัดกรอง}
+\label{fig:bar_vaccination}
+\end{figure}
+}{}
+
+\IfFileExists{charts/bar_family_history.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{charts/bar_family_history.png}
+\caption{แผนภูมิแท่ง (Bar Chart) ร้อยละผู้ที่มีประวัติโรคในครอบครัว (Family History)}
+\label{fig:bar_family_history}
+\end{figure}
+}{}
+
+\IfFileExists{charts/bar_service_requests.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{charts/bar_service_requests.png}
+\caption{แผนภูมิแท่ง (Bar Chart) ความต้องการบริการสุขภาพเพิ่มเติม}
+\label{fig:bar_service_requests}
+\end{figure}
+}{}

@@ -1,0 +1,70 @@
+% =====================================================================
+% ส่วนที่ 9: ข้อเสนอแนะเชิงนโยบาย (Policy Recommendations) — TOR 1.1.5
+% =====================================================================
+\section{ข้อเสนอแนะเชิงนโยบาย (Policy Recommendations)}
+
+จากผลการวิเคราะห์ข้อมูลคัดกรองสุขภาพ กรุงเทพมหานคร << data.total_screened|number_format >> คน
+ใน << data.district_count >> เขต << data.zone_count >> โซนสุขภาพ คณะผู้วิเคราะห์มีข้อเสนอแนะเชิงนโยบายดังนี้
+
+\subsection{สรุปปัญหาสำคัญ (Key Issues Summary)}
+
+\begin{enumerate}
+<% for d in data.top_diseases[:3] %>
+  \item \textbf{<< d.name_th >> (<< d.name_en >>)} มีอัตราเสี่ยงเฉลี่ย \textbf{<< d.avg_pct >>\%}
+    สูงสุดที่ << d.max_pct >>\% ครอบคลุม << d.district_count >> เขต
+    จำเป็นต้องเร่งรัดมาตรการคัดกรองเชิงรุก
+<% endfor %>
+  \item \textbf{ปัจจัยเสี่ยงหลัก}: กลุ่มอายุ 60 ปีขึ้นไป การสูบบุหรี่ การดื่มสุราหนัก
+    และการไม่ออกกำลังกาย เป็นปัจจัยที่เพิ่มความเสี่ยงอย่างมีนัยสำคัญทางสถิติในทุกโรค
+  \item \textbf{ความแตกต่างระหว่างโซน}: พบความแตกต่างอย่างมีนัยสำคัญระหว่าง 8 โซนสุขภาพ
+    (ANOVA) บ่งชี้ว่าต้องมีมาตรการเฉพาะพื้นที่ (Area-Specific Interventions)
+\end{enumerate}
+
+\subsection{มาตรการเชิงรุก (Proactive Measures)}
+
+\begin{table}[H]
+\centering
+\caption{ข้อเสนอมาตรการเชิงรุกสำหรับโรค NCD ที่มีความเสี่ยงสูง}
+\begin{tabular}{p{3cm}p{4cm}p{5cm}}
+\toprule
+\textbf{โรค (Disease)} & \textbf{กลุ่มเป้าหมาย (Target)} & \textbf{มาตรการ (Intervention)} \\
+\midrule
+<% for d in data.top_diseases[:3] %>
+<< d.name_th >> & เขตที่มีความเสี่ยง $>$ << (d.avg_pct * 1.2)|round(0)|int >>\% & คัดกรองเชิงรุก + ให้ความรู้ + ส่งต่อ รพ. \\
+<% endfor %>
+โรคระบบทางเดินหายใจ & ช่วง ม.ค.--มี.ค. (PM2.5 สูง) & แจกหน้ากาก N95 + เฝ้าระวังกลุ่มเสี่ยง \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{แผนรณรงค์ตามฤดูกาล (Seasonal Campaign Plan)}
+
+\begin{table}[H]
+\centering
+\caption{แผนรณรงค์ส่งเสริมสุขภาพตามฤดูกาล}
+\begin{tabular}{lp{5cm}p{5cm}}
+\toprule
+\textbf{ช่วงเวลา} & \textbf{ประเด็นสุขภาพ} & \textbf{กิจกรรมรณรงค์} \\
+\midrule
+ม.ค.--มี.ค. & ฝุ่น PM2.5 + โรคทางเดินหายใจ & แจกหน้ากาก N95 + ตรวจสมรรถภาพปอด \\
+เม.ย.--พ.ค. & โรคหลอดเลือดหัวใจ (อากาศร้อน) & รณรงค์ดื่มน้ำ + ออกกำลังกายในร่ม \\
+มิ.ย.--ส.ค. & เบาหวาน + โรคอ้วน (ฤดูฝน) & คัดกรองเชิงรุก + รณรงค์ลดน้ำตาล \\
+ก.ย.--ต.ค. & สรุปผลครึ่งปี & ประชุม Area Manager ทบทวนผล \\
+พ.ย.--ธ.ค. & ปิดผลประจำปี & จัดทำรายงานประจำปี + วางแผนปีถัดไป \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{ข้อเสนอสำหรับผู้ว่าราชการ กรุงเทพมหานคร}
+
+\begin{enumerate}
+  \item \textbf{จัดสรรงบประมาณ} ตามระดับความเสี่ยงของแต่ละโซน --- โซนที่มีความเสี่ยงสูงควรได้รับงบประมาณมากกว่า
+  \item \textbf{ตั้งเป้าหมาย} คัดกรองสุขภาพให้ครอบคลุม 1,000,000 คน
+    (ปัจจุบัน << data.total_screened|number_format >> คน)
+  \item \textbf{บูรณาการข้อมูล} ระบบวิเคราะห์ข้อมูลนี้เข้ากับ Dashboard สำนักการแพทย์
+    (health2.bangkok.go.th) เพื่อการเฝ้าระวังแบบต่อเนื่อง (Continuous Surveillance)
+  \item \textbf{ขยายผล} การวิเคราะห์ไปยังข้อมูลผลตรวจเพิ่มเติม 4 อย่าง (EKG, Chest X-ray,
+    Blood Test, Fundoscopy) เมื่อข้อมูล individual-level พร้อม
+  \item \textbf{พัฒนาระบบ AI} ให้สามารถทำนาย (Predictive Modeling) กลุ่มเสี่ยงล่วงหน้า
+    เพื่อวางแผนมาตรการเชิงรุกก่อนเกิดปัญหา
+\end{enumerate}

@@ -1,0 +1,130 @@
+% =====================================================================
+% ส่วนที่ 3: ระเบียบวิธีวิจัย (Methodology) — TOR 1.1.1
+% =====================================================================
+\section{ระเบียบวิธีวิจัย (Methodology)}
+
+\subsection{แหล่งที่มาของข้อมูล (Data Source and Provenance)}
+
+ข้อมูลรวบรวมจากศูนย์บริการสาธารณสุข (Public Health Center) \textbf{69 แห่ง}
+และโรงพยาบาลสังกัดสำนักการแพทย์ กรุงเทพมหานคร \textbf{11 แห่ง}
+อัปโหลดเป็นไฟล์ Excel รวมระดับเขต (Aggregated District-Level Data)
+ข้อมูลทั้งหมดเป็นข้อมูลรวมกลุ่ม ไม่มีข้อมูลระบุตัวบุคคล (No Personally Identifiable Information: PII)
+
+\subsection{ข้อจำกัดด้านการสุ่มตัวอย่าง (Sampling Limitations)}
+
+\begin{compactlist}
+  \item ผู้เข้ารับการคัดกรองประมาณ 26,800--39,200 คน/เดือน เป็น self-selected sample
+    เนื่องจากผู้มารับบริการอาจมีแนวโน้มด้านสุขภาพต่างจากประชากรทั่วไป
+  \item มี \textbf{selection bias} เนื่องจากกลุ่มตัวอย่างมาจากผู้ที่สมัครใจเข้ารับการคัดกรอง
+  \item ค่า pct\_at\_risk ที่แสดงเป็น ``สัดส่วนในกลุ่มผู้เข้ารับการคัดกรอง''
+    ไม่ใช่อัตราความชุก (Prevalence) ในประชากรทั้งเขต
+  \item อาจ overestimate เมื่อเทียบกับการสำรวจ NHES (National Health Examination Survey)
+\end{compactlist}
+
+\subsection{เกณฑ์คัดกรองทางคลินิก (Clinical Cutoff Values)}
+
+\begin{table}[H]
+\centering
+\caption{เกณฑ์คัดกรอง (Clinical Cutoffs) ที่ใช้จำแนกกลุ่มเสี่ยง}
+\label{tab:cutoffs}
+\begin{tabular}{llll}
+\toprule
+\textbf{ตัวชี้วัด (Indicator)} & \textbf{เกณฑ์ (Cutoff)} & \textbf{โรค (Disease)} & \textbf{อ้างอิง} \\
+\midrule
+น้ำตาลในเลือด (Fasting Blood Sugar: FBS) & $\geq$ 126 mg/dL & เบาหวาน (DM) & ADA 2024 \\
+ความดันซิสโตลิก (Systolic BP: SBP) & $\geq$ 140 mmHg & ความดันสูง (HT) & JNC 8 \\
+ความดันไดแอสโตลิก (Diastolic BP: DBP) & $\geq$ 90 mmHg & ความดันสูง (HT) & JNC 8 \\
+ดัชนีมวลกาย (Body Mass Index: BMI) & $\geq$ 25 kg/m$^2$ & โรคอ้วน (Obesity) & WHO Asia-Pacific \\
+คอเลสเตอรอลรวม (Total Cholesterol: TC) & $\geq$ 240 mg/dL & ไขมันสูง (DLP) & NCEP ATP III \\
+แอลดีแอล (LDL Cholesterol) & $\geq$ 160 mg/dL & ไขมันสูง (DLP) & NCEP ATP III \\
+รอบเอว (Waist Circumference) & $\geq$ 85 cm & โรคอ้วน & เกณฑ์ผสม \\
+ครีเอตินิน (Creatinine) & $\geq$ 1.5 mg/dL & โรคไต (CKD) & KDIGO \\
+ฮีโมโกลบิน (Hemoglobin: Hb) & $<$ 12 g/dL (หญิง) & โลหิตจาง & WHO \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{วิธีการทางสถิติ (Statistical Methods)}
+
+\subsubsection{สถิติเชิงพรรณนา (Descriptive Statistics) --- TOR 1.1.2}
+\begin{compactlist}
+  \item ค่าเฉลี่ย (Mean) ส่วนเบี่ยงเบนมาตรฐาน (SD) ค่าสูงสุด (Max) ค่าต่ำสุด (Min)
+  \item ร้อยละ (Percentage) ของผู้มีความเสี่ยงจำแนกตามโรค เขต โซน
+  \item กราฟแท่ง (Bar Chart) กราฟวงกลม (Pie Chart) แผนที่ความร้อน (Heatmap)
+\end{compactlist}
+
+\subsubsection{สถิติเชิงอนุมาน (Inferential Statistics) --- TOR 1.1.3}
+\begin{compactlist}
+  \item \textbf{การทดสอบไคสแควร์ (Chi-Square Test of Independence)}: ทดสอบความสัมพันธ์
+    ระหว่างปัจจัยนำ (เพศ อายุ สูบบุหรี่ ดื่มสุรา ออกกำลังกาย) กับโรค NCD 8 โรค
+    --- รวม \textbf{40 คู่ทดสอบ} (5 ปัจจัย $\times$ 8 โรค)
+    ใช้ค่า Cram\'{e}r's V วัดขนาดอิทธิพล (Effect Size)
+  \item \textbf{อัตราส่วนออดส์ (Odds Ratio: OR)}: ประมาณความเสี่ยงสัมพัทธ์ (Relative Risk)
+    สำหรับปัจจัยแบบ binary พร้อมช่วงความเชื่อมั่น 95\% (95\% Confidence Interval: CI)
+  \item \textbf{การถดถอยโลจิสติก (Logistic Regression)}: วิเคราะห์อิทธิพลพร้อมกันของ
+    หลายปัจจัย (Multivariate Analysis) ต่อโรค NCD แต่ละโรค
+    แสดงค่า Adjusted OR พร้อม 95\% CI
+  \item \textbf{การวิเคราะห์ความแปรปรวนทางเดียว (One-Way ANOVA)}:
+    เปรียบเทียบค่าเฉลี่ยความเสี่ยงระหว่าง 8 โซนสุขภาพ
+  \item \textbf{เมทริกซ์โรคร่วม (Comorbidity Matrix)}:
+    ค่าสัมประสิทธิ์สหสัมพันธ์เพียร์สัน (Pearson Correlation Coefficient)
+    ระหว่างโรค NCD ทั้ง 8 โรค
+\end{compactlist}
+
+\subsubsection{การวิเคราะห์แนวโน้ม (Trend Analysis) --- TOR 1.1.4}
+\begin{compactlist}
+  \item \textbf{Mann-Kendall Test}: ทดสอบแนวโน้มความเสี่ยงตลอดช่วง 27 เดือน
+    แบ่งเป็น 2 ครึ่ง แล้วเปรียบเทียบค่าเฉลี่ย (Mean Comparison)
+  \item \textbf{การวิเคราะห์ตามฤดูกาล (Seasonal Decomposition)}:
+    เปรียบเทียบช่วง ม.ค.--มี.ค. (high season ฝุ่นสูง) กับ มิ.ย.--ส.ค. (low season)
+  \item \textbf{สหสัมพันธ์ PM2.5 (PM2.5 Correlation)}:
+    ค่าสัมประสิทธิ์สหสัมพันธ์อันดับสเปียร์แมน (Spearman Rank Correlation)
+    ระหว่าง PM2.5 กับโรคทางเดินหายใจเรื้อรัง
+\end{compactlist}
+
+\subsection{ข้อจำกัดของการวิเคราะห์ (Limitations)}
+
+\begin{compactlist}
+  \item \textbf{Ecological Fallacy}: ค่าเฉลี่ยระดับเขตหรือโซนไม่สามารถอนุมานไปยังระดับบุคคลได้
+  \item \textbf{Selection Bias}: กลุ่มตัวอย่างมาจากผู้สมัครใจ ไม่ใช่การสุ่มตัวอย่าง
+  \item \textbf{Aggregate Data Only}: ข้อมูลเป็นรวมระดับเขต ไม่มีข้อมูลรายบุคคล
+    จึงไม่สามารถควบคุมตัวแปรรบกวน (Confounders) ได้ทั้งหมด
+  \item \textbf{Simulated Factor Data}: ข้อมูลปัจจัยเสี่ยงบางส่วนประมาณจาก
+    modifier tables ไม่ใช่ข้อมูล individual-level จากชุดข้อมูลดิบ
+    ผลลัพธ์ทางสถิติจากข้อมูล simulated อาจไม่สะท้อนความเป็นจริงทางระบาดวิทยา
+  \item \textbf{Multiple Comparisons}: การทดสอบ Chi-Square 40 คู่พร้อมกัน
+    เพิ่มโอกาส false positive ใช้ Bonferroni correction ($\alpha_{adj} = 0.05/40 = 0.00125$)
+    เพื่อควบคุม family-wise error rate
+  \item \textbf{Model Validation}: Logistic Regression models ยังไม่ได้ผ่าน
+    cross-validation ค่า AUC-ROC ที่รายงานเป็น apparent AUC (training data)
+    ค่าจริงอาจต่ำกว่าเล็กน้อย (optimistic bias)
+  \item \textbf{Seasonal Decomposition}: ใช้ simple mean comparison
+    ไม่ใช่ STL (Seasonal and Trend decomposition using LOESS)
+    อาจ confound trend กับ seasonality ในบางกรณี
+\end{compactlist}
+
+\begin{center}
+\fcolorbox{warnamber}{warnamber!10}{%
+\parbox{0.9\textwidth}{%
+\textbf{คำเตือนเรื่องข้อมูลจำลอง (Simulated Data Notice):}
+ข้อมูลปัจจัยเสี่ยง (Factor Analysis), Logistic Regression, Comorbidity Matrix,
+Seasonal Decomposition, และ Weekly Heatmap ในรายงานนี้บางส่วนสร้างจาก
+simulated modifier tables ไม่ใช่ข้อมูล individual-level จากชุดข้อมูลดิบ
+ผลลัพธ์ทางสถิติอาจไม่สะท้อนความเป็นจริงทางระบาดวิทยา
+เมื่อข้อมูล individual-level พร้อม ระบบจะคำนวณใหม่โดยอัตโนมัติ%
+}}
+\end{center}
+
+\subsection{การรวมข้อมูลระดับกลุ่มเขต (Zone Aggregation)}
+
+ใช้ค่าเฉลี่ยถ่วงน้ำหนัก (Weighted Average) ตาม total\_screened ของแต่ละเขต
+เขตที่มีจำนวนผู้คัดกรองมากจะมีน้ำหนักมากกว่าในการคำนวณค่ารวมระดับโซน
+
+\subsection{จริยธรรมการวิจัย (Ethics and IRB)}
+
+\begin{compactlist}
+  \item โครงการได้รับอนุมัติจากคณะกรรมการจริยธรรมการวิจัย (Institutional Review Board: IRB)
+  \item ข้อมูลที่ใช้ในระบบเป็น aggregate level ทั้งหมด ไม่มีข้อมูลรายบุคคล
+  \item ไม่มีการเก็บ ประมวลผล หรือแสดงข้อมูลส่วนบุคคลของผู้เข้ารับการคัดกรอง
+  \item เป็นไปตาม พ.ร.บ.คุ้มครองข้อมูลส่วนบุคคล พ.ศ. 2562 (PDPA)
+\end{compactlist}

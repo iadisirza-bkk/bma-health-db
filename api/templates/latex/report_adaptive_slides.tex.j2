@@ -1,0 +1,74 @@
+% =============================================================================
+% BMA Health — Adaptive Slides (AI-generated content in beautiful template)
+% =============================================================================
+\documentclass[aspectratio=169,11pt]{beamer}
+
+\newcommand{\bmaheaderleft}{<< title >>}
+\newcommand{\bmaversion}{v1.0}
+\input{bma_beamer_preamble}
+
+\setmainfont{GoogleSans-Regular.ttf}[Path=assets/, BoldFont=GoogleSans-Bold.ttf]
+\setsansfont{GoogleSans-Regular.ttf}[Path=assets/, BoldFont=GoogleSans-Bold.ttf]
+\setdefaultlanguage{english}
+
+\begin{document}
+
+% ===== Title =====
+{
+\setbeamercolor{background canvas}{bg=bmagreen}
+\begin{frame}[plain]
+  \centering
+  \vspace{12pt}
+  \includegraphics[height=2cm]{assets/bma_logo.png}\hspace{1.5cm}%
+  \includegraphics[height=2cm]{assets/msd_logo.png}\\[14pt]
+  {\Huge\bfseries\color{white} << title >>}\\[8pt]
+  {\large\color{white!80} ข้อมูลคัดกรองสุขภาพ กรุงเทพมหานคร}\\[10pt]
+  {\normalsize\color{white!70} สำนักการแพทย์ กรุงเทพมหานคร}\\[4pt]
+  {\small\color{white!50} << generated_date >>}
+  \vfill
+\end{frame}
+}
+
+% ===== Content Slides =====
+<% for slide in slides %>
+\begin{frame}{<< slide.title >>}
+  \begin{itemize}
+    <% for item in slide.bullet_points %>
+    \item << item >>
+    <% endfor %>
+  \end{itemize}
+  <% if slide.note %>
+  \vspace{6pt}
+  \begin{block}{หมายเหตุ}
+    \small << slide.note >>
+  \end{block}
+  <% endif %>
+\end{frame}
+
+<% endfor %>
+
+% ===== Charts =====
+<% if charts %>
+<% for chart in charts %>
+\begin{frame}{แผนภูมิข้อมูล}
+  \begin{center}
+    \includegraphics[width=0.85\textwidth,height=0.7\textheight,keepaspectratio]{<< chart >>}
+  \end{center}
+\end{frame}
+
+<% endfor %>
+<% endif %>
+
+% ===== Thank You =====
+{
+\setbeamercolor{background canvas}{bg=bmagreen}
+\begin{frame}[plain]
+  \centering\vfill
+  {\Huge\bfseries\color{white} ขอบคุณครับ}\\[10pt]
+  {\large\color{white!80} สำนักการแพทย์ กรุงเทพมหานคร}\\[6pt]
+  {\small\color{white!60} ข้อมูลจากระบบคัดกรองสุขภาพ 1 ล้านคน}
+  \vfill
+\end{frame}
+}
+
+\end{document}

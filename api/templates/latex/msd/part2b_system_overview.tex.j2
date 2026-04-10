@@ -1,0 +1,134 @@
+% =====================================================================
+% ส่วนที่ 2ข: ภาพรวมระบบ Dashboard (System Overview)
+% =====================================================================
+\section{ภาพรวมระบบวิเคราะห์ข้อมูลเชิงพื้นที่ (Dashboard System Overview)}
+
+ระบบวิเคราะห์ข้อมูลคัดกรองสุขภาพเชิงพื้นที่ กรุงเทพมหานคร เป็นเว็บแอปพลิเคชัน
+(Web Application) ที่ทำงานร่วมกับรายงานฉบับนี้ ผู้ใช้สามารถเข้าถึงข้อมูลแบบ interactive
+ผ่านแผนที่ กราฟ ตัวกรอง และ AI Chat Assistant
+ข้อมูลทั้งหมดเป็นระดับรวมเขต (Aggregate District-Level) ไม่มีข้อมูลส่วนบุคคล
+
+\subsection{หน้าหลัก --- แผนที่ 8 โซนสุขภาพ (Main Map View)}
+
+\begin{figure}[H]
+\centering
+\IfFileExists{assets/screenshots/screenshot_main_map.png}{%
+  \includegraphics[width=\textwidth]{assets/screenshots/screenshot_main_map.png}
+}{%
+  \fcolorbox{bmagreen}{bmagreen!5}{\parbox{0.9\textwidth}{\centering\vspace{2cm}
+    {\large\color{bmagreen} [Screenshot: หน้าหลัก --- แผนที่ 8 โซนสุขภาพ กทม.]}\\[4pt]
+    {\small แสดงแผนที่ กทม. แบ่ง 8 โซนสุขภาพ พร้อมชั้นข้อมูลโรค 9 โรค + PM2.5}
+  \vspace{2cm}}}
+}
+\caption{หน้าหลักของระบบ --- แผนที่แสดง 8 โซนสุขภาพ กทม.
+  พร้อมแผงเลือกชั้นข้อมูลโรค (Disease Layers) 9 โรค NCD และ PM2.5
+  ผู้ใช้คลิกที่โซนเพื่อ drill-down ดูรายเขต}
+\label{fig:screenshot_main}
+\end{figure}
+
+\textbf{คุณสมบัติหลัก:}
+\begin{compactlist}
+  \item แผนที่ Leaflet แบบ interactive --- คลิกโซน $\to$ เขต $\to$ แขวง (3 ระดับ)
+  \item ชั้นข้อมูลโรค 9 โรค NCD + PM2.5 --- เปลี่ยนสีแผนที่ตามระดับความเสี่ยง
+  \item Header แสดง 864,219 Screened (Target: 1M)
+  \item รองรับ 10 ภาษา (ไทย, อังกฤษ, จีน, ญี่ปุ่น, เกาหลี, รัสเซีย, เมียนมา, ฮินดี, เวียดนาม, ฝรั่งเศส)
+  \item Dark Mode สำหรับการใช้งานในห้องประชุมที่มืด
+\end{compactlist}
+
+\subsection{Heatmap + ตัวกรองปัจจัยเสี่ยง (Disease Heatmap with Risk Filters)}
+
+\begin{figure}[H]
+\centering
+\IfFileExists{assets/screenshots/screenshot_heatmap_filter.png}{%
+  \includegraphics[width=\textwidth]{assets/screenshots/screenshot_heatmap_filter.png}
+}{%
+  \fcolorbox{bmagreen}{bmagreen!5}{\parbox{0.9\textwidth}{\centering\vspace{2cm}
+    {\large\color{bmagreen} [Screenshot: Heatmap เบาหวาน + ตัวกรองปัจจัยเสี่ยง]}\\[4pt]
+    {\small สีเข้ม = เสี่ยงสูง, สีอ่อน = เสี่ยงน้อย พร้อมตัวกรอง 5 ปัจจัย}
+  \vspace{2cm}}}
+}
+\caption{โหมด Heatmap แสดงความเสี่ยงเบาหวาน (Diabetes) จำแนกตาม 8 โซน
+  สีเข้ม = ความเสี่ยงสูง สีอ่อน = ความเสี่ยงต่ำ
+  ด้านขวามีตัวกรองปัจจัยเสี่ยง 5 ตัว (เพศ กลุ่มอายุ สูบบุหรี่ ดื่มสุรา ออกกำลังกาย)
+  และโหมดแสดงผล 3 แบบ (Heatmap / Ranking / Compare)}
+\label{fig:screenshot_heatmap}
+\end{figure}
+
+\textbf{คุณสมบัติ Heatmap:}
+\begin{compactlist}
+  \item เลือกโรค $\to$ แผนที่เปลี่ยนสีทันที (real-time)
+  \item ตัวกรองปัจจัยเสี่ยง 5 ตัว --- ดูข้อมูลเฉพาะกลุ่ม (เช่น ชาย อายุ 70+)
+  \item โหมด Ranking --- เรียงเขต/โซนจากสูงไปต่ำ
+  \item โหมด Compare --- เปรียบเทียบ Top 5 สูงสุด vs ต่ำสุด
+\end{compactlist}
+
+\subsection{Drill-down รายเขต + Health Advisory (Zone Detail View)}
+
+\begin{figure}[H]
+\centering
+\IfFileExists{assets/screenshots/screenshot_zone_drilldown.png}{%
+  \includegraphics[width=\textwidth]{assets/screenshots/screenshot_zone_drilldown.png}
+}{%
+  \fcolorbox{bmagreen}{bmagreen!5}{\parbox{0.9\textwidth}{\centering\vspace{2cm}
+    {\large\color{bmagreen} [Screenshot: Drill-down โซน --- เขตรายโรค + Health Advisory]}\\[4pt]
+    {\small แสดงข้อมูลรายเขตในโซน + คำแนะนำสุขภาพ + สายด่วน 1555}
+  \vspace{2cm}}}
+}
+\caption{Drill-down เข้าโซน 4 (โรงพยาบาลวชิรพยาบาล) --- แสดงความเสี่ยงเบาหวาน 26.6\%
+  พร้อมคำแนะนำด้านสุขภาพ (Health Advisory): อาการเตือน สิ่งที่ควรทำ สายด่วน 1555
+  และร้อยละความเสี่ยงรายเขตในโซน (บางซื่อ 34.1\% สูงสุด)}
+\label{fig:screenshot_drilldown}
+\end{figure}
+
+\subsection{AI Chat Assistant (Health Assistant)}
+
+\begin{figure}[H]
+\centering
+\IfFileExists{assets/screenshots/screenshot_chat_ai.png}{%
+  \includegraphics[width=0.8\textwidth]{assets/screenshots/screenshot_chat_ai.png}
+}{%
+  \fcolorbox{bmagreen}{bmagreen!5}{\parbox{0.7\textwidth}{\centering\vspace{2cm}
+    {\large\color{bmagreen} [Screenshot: Health Assistant --- AI Chat]}\\[4pt]
+    {\small ถามภาษาไทยได้ พร้อม ECharts visualization}
+  \vspace{2cm}}}
+}
+\caption{Health Assistant --- ระบบ AI Chat ที่ตอบคำถามเป็นภาษาไทยง่ายๆ
+  เช่น ``เบาหวานเขตไหนสูงสุด'' พร้อมกราฟ ECharts
+  ใช้ Gemma 4 (26B parameters) ผ่าน LMStudio
+  ข้อมูลจากฐานข้อมูลจริง ไม่สร้างตัวเลขเอง}
+\label{fig:screenshot_chat}
+\end{figure}
+
+\textbf{คุณสมบัติ AI Chat:}
+\begin{compactlist}
+  \item ถามภาษาไทยได้ --- ตอบภาษาง่ายที่ประชาชนเข้าใจ
+  \item สร้างกราฟอัตโนมัติ 14 ประเภท (bar, line, pie, radar, heatmap, forest plot ฯลฯ)
+  \item Streaming response --- เห็นสถานะ agent แบบ real-time
+  \item สายด่วนสุขภาพ 1555 --- แนะนำทุกคำตอบ
+\end{compactlist}
+
+\subsection{หน้ารายงาน (Reports Download Page)}
+
+\begin{figure}[H]
+\centering
+\IfFileExists{assets/screenshots/screenshot_reports_page.png}{%
+  \includegraphics[width=\textwidth]{assets/screenshots/screenshot_reports_page.png}
+}{%
+  \fcolorbox{bmagreen}{bmagreen!5}{\parbox{0.9\textwidth}{\centering\vspace{2cm}
+    {\large\color{bmagreen} [Screenshot: หน้ารายงาน --- 6 หมวด 24+ รายงาน]}\\[4pt]
+    {\small ดาวน์โหลด PDF ได้ทันที พร้อม progress bar สร้างรายงาน}
+  \vspace{2cm}}}
+}
+\caption{หน้าดาวน์โหลดรายงาน (Reports Page) --- 6 หมวด: ผู้บริหาร, โรงพยาบาล/โซน 8 ฉบับ,
+  ประชาชน, สำนักการแพทย์ (ฉบับนี้ 100+ หน้า), รายงานฉบับเต็ม, รายโรค 9 ฉบับ
+  กดปุ่ม ``สร้างรายงานทั้งหมด'' จะเห็น progress bar แสดงสถานะ}
+\label{fig:screenshot_reports}
+\end{figure}
+
+\textbf{ระบบรายงานอัตโนมัติ:}
+\begin{compactlist}
+  \item สร้าง PDF อัตโนมัติจากข้อมูลจริง --- ตัวเลข กราฟ ตาราง อัพเดตทุกครั้ง
+  \item Nightly scheduler --- สร้างใหม่ทุกวัน 00:30 น.
+  \item Progress tracking --- เห็นสถานะแต่ละรายงาน
+  \item Persistent --- PDF เก็บในระบบ ดาวน์โหลดได้ทันที
+\end{compactlist}

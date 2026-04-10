@@ -53,6 +53,8 @@ def suppress_scalar_if_small(value: Optional[int]) -> Optional[int]:
 
 # Paths that do NOT require an API key
 _PUBLIC_PATHS = frozenset({"/health", "/docs", "/redoc", "/openapi.json"})
+# Path prefixes exempt from API key
+_PUBLIC_PREFIXES = ("/api/auth/",)
 
 
 class APIKeyMiddleware(BaseHTTPMiddleware):
@@ -61,6 +63,8 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         path = request.url.path
         if path in _PUBLIC_PATHS or path.startswith("/admin") or path.startswith("/static"):
+            return await call_next(request)
+        if any(path.startswith(p) for p in _PUBLIC_PREFIXES):
             return await call_next(request)
 
         provided = request.headers.get("X-API-Key")

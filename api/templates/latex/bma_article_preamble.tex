@@ -1,0 +1,140 @@
+% ============================================================
+% BMA Health Article Preamble (XeLaTeX via Tectonic)
+% ============================================================
+% Before \input{bma_article_preamble}, define:
+%   \bmaheaderleft   e.g. {BMA Health --- Screening Report}
+%   \bmaversion      e.g. {Report v1.0}
+% ============================================================
+
+% --- Packages ---
+\usepackage{geometry}
+\geometry{a4paper, margin=2.0cm}
+\usepackage{hyperref}
+\usepackage{parskip}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{needspace}
+\usepackage{caption}
+\usepackage{fancyhdr}
+\usepackage{enumitem}
+\usepackage{colortbl}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{pifont}
+\usepackage{longtable}
+\usepackage{fontspec}
+\usepackage{polyglossia}
+
+% --- Thai line breaking (critical for word wrap) ---
+\XeTeXlinebreaklocale "th"
+\XeTeXlinebreakskip = 0pt plus 1pt
+\emergencystretch=3em
+\tolerance=9999
+\usepackage{lastpage}
+
+% --- Colors (BMA Green palette) ---
+\definecolor{bmagreen}{HTML}{00744B}
+\definecolor{bmagreenlight}{HTML}{4CAF50}
+\definecolor{bmadark}{HTML}{005F3D}
+\definecolor{errred}{HTML}{D32F2F}
+\definecolor{okgreen}{HTML}{388E3C}
+\definecolor{warnblue}{HTML}{1565C0}
+\definecolor{warnamber}{HTML}{F57F17}
+\definecolor{lightgray}{gray}{0.95}
+\definecolor{tablegray}{gray}{0.97}
+
+% --- Header/Footer ---
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\color{bmagreen}\bmafont\textbf{\bmaheaderleft}}
+\fancyhead[R]{\small\color{gray}\bmaversion}
+\fancyfoot[C]{\small\thepage}
+\renewcommand{\headrulewidth}{0.8pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{bmagreen}\leaders\hrule height \headrulewidth\hfill}}
+
+\fancypagestyle{plain}{%
+  \fancyhf{}%
+  \fancyfoot[C]{\small\thepage}%
+  \renewcommand{\headrulewidth}{0pt}%
+}
+
+% --- Section color ---
+\usepackage{titlesec}
+\titleformat{\section}{\large\bmafont\bfseries\color{bmagreen}}{\thesection}{1em}{}
+\titleformat{\subsection}{\normalsize\bmafont\bfseries\color{bmagreen!80!black}}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{1em}{}
+
+% --- Table of Contents styling ---
+\usepackage{tocloft}
+\renewcommand{\cftsecfont}{\bfseries\color{bmagreen}}
+\renewcommand{\cftsecpagefont}{\bfseries\color{bmagreen}}
+\renewcommand{\cftsubsecfont}{\color{bmadark}}
+\renewcommand{\cftsubsecpagefont}{\color{bmadark}}
+
+% --- Caption style ---
+\captionsetup{font=small, labelfont={bf,color=bmagreen}}
+
+% --- Hyperref colors ---
+\hypersetup{
+  colorlinks=true,
+  linkcolor=bmagreen,
+  urlcolor=bmagreen!70!black,
+  citecolor=bmagreen
+}
+
+% --- Font: Google Sans (official, Thai+Latin) ---
+\newfontfamily\bodyfont{GoogleSans-Regular.ttf}[
+  Path=assets/,
+  BoldFont=GoogleSans-Bold.ttf,
+]
+% \bmafont alias for backward compat with templates
+\let\bmafont\bodyfont
+
+% --- Convenience commands ---
+% Risk cell coloring: \riskcell{45.3}
+\newcommand{\riskcell}[1]{%
+  \ifdim #1pt > 40pt
+    \cellcolor{errred!15}\textcolor{errred}{\textbf{#1\%}}%
+  \else\ifdim #1pt > 25pt
+    \cellcolor{warnblue!10}\textcolor{warnblue}{#1\%}%
+  \else
+    \cellcolor{okgreen!10}\textcolor{okgreen}{#1\%}%
+  \fi\fi
+}
+
+% Trend arrows
+\newcommand{\trendUp}{\textcolor{errred}{$\blacktriangle$}}
+\newcommand{\trendDown}{\textcolor{okgreen}{$\blacktriangledown$}}
+\newcommand{\trendStable}{\textcolor{gray}{$\bullet$}}
+
+% Statistical significance marker
+\newcommand{\sigmark}[1]{%
+  \ifdim #1pt < 0.001pt
+    \textcolor{errred}{\textbf{***}}%
+  \else\ifdim #1pt < 0.01pt
+    \textcolor{errred}{\textbf{**}}%
+  \else\ifdim #1pt < 0.05pt
+    \textcolor{warnblue}{\textbf{*}}%
+  \else
+    \textcolor{gray}{ns}%
+  \fi\fi\fi
+}
+
+% Compact list
+\newlist{compactlist}{itemize}{3}
+\setlist[compactlist]{
+  topsep=2pt,
+  partopsep=0pt,
+  itemsep=1pt,
+  parsep=0pt,
+  leftmargin=1.5em,
+  label=\textcolor{bmagreen}{\textbullet},
+}
+
+% Key-value row for summary boxes
+\newcommand{\kvrow}[2]{%
+  \textcolor{bmadark}{\textbf{#1}} & #2 \\
+}

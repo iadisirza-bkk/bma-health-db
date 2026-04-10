@@ -1,7 +1,7 @@
 """
-BMA Health Database -- Summary API v2
+BMA Health Database -- One-Stop Backend API
 
-Serves AGGREGATE / SUMMARY health data only.
+Serves AGGREGATE / SUMMARY health data, LLM chat, LaTeX reports, and exports.
   - NO individual records
   - NO PII (idcard_hash, patient_id, staff_code never exposed)
   - k-anonymity >= 5 enforced on filtered queries
@@ -43,6 +43,49 @@ from routers.research import router as research_router
 from routers.public import router as public_router
 from routers.monitoring import router as monitoring_router
 from routers.gis import router as gis_router
+
+# --- New routers (one-stop backend) ---
+_new_routers = []
+try:
+    from routers.chat import router as chat_router
+    _new_routers.append(chat_router)
+except ImportError:
+    pass
+try:
+    from routers.reports import router as reports_router
+    _new_routers.append(reports_router)
+except ImportError:
+    pass
+try:
+    from routers.export import router as export_router
+    _new_routers.append(export_router)
+except ImportError:
+    pass
+try:
+    from routers.statistics_v1 import router as stats_v1_router
+    _new_routers.append(stats_v1_router)
+except ImportError:
+    pass
+try:
+    from routers.dashboard_v1 import router as dashboard_v1_router
+    _new_routers.append(dashboard_v1_router)
+except ImportError:
+    pass
+try:
+    from routers.factors import router as factors_router
+    _new_routers.append(factors_router)
+except ImportError:
+    pass
+try:
+    from routers.screening_tests import router as screening_tests_router
+    _new_routers.append(screening_tests_router)
+except ImportError:
+    pass
+try:
+    from routers.admin_api import router as admin_api_router
+    _new_routers.append(admin_api_router)
+except ImportError:
+    pass
 
 # --------------------------------------------------------------------------- #
 # Audit logging
@@ -87,19 +130,27 @@ validate_production_config()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Start nightly report scheduler if available
+    try:
+        from services.scheduler import start_scheduler
+        start_scheduler()
+    except ImportError:
+        pass
     yield
     close_pool()
 
 
 app = FastAPI(
-    title="BMA Health Summary API",
-    version="3.0.0",
+    title="BMA Health One-Stop Backend API",
+    version="4.0.0",
     description=(
-        "ระบบฐานข้อมูลสุขภาพ กรุงเทพมหานคร — Summary API v3\n\n"
+        "ระบบฐานข้อมูลสุขภาพ กรุงเทพมหานคร — One-Stop Backend\n\n"
         "Aggregate health screening data for Bangkok Metropolitan Administration.\n"
         "No PII. k-anonymity >= 5 enforced.\n\n"
-        "**85+ endpoints** across 16 domain groups including GIS, PM2.5 overlay, and diet-disease analysis.\n"
-        "**13 MCP tools** for LLM agent access via shared service layer.\n"
+        "**100+ endpoints** across 24 domain groups:\n"
+        "V2 data API, LLM chat (SSE streaming), LaTeX/PDF reports,\n"
+        "Excel export, statistics, dashboards, factor analysis,\n"
+        "GIS, PM2.5 overlay, and diet-disease analysis.\n"
         "Redis caching with 4-tier TTL. Structured error handling."
     ),
     lifespan=lifespan,
@@ -139,6 +190,10 @@ app.include_router(research_router)
 app.include_router(public_router)
 app.include_router(monitoring_router)
 app.include_router(gis_router)
+
+# --- New routers (one-stop backend) ---
+for _r in _new_routers:
+    app.include_router(_r)
 
 # Static files
 _static_dir = os.path.join(os.path.dirname(__file__), "static")

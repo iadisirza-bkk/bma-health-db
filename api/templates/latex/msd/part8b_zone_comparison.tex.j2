@@ -1,0 +1,160 @@
+% =====================================================================
+% ส่วนที่ 8ข: การเปรียบเทียบข้ามโซนสุขภาพ (Cross-Zone Comparison)
+% =====================================================================
+\section{การเปรียบเทียบข้ามโซนสุขภาพ (Cross-Zone Comparison)}
+
+ส่วนนี้เปรียบเทียบ 8 โซนสุขภาพ (Health Zone) กรุงเทพมหานคร
+ในมิติของโรค NCD, ปัจจัยเสี่ยง, ทรัพยากรด้านสุขภาพ
+พร้อมผลการวิเคราะห์ ANOVA และ Post-hoc เพื่อระบุคู่โซนที่แตกต่างกัน
+
+% =====================================================================
+\subsection{ตารางเปรียบเทียบ 8 โซน \texttimes{} 8 โรค (Grand Disease Table)}
+\label{sec:grand_disease_table}
+
+\begin{table}[H]
+\centering
+\caption{ร้อยละผู้มีความเสี่ยง NCD 8 โรค จำแนกตาม 8 โซนสุขภาพ}
+\label{tab:zone_disease_grand}
+\small
+\begin{tabular}{l<% for d in data.city_disease_summary %>r<% endfor %>}
+\toprule
+\textbf{โซน (Zone)}
+<% for d in data.city_disease_summary %>
+& \textbf{<< d.name_th[:4] >>}
+<% endfor %> \\
+\midrule
+<% for zone in data.zone_comparison.zones %>
+โซน << zone.zone >> (<< zone.facilitator[:10] >>)
+<% for d in data.city_disease_summary %>
+& \riskcell{<< zone.get('disease_avgs', {}).get(d.disease, 0) >>}
+<% endfor %> \\
+<% endfor %>
+\midrule
+\textbf{เฉลี่ย กทม.}
+<% for d in data.city_disease_summary %>
+& \textbf{<< d.avg_pct >>}
+<% endfor %> \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\IfFileExists{charts/zone_disease_heatmap.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{charts/zone_disease_heatmap.png}
+\caption{Heatmap แสดงร้อยละความเสี่ยง 8 โซน $\times$ 8 โรค --- สีแดงเข้มหมายถึงความเสี่ยงสูง}
+\label{fig:zone_disease_heatmap}
+\end{figure}
+}{}
+
+% =====================================================================
+\subsection{ตารางเปรียบเทียบ 8 โซน \texttimes{} 5 ปัจจัย (Factor Prevalence)}
+\label{sec:zone_factor_table}
+
+\begin{table}[H]
+\centering
+\caption{ร้อยละปัจจัยเสี่ยง 5 ด้าน จำแนกตาม 8 โซนสุขภาพ}
+\label{tab:zone_factor_grand}
+\begin{tabular}{lrrrrr}
+\toprule
+\textbf{โซน (Zone)} & \textbf{สูบบุหรี่ (\%)} & \textbf{ดื่มสุรา (\%)} & \textbf{ไม่ออกกำลัง (\%)} & \textbf{BMI $\geq$ 25 (\%)} & \textbf{เครียด (\%)} \\
+\midrule
+<% for zone in data.zone_comparison.zones %>
+โซน << zone.zone >> & << zone.smoking_pct >> & << zone.alcohol_pct >> & \riskcell{<< zone.no_exercise_pct >>} & \riskcell{<< zone.obese_pct >>} & << zone.stress_pct >> \\
+<% endfor %>
+\midrule
+\textbf{เฉลี่ย กทม.} & \textbf{<< data.zone_comparison.avg_smoking >>} & \textbf{<< data.zone_comparison.avg_alcohol >>} & \textbf{<< data.zone_comparison.avg_no_exercise >>} & \textbf{<< data.zone_comparison.avg_obese >>} & \textbf{<< data.zone_comparison.avg_stress >>} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% =====================================================================
+\subsection{ตารางเปรียบเทียบ 8 โซน \texttimes{} ทรัพยากร (Health Resources)}
+\label{sec:zone_resources}
+
+\begin{table}[H]
+\centering
+\caption{ทรัพยากรด้านสุขภาพจำแนกตาม 8 โซนสุขภาพ}
+\label{tab:zone_resources}
+\begin{tabular}{llrrrr}
+\toprule
+\textbf{โซน} & \textbf{รพ.แม่ข่าย (HZM)} & \textbf{รพ. (n)} & \textbf{ศบส. (n)} & \textbf{ผจก.เขต (n)} & \textbf{เขต (n)} \\
+\midrule
+<% for zone in data.zone_comparison.zones %>
+โซน << zone.zone >> & << zone.facilitator >> & << zone.hospitals >> & << zone.health_centers >> & << zone.area_managers >> & << zone.districts >> \\
+<% endfor %>
+\midrule
+\textbf{รวม} & --- & \textbf{<< data.zone_comparison.total_hospitals >>} & \textbf{<< data.zone_comparison.total_health_centers >>} & \textbf{<< data.zone_comparison.total_area_managers >>} & \textbf{<< data.zone_comparison.total_districts >>} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\IfFileExists{charts/zone_radar.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{charts/zone_radar.png}
+\caption{Radar Chart เปรียบเทียบร้อยละความเสี่ยง 8 โรค ต่อโซน (แต่ละเส้นคือ 1 โซน)}
+\label{fig:zone_radar}
+\end{figure}
+}{}
+
+% =====================================================================
+\subsection{ผล ANOVA เปรียบเทียบข้ามโซน (ANOVA Results)}
+\label{sec:zone_anova}
+
+ผลการวิเคราะห์ความแปรปรวนทางเดียว (One-Way ANOVA)
+เปรียบเทียบค่าเฉลี่ยร้อยละความเสี่ยงระหว่าง 8 โซน
+
+\begin{table}[H]
+\centering
+\caption{ผล One-Way ANOVA เปรียบเทียบร้อยละความเสี่ยง NCD ระหว่าง 8 โซน}
+\label{tab:zone_anova}
+\begin{tabular}{lrrrrrl}
+\toprule
+\textbf{โรค (Disease)} & \textbf{F} & \textbf{df$_1$} & \textbf{df$_2$} & \textbf{p-value} & \textbf{$\eta^2$} & \textbf{สรุป} \\
+\midrule
+<% for d in data.zone_comparison.anova_results %>
+<< d.name_th >> (<< d.name_en >>) & << d.f_stat >> & 7 & << d.df2 >> & << d.p_value >> \sigmark{<< d.p_value >>} & << d.eta_sq >> &
+<% if d.significant %>แตกต่าง<% else %>ไม่แตกต่าง<% endif %> \\
+<% endfor %>
+\bottomrule
+\end{tabular}
+\end{table}
+
+% =====================================================================
+\subsection{การวิเคราะห์ Post-hoc (Pairwise Zone Comparison)}
+\label{sec:zone_posthoc}
+
+สำหรับโรคที่ ANOVA พบความแตกต่างอย่างมีนัยสำคัญ ($p < 0.05$)
+ใช้ Tukey HSD (Honestly Significant Difference) ระบุคู่โซนที่แตกต่างกัน
+
+<% for d in data.zone_comparison.posthoc_results %>
+<% if d.significant_pairs|length > 0 %>
+\subsubsection{Post-hoc: << d.name_th >> (<< d.name_en >>)}
+
+\begin{table}[H]
+\centering
+\caption{คู่โซนที่มีความแตกต่างอย่างมีนัยสำคัญ --- << d.name_th >> (Tukey HSD, $p < 0.05$)}
+\label{tab:posthoc_<< d.disease >>}
+\begin{tabular}{llrrl}
+\toprule
+\textbf{โซน A} & \textbf{โซน B} & \textbf{ผลต่างเฉลี่ย (pp)} & \textbf{p-value (adj.)} & \textbf{ทิศทาง} \\
+\midrule
+<% for pair in d.significant_pairs %>
+โซน << pair.zone_a >> & โซน << pair.zone_b >> & << pair.mean_diff >> & << pair.p_adj >> \sigmark{<< pair.p_adj >>} &
+<% if pair.mean_diff > 0 %>A $>$ B<% else %>B $>$ A<% endif %> \\
+<% endfor %>
+\bottomrule
+\end{tabular}
+\end{table}
+<% endif %>
+<% endfor %>
+
+\IfFileExists{charts/zone_grouped_bar.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{charts/zone_grouped_bar.png}
+\caption{กราฟแท่งกลุ่มเปรียบเทียบร้อยละความเสี่ยง 8 โรค ต่อ 8 โซนสุขภาพ}
+\label{fig:zone_grouped_bar}
+\end{figure}
+}{}

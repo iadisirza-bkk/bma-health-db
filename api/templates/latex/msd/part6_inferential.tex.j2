@@ -1,0 +1,138 @@
+% =====================================================================
+% ส่วนที่ 6: สถิติเชิงอนุมาน (Inferential Statistics) — TOR 1.1.3
+% =====================================================================
+\section{สถิติเชิงอนุมาน (Inferential Statistics)}
+
+ส่วนนี้ใช้สถิติเชิงอนุมานทดสอบสมมติฐานและระบุความสัมพันธ์ระหว่างปัจจัยนำ 5 เรื่อง
+กับความเสี่ยงต่อโรค NCD 8 โรค ด้วยวิธีการทางสถิติ 5 วิธี
+
+% =====================================================================
+\subsection{การทดสอบไคสแควร์ (Chi-Square Test of Independence)}
+
+ทดสอบความเป็นอิสระ (Independence) ระหว่างปัจจัยนำแต่ละตัวกับโรค NCD
+ใช้ระดับนัยสำคัญทางสถิติ (Significance Level) $\alpha = 0.05$
+ค่า Cram\'{e}r's V ใช้วัดขนาดอิทธิพล: เล็ก ($< 0.1$) กลาง ($0.1$--$0.3$) ใหญ่ ($> 0.3$)
+
+\begin{longtable}{p{3cm}p{2.5cm}rrrr}
+\caption{ผลการทดสอบไคสแควร์ (Chi-Square Test) 8 โรค $\times$ 5 ปัจจัย = 40 คู่ทดสอบ}
+\label{tab:chisquare} \\
+\toprule
+\textbf{โรค (Disease)} & \textbf{ปัจจัย (Factor)} & \textbf{$\chi^2$} & \textbf{df} & \textbf{p-value} & \textbf{Cram\'{e}r's V} \\
+\midrule
+\endhead
+<% for test in data.inferential_tests %>
+<< test.disease_th >> & << test.factor_label >> & << test.chi2 >> & << test.df >> & << test.get('p_value_exact', test.p_value) >> \sigmark{<< test.p_value >>} & << test.cramers_v >> \\
+<% endfor %>
+\bottomrule
+\end{longtable}
+
+<% set sig_count = data.inferential_tests|selectattr('significant')|list|length %>
+จากการทดสอบ << data.inferential_tests|length >> คู่ พบว่ามีความสัมพันธ์ที่มีนัยสำคัญทางสถิติ ($p < 0.05$)
+จำนวน \textbf{<< sig_count >>} คู่
+
+\textbf{หมายเหตุเรื่อง Multiple Comparisons:}
+เนื่องจากทดสอบ << data.inferential_tests|length >> คู่พร้อมกัน จึงใช้ Bonferroni correction
+($\alpha_{adj} = 0.05 / << data.inferential_tests|length >> = << data.bonferroni_alpha >>$)
+จำนวนคู่ที่ยังมีนัยสำคัญหลัง Bonferroni correction: \textbf{<< data.bonferroni_significant_count >>} คู่
+
+\textbf{หมายเหตุเรื่อง Practical Significance:}
+ด้วยขนาดตัวอย่าง $N = << data.total_screened|number_format >>$ (very large sample)
+แม้ effect size เล็ก (Cram\'{e}r's V $< 0.1$) ก็มีนัยสำคัญทางสถิติ (statistically significant)
+ดังนั้นควรพิจารณา \textbf{effect size (Cram\'{e}r's V)} เป็นหลัก ไม่ใช่ p-value เพียงอย่างเดียว
+($V < 0.1$ = เล็ก, $0.1$--$0.3$ = กลาง, $> 0.3$ = ใหญ่)
+ปัจจัยที่มี Cram\'{e}r's V $> 0.1$ ถือว่ามีนัยสำคัญทางคลินิก (Clinically Relevant)
+แม้ว่า V จะต่ำ ก็ยังอาจมีผลกระทบเชิงนโยบายเมื่อ N มาก
+
+% =====================================================================
+\subsection{อัตราส่วนออดส์ (Odds Ratio: OR)}
+
+อัตราส่วนออดส์ (OR) แสดงขนาดความเสี่ยงสัมพัทธ์ (Relative Risk) ของกลุ่มเสี่ยงเทียบกับกลุ่มอ้างอิง
+ค่า OR $> 1$ หมายถึงมีความเสี่ยงสูงกว่า OR $< 1$ หมายถึงเป็นปัจจัยป้องกัน (Protective Factor)
+
+\begin{longtable}{p{3cm}p{2cm}p{2cm}rp{2.5cm}r}
+\caption{อัตราส่วนออดส์ (Odds Ratio) ปัจจัยนำ $\times$ โรค NCD พร้อมช่วงความเชื่อมั่น 95\%}
+\label{tab:odds_ratio} \\
+\toprule
+\textbf{โรค} & \textbf{ปัจจัย} & \textbf{กลุ่มเสี่ยง} & \textbf{OR} & \textbf{95\% CI} & \textbf{p-value} \\
+\midrule
+\endhead
+<% for test in data.inferential_tests %>
+<% if test.or_val is defined and test.or_val > 0 %>
+<< test.disease_th >> & << test.factor_label >> & --- & << test.or_val >> & << test.ci_lower >>--<< test.ci_upper >> & << test.p_value >> \sigmark{<< test.p_value >>} \\
+<% endif %>
+<% endfor %>
+\bottomrule
+\end{longtable}
+
+% =====================================================================
+\subsection{การวิเคราะห์ความแปรปรวนทางเดียว (One-Way ANOVA)}
+
+เปรียบเทียบค่าเฉลี่ยร้อยละผู้มีความเสี่ยงระหว่าง 8 โซนสุขภาพ (Health Zone)
+สำหรับโรค NCD แต่ละโรค ใช้ระดับนัยสำคัญ $\alpha = 0.05$
+
+\begin{table}[H]
+\centering
+\caption{ผลการวิเคราะห์ความแปรปรวนทางเดียว (One-Way ANOVA) เปรียบเทียบ 8 โซนสุขภาพ}
+\label{tab:anova}
+\begin{tabular}{lrrrr}
+\toprule
+\textbf{โรค (Disease)} & \textbf{F-statistic} & \textbf{df (ระหว่าง)} & \textbf{df (ภายใน)} & \textbf{p-value} \\
+\midrule
+<% for a in data.anova_results %>
+<< a.disease_th >> & << a.f_stat >> & << a.df_between >> & << a.df_within >> & << a.p_value >> \sigmark{<< a.p_value >>} \\
+<% endfor %>
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{การตีความผล ANOVA:}
+ผล F-statistic ต่ำและ p-value สูง (ไม่มีนัยสำคัญทุกโรค) บ่งชี้ว่า
+ค่าเฉลี่ยร้อยละผู้มีความเสี่ยงระหว่าง 8 โซนสุขภาพ \textbf{ไม่แตกต่างกันอย่างมีนัยสำคัญทางสถิติ}
+สาเหตุที่เป็นไปได้: (1) ความแปรปรวนภายในโซน (within-zone variance) สูงกว่าระหว่างโซน
+(between-zone variance) เนื่องจากแต่ละโซนมีเขตที่มีความเสี่ยงสูงและต่ำปะปนกัน
+(2) ข้อมูลเป็น aggregate ระดับเขต ($n = << data.district_count >>$ เขต) ไม่ใช่ individual-level
+ทำให้ power ของ F-test ต่ำ
+ข้อเสนอแนะ: ควรใช้ Kruskal-Wallis test (non-parametric) เป็นทางเลือก
+และวิเคราะห์ระดับ individual-level เมื่อข้อมูลพร้อม
+
+% =====================================================================
+\subsection{เมทริกซ์โรคร่วม (Comorbidity Matrix)}
+
+ค่าสัมประสิทธิ์สหสัมพันธ์เพียร์สัน (Pearson Correlation Coefficient) ระหว่างโรค NCD 8 โรค
+คำนวณจากร้อยละผู้มีความเสี่ยงในแต่ละเขต ($n = << data.district_count >>$ เขต)
+ค่า $r > 0.4$ ถือว่ามีความสัมพันธ์ปานกลาง ค่า $r > 0.6$ ถือว่ามีความสัมพันธ์สูง
+
+\IfFileExists{charts/zone_heatmap.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{charts/zone_heatmap.png}
+\caption{แผนที่ความร้อน (Heatmap) แสดงร้อยละความเสี่ยง 8 โรค $\times$ 8 โซนสุขภาพ}
+\label{fig:zone_heatmap}
+\end{figure}
+}{}
+
+\IfFileExists{charts/comorbidity_heatmap.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{charts/comorbidity_heatmap.png}
+\caption{เมทริกซ์สหสัมพันธ์โรคร่วม (Comorbidity Correlation Matrix) 8 โรค NCD}
+\label{fig:comorbidity}
+\end{figure}
+}{}
+
+\subsection{แผนภูมิกล่อง (Box Plot) การกระจายร้อยละความเสี่ยงรายเขต}
+
+แผนภูมิกล่อง (Box Plot) แสดงการกระจายร้อยละผู้มีความเสี่ยงในแต่ละเขต ($n = << data.district_count >>$ เขต)
+สำหรับโรค NCD แต่ละโรค เพื่อแสดงค่ามัธยฐาน ค่าควอร์ไทล์ และค่าผิดปกติ (Outlier)
+
+<% for d in data.city_disease_summary %>
+\IfFileExists{charts/boxplot_<< d.disease >>.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.65\textwidth]{charts/boxplot_<< d.disease >>.png}
+\caption{แผนภูมิกล่อง (Box Plot) การกระจายร้อยละความเสี่ยง<< d.name_th >> (<< d.disease|capitalize >>)
+  ใน << data.district_count >> เขต}
+\label{fig:boxplot_<< d.disease >>}
+\end{figure}
+}{}
+<% endfor %>

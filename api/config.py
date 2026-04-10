@@ -22,6 +22,28 @@ RATE_LIMIT_ANALYST: int = int(os.getenv("RATE_LIMIT_ANALYST", "300"))   # reques
 ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "admin")
 SECRET_KEY: str = os.getenv("SECRET_KEY", "change-me-in-production-use-random-secret")
 
+# --- LLM / AI Chat ---
+LMSTUDIO_URL: str = os.getenv("LMSTUDIO_URL", "http://localhost:5555")
+LLM_MODEL: str = os.getenv("LLM_MODEL", "google/gemma-4-26b-a4b")
+LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.1"))
+LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "2000"))
+LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "120"))
+CIRCUIT_BREAKER_THRESHOLD: int = int(os.getenv("CIRCUIT_BREAKER_THRESHOLD", "3"))
+CIRCUIT_BREAKER_RECOVERY: int = int(os.getenv("CIRCUIT_BREAKER_RECOVERY", "60"))
+
+# --- JWT Auth ---
+JWT_SECRET: str = os.getenv("JWT_SECRET", os.getenv("SECRET_KEY", "change-me-in-production-use-random-secret"))
+JWT_EXPIRATION: int = int(os.getenv("JWT_EXPIRATION", "3600"))
+
+# --- Report Generation ---
+TECTONIC_PATH: str = os.getenv("TECTONIC_PATH", "/opt/homebrew/bin/tectonic")
+TECTONIC_TIMEOUT: int = int(os.getenv("TECTONIC_TIMEOUT", "120"))
+REPORTS_DIR: str = os.getenv("REPORTS_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "reports"))
+
+# --- Cache TTLs (used by new routers) ---
+CACHE_TTL_HEALTH: int = int(os.getenv("CACHE_TTL_HEALTH", "300"))
+CACHE_TTL_STATIC: int = int(os.getenv("CACHE_TTL_STATIC", "3600"))
+
 _INSECURE_DEFAULTS = {
     "API_KEY": "changeme-dev-key",
     "ADMIN_PASSWORD": "admin",

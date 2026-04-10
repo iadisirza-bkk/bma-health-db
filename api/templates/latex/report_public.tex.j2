@@ -1,0 +1,139 @@
+% =============================================================================
+% BMA Health — Public Health Infographic (1-page landscape)
+% =============================================================================
+\documentclass[landscape,11pt]{article}
+\usepackage[a4paper,margin=1.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{fontspec}
+\usepackage{xcolor}
+\usepackage{multicol}
+\usepackage{tikz}
+\usepackage{polyglossia}
+\setdefaultlanguage{english}
+
+\definecolor{bmagreen}{HTML}{00744B}
+\definecolor{bmadark}{HTML}{005F3D}
+\definecolor{warnyellow}{HTML}{F59E0B}
+\definecolor{dangerred}{HTML}{EF4444}
+
+\setmainfont{GoogleSans-Regular.ttf}[Path=assets/, BoldFont=GoogleSans-Bold.ttf]
+
+\pagestyle{empty}
+
+\begin{document}
+
+% Header bar
+\noindent
+\colorbox{bmagreen}{%
+  \parbox{\dimexpr\textwidth-2\fboxsep}{%
+    \centering\vspace{6pt}
+    {\Huge\bfseries\color{white} สรุปสุขภาพ กรุงเทพมหานคร}\\[4pt]
+    {\large\color{white!80} โครงการคัดกรองสุขภาพ 1 ล้านคน — สำนักการแพทย์}
+    \vspace{6pt}
+  }%
+}
+
+\vspace{10pt}
+
+\begin{multicols}{3}
+
+% Column 1: Key Numbers
+{\Large\bfseries\color{bmagreen} ตัวเลขสำคัญ}\\[6pt]
+
+\begin{tikzpicture}
+  \node[draw=bmagreen, rounded corners=8pt, fill=bmagreen!5, text width=7cm, align=center, inner sep=10pt] {
+    {\huge\bfseries\color{bmagreen} << total_screened >>}\\[2pt]
+    {\normalsize คนได้รับการคัดกรอง}
+  };
+\end{tikzpicture}
+
+\vspace{8pt}
+
+\begin{tikzpicture}
+  \node[draw=bmagreen, rounded corners=8pt, fill=bmagreen!5, text width=7cm, align=center, inner sep=8pt] {
+    {\Large\bfseries\color{bmagreen} 50 เขต · 8 โซนสุขภาพ}\\[2pt]
+    {\small 9 โรค NCD · 4 ผลตรวจเพิ่มเติม}
+  };
+\end{tikzpicture}
+
+\vspace{12pt}
+
+{\Large\bfseries\color{dangerred} โรคที่พบมากที่สุด}\\[6pt]
+
+<% for d in top_diseases[:3] %>
+\begin{tikzpicture}
+  \node[draw=<< d.color >>, rounded corners=6pt, fill=<< d.color >>!8, text width=7cm, inner sep=8pt] {
+    {\large\bfseries\color{<< d.color >>} << d.pct >>\%} {\normalsize << d.name >>}
+  };
+\end{tikzpicture}
+\vspace{4pt}
+
+<% endfor %>
+
+% Column 2: What to do
+\columnbreak
+
+{\Large\bfseries\color{bmagreen} ดูแลตัวเองอย่างไร}\\[8pt]
+
+{\large\bfseries 1. ตรวจสุขภาพประจำปี}\\
+เข้ารับการคัดกรองที่ศูนย์บริการสาธารณสุขใกล้บ้าน\\[6pt]
+
+{\large\bfseries 2. ควบคุมอาหาร}\\
+ลดหวาน มัน เค็ม กินผักผลไม้เพิ่ม\\[6pt]
+
+{\large\bfseries 3. ออกกำลังกาย}\\
+อย่างน้อย 150 นาที/สัปดาห์\\[6pt]
+
+{\large\bfseries 4. งดสูบบุหรี่ ลดดื่มสุรา}\\
+ลดความเสี่ยงโรคหัวใจ หลอดเลือด ปอด\\[6pt]
+
+{\large\bfseries 5. ติดตามค่าสุขภาพ}\\
+น้ำตาล ความดัน ไขมัน BMI\\[12pt]
+
+\begin{tikzpicture}
+  \node[draw=warnyellow, rounded corners=8pt, fill=warnyellow!10, text width=7cm, inner sep=10pt] {
+    {\normalsize\bfseries\color{warnyellow!80!black} ข้อมูลนี้เป็นผลจากการคัดกรอง\\ไม่ใช่การวินิจฉัยโรค\\หากพบความเสี่ยง ควรพบแพทย์}
+  };
+\end{tikzpicture}
+
+% Column 3: Contact + Zones
+\columnbreak
+
+{\Large\bfseries\color{bmagreen} 8 โซนสุขภาพ กทม.}\\[6pt]
+
+{\small
+<% for zc, zone in zones.items() %>
+\textbf{โซน << zc >>}: << zone.facilitator_short >> (<< zone.n_districts >> เขต)\\
+<% endfor %>
+}
+
+\vspace{12pt}
+
+{\Large\bfseries\color{bmagreen} ติดต่อสอบถาม}\\[8pt]
+
+\begin{tikzpicture}
+  \node[draw=bmagreen, rounded corners=8pt, fill=bmagreen, text width=7cm, align=center, inner sep=12pt] {
+    {\Huge\bfseries\color{white} 1555}\\[4pt]
+    {\normalsize\color{white!90} สายด่วนสุขภาพ กรุงเทพมหานคร}
+  };
+\end{tikzpicture}
+
+\vspace{8pt}
+
+\begin{tikzpicture}
+  \node[draw=bmagreen!50, rounded corners=6pt, fill=bmagreen!5, text width=7cm, align=center, inner sep=8pt] {
+    {\small สำนักการแพทย์ กรุงเทพมหานคร\\
+    514 ถนนหลวง เขตป้อมปราบฯ\\
+    โทร. 0-2220-7500\\
+    \textbf{<< generated_date >>}}
+  };
+\end{tikzpicture}
+
+\end{multicols}
+
+% Footer
+\vfill
+\noindent\rule{\textwidth}{0.5pt}
+{\footnotesize\color{gray} ข้อมูลจากโครงการตรวจคัดกรองสุขภาพประชาชน กรุงเทพมหานคร สำนักการแพทย์ | ข้อมูลเป็นสัดส่วนผู้เข้ารับการคัดกรอง ไม่ใช่ความชุกของประชากรทั้งหมด}
+
+\end{document}

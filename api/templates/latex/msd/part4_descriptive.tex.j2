@@ -1,0 +1,96 @@
+% =====================================================================
+% ส่วนที่ 4: สถิติเชิงพรรณนา (Descriptive Statistics) — TOR 1.1.2
+% =====================================================================
+\section{สถิติเชิงพรรณนา (Descriptive Statistics)}
+
+ส่วนนี้นำเสนอภาพรวมข้อมูลคัดกรองสุขภาพประชาชน กทม. \textbf{<< data.total_screened|number_format >>} คน
+จำแนกตามโรคไม่ติดต่อเรื้อรัง (NCD) 8 โรค แสดงในรูปตาราง กราฟ และคำอธิบาย
+เพื่อให้เห็นภาพรวมสถานการณ์สุขภาพในแต่ละเขตและแต่ละโซนสุขภาพ
+
+\subsection{ภาพรวมความเสี่ยงโรค NCD 8 โรค (NCD Risk Overview)}
+
+\begin{table}[H]
+\centering
+\caption{สรุปความเสี่ยงโรค NCD 8 โรค จากผู้เข้ารับการคัดกรอง << data.total_screened|number_format >> คน}
+\label{tab:disease_overview}
+\begin{tabular}{clcccc}
+\toprule
+\textbf{อันดับ} & \textbf{โรค (Disease)} & \textbf{เฉลี่ย (\%)} & \textbf{SD} & \textbf{สูงสุด (\%)} & \textbf{ต่ำสุด (\%)} \\
+\midrule
+<% for d in data.city_disease_summary %>
+<< loop.index >> & << d.name_th >> (<< d.name_en >>) & \riskcell{<< d.avg_pct >>} & << d.std_pct >> & << d.max_pct >>\% & << d.min_pct >>\% \\
+<% endfor %>
+\bottomrule
+\end{tabular}
+\end{table}
+
+% --- Disease overview chart ---
+\IfFileExists{charts/disease_overview.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{charts/disease_overview.png}
+\caption{กราฟแท่งแนวนอนแสดงร้อยละผู้มีความเสี่ยงโรค NCD 8 โรค เรียงจากสูงไปต่ำ}
+\label{fig:disease_overview}
+\end{figure}
+}{}
+
+% =====================================================================
+% รายละเอียดรายโรค (Per-Disease Detail)
+% Loop: 8 โรค × (ตาราง 50 เขต + กราฟ Top 10 + สรุป)
+% =====================================================================
+<% for disease in data.city_disease_summary %>
+\subsection{<< disease.name_th >> (<< disease.name_en >>)}
+\label{sec:disease_<< disease.disease >>}
+
+โรค<< disease.name_th >> (<< disease.name_en >>) มีอัตราเสี่ยงเฉลี่ย
+\textbf{<< disease.avg_pct >>\%} (SD = << disease.std_pct >>)
+จากผู้คัดกรอง << data.total_screened|number_format >> คน ใน << disease.district_count >> เขต
+เขตที่มีความเสี่ยงสูงสุดอยู่ที่ << disease.max_pct >>\% และต่ำสุด << disease.min_pct >>\%
+
+<% if disease.disease in data.risk_rankings %>
+\subsubsection{อันดับเขตที่มีความเสี่ยงสูง (District Risk Ranking)}
+
+\begin{table}[H]
+\centering
+\caption{10 เขตที่มีความเสี่ยง<< disease.name_th >>สูงสุด จากผู้คัดกรอง << data.total_screened|number_format >> คน}
+\label{tab:ranking_<< disease.disease >>}
+\begin{tabular}{clrr}
+\toprule
+\textbf{อันดับ} & \textbf{เขต (District)} & \textbf{ร้อยละเสี่ยง (\%)} & \textbf{จำนวนคัดกรอง} \\
+\midrule
+<% for row in data.risk_rankings[disease.disease][:10] %>
+<< loop.index >> & << row.name_th >> (<< row.name_en >>) & \riskcell{<< row.pct >>} & << row.screened|number_format >> \\
+<% endfor %>
+\bottomrule
+\end{tabular}
+\end{table}
+<% endif %>
+
+% --- Disease ranking chart ---
+\IfFileExists{charts/ranking_<< disease.disease >>.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{charts/ranking_<< disease.disease >>.png}
+\caption{กราฟแท่ง 10 เขตที่มีความเสี่ยง<< disease.name_th >>สูงสุด}
+\label{fig:ranking_<< disease.disease >>}
+\end{figure}
+}{}
+
+\subsubsection{ตาราง 50 เขต (Full District Breakdown)}
+
+\begin{longtable}{clrr}
+\caption{ร้อยละผู้มีความเสี่ยง<< disease.name_th >> จำแนกตาม 50 เขต กทม.} \\
+\toprule
+\textbf{\#} & \textbf{เขต (District)} & \textbf{ร้อยละ (\%)} & \textbf{จำนวนคัดกรอง} \\
+\midrule
+\endhead
+<% for row in data.risk_rankings.get(disease.disease, []) %>
+<< loop.index >> & << row.name_th >> & \riskcell{<< row.pct >>} & << row.screened|number_format >> \\
+<% endfor %>
+\bottomrule
+\end{longtable}
+
+<% if not loop.last %>
+\newpage
+<% endif %>
+<% endfor %>

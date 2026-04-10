@@ -1,0 +1,114 @@
+% ============================================================
+% BMA Health Beamer Preamble (XeLaTeX via Tectonic)
+% ============================================================
+
+% --- Theme & Color ---
+\usetheme{Madrid}
+\definecolor{bmagreen}{HTML}{00744B}
+\definecolor{bmadark}{HTML}{005F3D}
+\definecolor{errred}{HTML}{D32F2F}
+\definecolor{okgreen}{HTML}{388E3C}
+\definecolor{warnblue}{HTML}{1565C0}
+\definecolor{warnamber}{HTML}{F57F17}
+
+\setbeamercolor{palette primary}{bg=bmagreen,fg=white}
+\setbeamercolor{palette secondary}{bg=bmadark,fg=white}
+\setbeamercolor{palette tertiary}{bg=bmagreen!80!black,fg=white}
+\setbeamercolor{structure}{fg=bmagreen}
+\setbeamercolor{title}{fg=white,bg=bmagreen}
+\setbeamercolor{frametitle}{fg=white,bg=bmagreen}
+\setbeamercolor{block title}{fg=white,bg=bmagreen}
+\setbeamercolor{block body}{bg=bmagreen!5}
+\setbeamercolor{block title alerted}{fg=white,bg=errred}
+\setbeamercolor{block body alerted}{bg=errred!5}
+\setbeamercolor{block title example}{fg=white,bg=okgreen}
+\setbeamercolor{block body example}{bg=okgreen!5}
+\setbeamercolor{item}{fg=bmagreen}
+
+% --- Packages ---
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{amsmath}
+\usepackage{pifont}
+\usepackage{colortbl}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{caption}
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setbeamertemplate{caption}[numbered]
+
+% --- Thai line breaking ---
+\XeTeXlinebreaklocale "th"
+\XeTeXlinebreakskip = 0pt plus 1pt
+\emergencystretch=3em
+
+% --- Font: Google Sans (official, Thai+Latin) ---
+\newfontfamily\bodyfont{GoogleSans-Regular.ttf}[
+  Path=assets/,
+  BoldFont=GoogleSans-Bold.ttf,
+]
+% \bmafont alias for backward compat with templates
+\let\bmafont\bodyfont
+
+% --- Apply fonts to Beamer elements ---
+\setbeamerfont{title}{series=\bfseries}
+\setbeamerfont{frametitle}{series=\bfseries}
+
+% --- Layout ---
+\setbeamersize{text margin left=12mm, text margin right=12mm}
+\addtobeamertemplate{block begin}{}{\vspace{2pt}}
+\addtobeamertemplate{block end}{\vspace{4pt}}{}
+
+% --- Remove navigation, add footline ---
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{footline}{%
+  \leavevmode\hbox{%
+    \begin{beamercolorbox}[wd=.33\paperwidth,ht=2.25ex,dp=1ex,center]{palette primary}%
+      \usebeamerfont{author in head/foot}\insertshortauthor
+    \end{beamercolorbox}%
+    \begin{beamercolorbox}[wd=.34\paperwidth,ht=2.25ex,dp=1ex,center]{palette secondary}%
+      \usebeamerfont{title in head/foot}\insertshorttitle
+    \end{beamercolorbox}%
+    \begin{beamercolorbox}[wd=.33\paperwidth,ht=2.25ex,dp=1ex,right]{palette tertiary}%
+      \insertframenumber{} / \inserttotalframenumber\hspace*{2ex}
+    \end{beamercolorbox}%
+  }%
+}
+
+% --- Convenience commands ---
+\newcommand{\trendUp}{\textcolor{errred}{$\blacktriangle$}}
+\newcommand{\trendDown}{\textcolor{okgreen}{$\blacktriangledown$}}
+\newcommand{\trendStable}{\textcolor{gray}{$\bullet$}}
+
+\newcommand{\risklabel}[1]{%
+  \ifdim #1pt > 40pt
+    \textcolor{errred}{\textbf{#1\%}}%
+  \else\ifdim #1pt > 25pt
+    \textcolor{warnblue}{#1\%}%
+  \else
+    \textcolor{okgreen}{#1\%}%
+  \fi\fi
+}
+
+% Statistical significance marker
+\newcommand{\sigmark}[1]{%
+  \ifdim #1pt < 0.001pt
+    \textcolor{errred}{\textbf{***}}%
+  \else\ifdim #1pt < 0.01pt
+    \textcolor{errred}{\textbf{**}}%
+  \else\ifdim #1pt < 0.05pt
+    \textcolor{warnblue}{\textbf{*}}%
+  \else
+    \textcolor{gray}{ns}%
+  \fi\fi\fi
+}
+
+% Highlight box for key metrics
+\newcommand{\metricbox}[2]{%
+  \begin{beamercolorbox}[rounded=true,shadow=true,wd=0.45\textwidth,sep=5pt]{block body}
+    \centering
+    {\small\color{bmadark}#1}\\[3pt]
+    {\Large\bfseries\color{bmagreen}#2}
+  \end{beamercolorbox}%
+}

@@ -1,0 +1,47 @@
+% =============================================================================
+% BMA Health — Adaptive Document (AI-generated content in beautiful template)
+% =============================================================================
+\documentclass[11pt,a4paper]{article}
+
+\newcommand{\bmaheaderleft}{<< title >>}
+\newcommand{\bmaversion}{v1.0}
+\input{bma_article_preamble}
+
+\setmainfont{GoogleSans-Regular.ttf}[Path=assets/, BoldFont=GoogleSans-Bold.ttf]
+\setdefaultlanguage{english}
+
+\begin{document}
+
+% ===== Title =====
+\begin{center}
+  \includegraphics[height=2cm]{assets/bma_logo.png}\hspace{1.5cm}%
+  \includegraphics[height=2cm]{assets/msd_logo.png}\\[12pt]
+  {\Large\bfseries\color{bmagreen} << title >>}\\[6pt]
+  {\small สำนักการแพทย์ กรุงเทพมหานคร — << generated_date >>}
+\end{center}
+\vspace{12pt}
+
+% ===== Sections =====
+<% for section in sections %>
+\section*{<< section.title >>}
+<< section.body >>
+
+<% endfor %>
+
+% ===== Charts =====
+<% if charts %>
+\section*{แผนภูมิประกอบ}
+<% for chart in charts %>
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{<< chart >>}
+\end{figure}
+<% endfor %>
+<% endif %>
+
+% ===== Disclaimer =====
+\vfill
+\noindent\rule{\textwidth}{0.5pt}
+{\footnotesize\color{gray} ข้อมูลจากโครงการตรวจคัดกรองสุขภาพประชาชน กรุงเทพมหานคร สำนักการแพทย์ | AI-generated content | ข้อมูลเป็นสัดส่วนผู้เข้ารับการคัดกรอง ไม่ใช่ความชุกของประชากรทั้งหมด}
+
+\end{document}

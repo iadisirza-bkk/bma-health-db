@@ -1,0 +1,127 @@
+% =============================================================================
+% BMA Health — Zone-Specific Report (XeLaTeX via Tectonic)
+% =============================================================================
+\documentclass[aspectratio=169,11pt]{beamer}
+
+\newcommand{\bmaheaderleft}{<< zone_name >>}
+\newcommand{\bmaversion}{v1.0}
+\input{bma_beamer_preamble}
+
+\setmainfont{GoogleSans-Regular.ttf}[Path=assets/, BoldFont=GoogleSans-Bold.ttf]
+\setsansfont{GoogleSans-Regular.ttf}[Path=assets/, BoldFont=GoogleSans-Bold.ttf]
+\setdefaultlanguage{english}
+
+\begin{document}
+
+% ===== Title =====
+{
+\setbeamercolor{background canvas}{bg=bmagreen}
+\begin{frame}[plain]
+  \centering
+  \vspace{12pt}
+  \includegraphics[height=2cm]{assets/bma_logo.png}\hspace{1.5cm}%
+  \includegraphics[height=2cm]{assets/msd_logo.png}\\[14pt]
+  {\Huge\bfseries\color{white} << zone_name >>}\\[8pt]
+  {\large\color{white!80} ข้อมูลคัดกรองสุขภาพ กรุงเทพมหานคร}\\[10pt]
+  {\normalsize\color{white!70} << facilitator >>}\\[4pt]
+  {\small\color{white!50} << generated_date >>}
+  \vfill
+\end{frame}
+}
+
+% ===== Overview =====
+\begin{frame}{ภาพรวม — << zone_name >>}
+  \begin{columns}[T]
+    \begin{column}{0.45\textwidth}
+      \metricbox{จำนวนผู้คัดกรอง}{<< total_screened >>}
+      \vspace{6pt}
+      \metricbox{จำนวนเขต}{<< district_count >> เขต}
+    \end{column}
+    \begin{column}{0.45\textwidth}
+      \metricbox{Facilitator}{<< facilitator_short >>}
+      \vspace{6pt}
+      \metricbox{Area Managers}{<< area_manager_count >> หน่วย}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ===== Districts in Zone =====
+\begin{frame}{เขตในโซน}
+  \begin{table}
+    \centering\small
+    \begin{tabular}{clc}
+      \toprule
+      \textbf{\#} & \textbf{เขต} & \textbf{จำนวนคัดกรอง} \\
+      \midrule
+      <% for d in districts %>
+      << loop.index >> & << d.name >> & << d.screened >> \\
+      <% endfor %>
+      \bottomrule
+    \end{tabular}
+  \end{table}
+\end{frame}
+
+% ===== Disease Risk =====
+\begin{frame}{ความเสี่ยงโรค NCD}
+  <% if chart_path %>
+  \begin{center}
+    \includegraphics[width=0.85\textwidth]{<< chart_path >>}
+  \end{center}
+  <% else %>
+  \begin{table}
+    \centering\small
+    \begin{tabular}{lc}
+      \toprule
+      \textbf{โรค} & \textbf{สัดส่วนเสี่ยง} \\
+      \midrule
+      <% for d in disease_risks %>
+      << d.name >> & \risklabel{<< d.pct >>} \\
+      <% endfor %>
+      \bottomrule
+    \end{tabular}
+  \end{table}
+  <% endif %>
+\end{frame}
+
+% ===== Top Risk Districts =====
+\begin{frame}{เขตที่ต้องเฝ้าระวัง}
+  \begin{block}{โรคที่มีความเสี่ยงสูงสุดในโซน}
+    << top_risk_text >>
+  \end{block}
+
+  \vspace{6pt}
+  \begin{alertblock}{ข้อเสนอแนะ}
+    \small << recommendation >>
+  \end{alertblock}
+\end{frame}
+
+% ===== AI Insight =====
+\begin{frame}{การวิเคราะห์โดย AI}
+  \begin{block}{สรุปข้อค้นพบ}
+    << ai_insight >>
+  \end{block}
+
+  \vspace{4pt}
+  \begin{exampleblock}{ข้อมูลโซนสุขภาพ}
+    \small
+    \textbf{Facilitator:} << facilitator >> \\
+    <% if sub_facilitators %>
+    \textbf{Mentor/Sub-facilitator:} << sub_facilitators >> \\
+    <% endif %>
+    \textbf{จำนวนศูนย์บริการ:} << area_manager_count >> หน่วย
+  \end{exampleblock}
+\end{frame}
+
+% ===== Thank You =====
+{
+\setbeamercolor{background canvas}{bg=bmagreen}
+\begin{frame}[plain]
+  \centering\vfill
+  {\Huge\bfseries\color{white} ขอบคุณครับ}\\[10pt]
+  {\large\color{white!80} << zone_name >> — << facilitator >>}\\[6pt]
+  {\small\color{white!60} สำนักการแพทย์ กรุงเทพมหานคร}
+  \vfill
+\end{frame}
+}
+
+\end{document}

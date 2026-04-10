@@ -102,9 +102,9 @@ async def test_openapi_schema_loads(public_client):
     resp = await public_client.get("/openapi.json")
     assert resp.status_code == 200
     schema = resp.json()
-    assert schema["info"]["version"] == "3.0.0"
-    # Should have many paths
-    assert len(schema["paths"]) >= 80
+    assert schema["info"]["version"] == "4.0.0"
+    # Should have many paths (100+ after one-stop consolidation)
+    assert len(schema["paths"]) >= 100
 
 
 @pytest.mark.anyio

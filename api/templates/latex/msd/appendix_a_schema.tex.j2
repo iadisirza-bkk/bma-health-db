@@ -1,0 +1,421 @@
+% =====================================================================
+% เอกสารแนบ 1: โครงสร้างข้อมูล (Data Schema) — เอกสารแนบ ๑ ตาม TOR
+% =====================================================================
+\section{เอกสารแนบ 1: โครงสร้างข้อมูล (Data Schema)}
+\label{app:schema}
+
+ข้อมูลที่ใช้ในการวิเคราะห์ประกอบด้วยชุดข้อมูล 6 ชุด ตามเอกสารแนบ ๑ ของขอบเขตงาน (TOR)
+ข้อมูลทั้งหมดเป็นข้อมูลรวมระดับเขต (Aggregate District-Level) ไม่มีข้อมูลรายบุคคล
+
+\begin{table}[H]
+\centering
+\caption{ชุดข้อมูล 6 ชุด ตามเอกสารแนบ ๑ (TOR Appendix 1)}
+\begin{tabular}{clp{6cm}c}
+\toprule
+\textbf{ลำดับ} & \textbf{ชุดข้อมูล (Dataset)} & \textbf{คำอธิบาย (Description)} & \textbf{จำนวนฟิลด์} \\
+\midrule
+1 & pt & ข้อมูลประชากรศาสตร์ (Patient Demographics) & 8 \\
+2 & pthistory & ประวัติผู้ป่วย (Patient History) & 17+ \\
+3 & vitalsignslf & สัญญาณชีพและผลตรวจ (Vital Signs \& Lifestyle) & 100+ \\
+4 & homevisit & ข้อมูลเยี่ยมบ้าน (Home Visit) & 50+ \\
+5 & homehealth & ประวัติสุขภาพเพิ่มเติม (Home Health) & 40+ \\
+6 & labhealth & ผลตรวจเลือด (Lab Results) & 40+ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% ----- Dataset 1: pt (8 fields) -----
+\subsection{Dataset 1: pt --- ข้อมูลประชากรศาสตร์ (Patient Demographics, 8 fields)}
+
+\begin{longtable}{clllp{4cm}}
+\caption{โครงสร้างฟิลด์ชุดข้อมูล pt (8 fields)} \\
+\toprule
+\textbf{\#} & \textbf{Field Name} & \textbf{ชื่อไทย} & \textbf{Type} & \textbf{Values / Description} \\
+\midrule
+\endhead
+1 & ptcode & รหัสผู้ป่วย & VARCHAR & Primary key (anonymized) \\
+2 & fname & ชื่อ & VARCHAR & Anonymized \\
+3 & lname & นามสกุล & VARCHAR & Anonymized \\
+4 & male & เพศ & INT & 10=ชาย, 20=หญิง \\
+5 & birthday & วันเกิด & DATE & YYYY-MM-DD \\
+6 & national\_id & เลขบัตรประชาชน & VARCHAR & Hashed/anonymized \\
+7 & first\_visit & วันที่ตรวจครั้งแรก & DATE & YYYY-MM-DD \\
+8 & last\_visit & วันที่ตรวจครั้งล่าสุด & DATE & YYYY-MM-DD \\
+\bottomrule
+\end{longtable}
+
+% ----- Dataset 2: pthistory (17+ fields) -----
+\subsection{Dataset 2: pthistory --- ประวัติผู้ป่วย (Patient History, 17+ fields)}
+
+\begin{longtable}{clllp{4cm}}
+\caption{โครงสร้างฟิลด์ชุดข้อมูล pthistory (17+ fields)} \\
+\toprule
+\textbf{\#} & \textbf{Field Name} & \textbf{ชื่อไทย} & \textbf{Type} & \textbf{Values / Description} \\
+\midrule
+\endhead
+1 & ptcode & รหัสผู้ป่วย & VARCHAR & FK $\rightarrow$ pt \\
+2 & hospcode & รหัสสถานพยาบาล & VARCHAR & Health facility code \\
+3 & visitdate & วันที่ตรวจ & DATE & Visit date \\
+4 & visitno & ครั้งที่ตรวจ & INT & Visit sequence number \\
+5 & cc & อาการสำคัญ & TEXT & Chief complaint \\
+6 & pi & ประวัติปัจจุบัน & TEXT & Present illness \\
+7 & ph & ประวัติเดิม & TEXT & Past history \\
+8 & fh & ประวัติครอบครัว & TEXT & Family history \\
+9 & sh & ประวัติสังคม & TEXT & Social history \\
+10 & allergy & ประวัติแพ้ยา & TEXT & Drug allergy \\
+11 & religion & ศาสนา & INT & 1=พุทธ 2=คริสต์ 3=อิสลาม 4=อื่น \\
+12 & lgbtq\_status & สถานะ LGBTQ+ & INT & 0=ไม่ระบุ 1=L 2=G 3=B 4=T 5=Q+ \\
+13 & lgbtq\_identity & อัตลักษณ์ทางเพศ & VARCHAR & Free text description \\
+14 & lgbtq\_pronoun & สรรพนาม & VARCHAR & Preferred pronoun \\
+15 & lgbtq\_hormone & ใช้ฮอร์โมน & INT & 0=ไม่ 1=ใช่ \\
+16 & lgbtq\_surgery & ผ่าตัดแปลงเพศ & INT & 0=ไม่ 1=ใช่ \\
+17 & lgbtq\_mental & สุขภาพจิต LGBTQ+ & INT & 0=ปกติ 1=เสี่ยง 2=ต้องดูแล \\
+\bottomrule
+\end{longtable}
+
+% ----- Dataset 3: vitalsignslf (100+ fields) -----
+\subsection{Dataset 3: vitalsignslf --- สัญญาณชีพ วิถีชีวิต ผลตรวจ (100+ fields)}
+
+\begin{longtable}{clllp{3.5cm}}
+\caption{โครงสร้างฟิลด์ชุดข้อมูล vitalsignslf --- กลุ่มสัญญาณชีพ} \\
+\toprule
+\textbf{\#} & \textbf{Field Name} & \textbf{ชื่อไทย} & \textbf{Type} & \textbf{Values} \\
+\midrule
+\endhead
+\multicolumn{5}{l}{\textbf{A. สัญญาณชีพ (Vital Signs)}} \\
+\midrule
+1 & ptcode & รหัสผู้ป่วย & VARCHAR & FK $\rightarrow$ pt \\
+2 & visitdate & วันที่ตรวจ & DATE & YYYY-MM-DD \\
+3 & hbpn & ความดันบน (SBP) & FLOAT & mmHg \\
+4 & lbpn & ความดันล่าง (DBP) & FLOAT & mmHg \\
+5 & pulserate & ชีพจร & INT & beats/min \\
+6 & temperature & อุณหภูมิ & FLOAT & $^{\circ}$C \\
+7 & respirate & อัตราหายใจ & INT & breaths/min \\
+8 & height & ส่วนสูง & FLOAT & cm \\
+9 & weight & น้ำหนัก & FLOAT & kg \\
+10 & bmi & ดัชนีมวลกาย & FLOAT & kg/m$^2$ \\
+11 & wstl & รอบเอว & FLOAT & cm \\
+\midrule
+\multicolumn{5}{l}{\textbf{B. ผลน้ำตาลในเลือด (Blood Sugar)}} \\
+\midrule
+12 & prefpg & FBS ก่อนอาหาร & FLOAT & mg/dL \\
+13 & postfpg & FBS หลังอาหาร & FLOAT & mg/dL \\
+14 & hba1c & HbA1c & FLOAT & \% \\
+\midrule
+\multicolumn{5}{l}{\textbf{C. วิถีชีวิต (Lifestyle)}} \\
+\midrule
+15 & smoke & การสูบบุหรี่ & INT & 0=ไม่สูบ 1=สูบ 2=เลิกแล้ว \\
+16 & smokeperday & จำนวนมวน/วัน & INT & มวนต่อวัน \\
+17 & smokeyear & จำนวนปีที่สูบ & INT & ปี \\
+18 & alcohal & การดื่มสุรา & INT & 0=ไม่ 1=เป็นครั้งคราว 2=ประจำ 3=หนัก \\
+19 & exercise & การออกกำลังกาย & INT & 0=ไม่ 1=เบา 2=ปานกลาง 3=สม่ำเสมอ \\
+20 & exercisefreq & ความถี่ออกกำลังกาย & INT & ครั้ง/สัปดาห์ \\
+21 & exercisemin & เวลาออกกำลังกาย & INT & นาที/ครั้ง \\
+\midrule
+\multicolumn{5}{l}{\textbf{D. การตรวจร่างกาย (Physical Exam)}} \\
+\midrule
+22 & chest & เอกซเรย์ปอด & INT & 0=ไม่ตรวจ 1=ปกติ 2=ผิดปกติ \\
+23 & ekg & คลื่นไฟฟ้าหัวใจ & INT & 0=ไม่ตรวจ 1=ปกติ 2=ผิดปกติ \\
+24 & fundoscopy & ตรวจจอประสาทตา & INT & 0=ไม่ตรวจ 1=ปกติ 2=ผิดปกติ \\
+25 & vision\_left & สายตาซ้าย & VARCHAR & e.g. 20/20 \\
+26 & vision\_right & สายตาขวา & VARCHAR & e.g. 20/20 \\
+27 & hearing & การได้ยิน & INT & 0=ปกติ 1=ผิดปกติ \\
+28 & dental & ทันตกรรม & INT & 0=ปกติ 1=ผิดปกติ \\
+\midrule
+\multicolumn{5}{l}{\textbf{E. สุขภาพจิต (Mental Health)}} \\
+\midrule
+29 & phq2 & PHQ-2 คัดกรองซึมเศร้า & INT & 0--6 score \\
+30 & phq9 & PHQ-9 คัดกรองซึมเศร้า & INT & 0--27 score \\
+31 & gad7 & GAD-7 คัดกรองวิตกกังวล & INT & 0--21 score \\
+32 & st5 & ST-5 คัดกรองความเครียด & INT & 0--15 score \\
+33 & suicide\_risk & ความเสี่ยงฆ่าตัวตาย & INT & 0=ไม่เสี่ยง 1=เสี่ยง \\
+\midrule
+\multicolumn{5}{l}{\textbf{F. ความเสี่ยงโรค (Disease Risk Flags)}} \\
+\midrule
+34 & riskdm & ความเสี่ยง DM & INT & 0/1 \\
+35 & riskhpt & ความเสี่ยง HT & INT & 0/1 \\
+36 & riskcdvcl & ความเสี่ยง CVD & INT & 0/1 \\
+37 & riskbmi & ความเสี่ยง BMI & INT & 0/1 \\
+38 & riskcrd & ความเสี่ยง CRD & INT & 0/1 \\
+39 & riskckd & ความเสี่ยง CKD & INT & 0/1 \\
+\midrule
+\multicolumn{5}{l}{\textbf{G. สถานะโรค (Disease Status Flags)}} \\
+\midrule
+40 & dm & เบาหวาน & INT & 0=ไม่มี 1=เสี่ยง 2=ป่วย \\
+41 & hpt & ความดันโลหิตสูง & INT & 0=ไม่มี 1=เสี่ยง 2=ป่วย \\
+42 & cdvcl & หลอดเลือดหัวใจ & INT & 0=ไม่มี 1=เสี่ยง 2=ป่วย \\
+43 & stroke & หลอดเลือดสมอง & INT & 0=ไม่มี 1=เสี่ยง 2=ป่วย \\
+44 & fat & ไขมันในเลือดสูง & INT & 0=ไม่มี 1=เสี่ยง 2=ป่วย \\
+45 & chltr & คอเลสเตอรอลสูง & INT & 0=ไม่มี 1=เสี่ยง 2=ป่วย \\
+46 & ckd & โรคไต & INT & 0=ไม่มี 1=เสี่ยง 2=ป่วย \\
+47 & anemia & โลหิตจาง & INT & 0=ไม่มี 1=เสี่ยง 2=ป่วย \\
+48 & crd & ทางเดินหายใจ & INT & 0=ไม่มี 1=เสี่ยง 2=ป่วย \\
+\midrule
+\multicolumn{5}{l}{\textbf{H. ผลคัดกรองและส่งต่อ (Screening Results \& Referrals)}} \\
+\midrule
+49 & scrrs & ผลคัดกรองรวม & INT & 0=ปกติ 1=ผิดปกติ \\
+50 & referral & ส่งต่อ & INT & 0=ไม่ 1=ส่งต่อ \\
+51 & referral\_hosp & สถานพยาบาลส่งต่อ & VARCHAR & Hospital code \\
+52 & referral\_reason & เหตุผลส่งต่อ & TEXT & Description \\
+\midrule
+\multicolumn{5}{l}{\textbf{I. อาหาร (Diet --- 4 types $\times$ 4 frequencies)}} \\
+\midrule
+53 & diet\_sweet & อาหารหวาน & INT & 0=ไม่กิน 1=นานๆ 2=บ่อย 3=ทุกวัน \\
+54 & diet\_salty & อาหารเค็ม & INT & 0=ไม่กิน 1=นานๆ 2=บ่อย 3=ทุกวัน \\
+55 & diet\_fat & อาหารมัน & INT & 0=ไม่กิน 1=นานๆ 2=บ่อย 3=ทุกวัน \\
+56 & diet\_vegfruit & ผัก-ผลไม้ & INT & 0=ไม่กิน 1=นานๆ 2=บ่อย 3=ทุกวัน \\
+\bottomrule
+\end{longtable}
+
+\textbf{หมายเหตุ:} ฟิลด์ที่ 57--100+ ครอบคลุมผลตรวจเฉพาะทาง (specialized screening results),
+ประวัติรับวัคซีน, ข้อมูลครอบครัว, และฟิลด์สำรองตามที่กำหนดใน TOR
+
+% ----- Dataset 4: homevisit (50+ fields) -----
+\subsection{Dataset 4: homevisit --- ข้อมูลเยี่ยมบ้าน (Home Visit, 50+ fields)}
+
+\begin{longtable}{clllp{3.5cm}}
+\caption{โครงสร้างฟิลด์ชุดข้อมูล homevisit (50+ fields)} \\
+\toprule
+\textbf{\#} & \textbf{Field Name} & \textbf{ชื่อไทย} & \textbf{Type} & \textbf{Values} \\
+\midrule
+\endhead
+\multicolumn{5}{l}{\textbf{A. ข้อมูลประชากร (Demographics)}} \\
+\midrule
+1 & ptcode & รหัสผู้ป่วย & VARCHAR & FK $\rightarrow$ pt \\
+2 & visitdate & วันที่เยี่ยมบ้าน & DATE & YYYY-MM-DD \\
+3 & selfour & ดูแลตัวเองได้ & INT & 0=ไม่ได้ 1=ได้บางส่วน 2=ได้ \\
+4 & barthel & คะแนน Barthel ADL & INT & 0--20 \\
+\midrule
+\multicolumn{5}{l}{\textbf{B. ความพิการ 8 ประเภท (Disability Types)}} \\
+\midrule
+5 & distype1 & ทางการเห็น & INT & 0=ไม่มี 1=มี \\
+6 & distype2 & ทางการได้ยิน & INT & 0=ไม่มี 1=มี \\
+7 & distype3 & ทางการเคลื่อนไหว & INT & 0=ไม่มี 1=มี \\
+8 & distype4 & ทางจิตใจ/พฤติกรรม & INT & 0=ไม่มี 1=มี \\
+9 & distype5 & ทางสติปัญญา & INT & 0=ไม่มี 1=มี \\
+10 & distype6 & ทางการเรียนรู้ & INT & 0=ไม่มี 1=มี \\
+11 & distype7 & ออทิสติก & INT & 0=ไม่มี 1=มี \\
+12 & distype8 & ทางจิตเวช & INT & 0=ไม่มี 1=มี \\
+\midrule
+\multicolumn{5}{l}{\textbf{C. การศึกษา อาชีพ สิทธิ์การรักษา (Socioeconomic)}} \\
+\midrule
+13 & edu & ระดับการศึกษา & INT & 1=ไม่ได้เรียน 2=ประถม 3=ม.ต้น 4=ม.ปลาย 5=ปวช 6=ปวส 7=ปริญญาตรี 8=สูงกว่าปริญญาตรี 9=อื่นๆ \\
+14 & occptn & อาชีพ & INT & 1=ข้าราชการ 2=พนง.รัฐ 3=เอกชน 4=รับจ้าง 5=ค้าขาย 6=เกษตร 7=ประมง 8=อิสระ 9=แม่บ้าน 10=นร./นศ. 11=เกษียณ 12=ว่างงาน 13=พระ/นักบวช 14=อื่น \\
+15 & prvlg & สิทธิ์การรักษา & INT & 1=บัตรทอง 2=ประกันสังคม 3=ข้าราชการ 4=ข้าราชการ กทม. 5=องค์กรปกครอง 6=รัฐวิสาหกิจ 7=ประกันเอกชน 8=ต่างด้าว 9=อื่น \\
+16 & income & รายได้/เดือน & FLOAT & บาท \\
+17 & marital & สถานภาพสมรส & INT & 1=โสด 2=สมรส 3=หม้าย 4=หย่า \\
+\midrule
+\multicolumn{5}{l}{\textbf{D. สัตว์เลี้ยง (Pets --- disease vector data)}} \\
+\midrule
+18 & pet\_dog & สุนัข & INT & 0=ไม่มี, จำนวนตัว \\
+19 & pet\_cat & แมว & INT & 0=ไม่มี, จำนวนตัว \\
+20 & pet\_bird & นก & INT & 0=ไม่มี, จำนวนตัว \\
+21 & pet\_other & สัตว์อื่น & INT & 0=ไม่มี, จำนวนตัว \\
+\midrule
+\multicolumn{5}{l}{\textbf{E. ที่อยู่ (Address)}} \\
+\midrule
+22 & district\_code & รหัสเขต & VARCHAR & 50 districts \\
+23 & subdistrict & แขวง & VARCHAR & Sub-district \\
+24 & moo & หมู่ & VARCHAR & Village number \\
+25 & road & ถนน & VARCHAR & Road name \\
+26 & soi & ซอย & VARCHAR & Alley \\
+27 & housing\_type & ประเภทที่พัก & INT & 1=บ้านเดี่ยว 2=ทาวน์เฮาส์ 3=คอนโด 4=ห้องเช่า 5=ตึกแถว 6=แฟลต 7=ใต้ทางด่วน 8=ชุมชนแออัด 9=อื่น \\
+\midrule
+\multicolumn{5}{l}{\textbf{F. สถานะทำงาน (Work)}} \\
+\midrule
+28 & work\_status & สถานะการทำงาน & INT & 0=ไม่ทำงาน 1=ทำงาน \\
+29 & work\_type & ลักษณะงาน & INT & 1=ในร่ม 2=กลางแจ้ง 3=ทั้งสอง \\
+30 & work\_chemical & สัมผัสสารเคมี & INT & 0=ไม่ 1=ใช่ \\
+31 & work\_dust & สัมผัสฝุ่น & INT & 0=ไม่ 1=ใช่ \\
+\midrule
+\multicolumn{5}{l}{\textbf{G. คำร้องขอบริการ (Service Requests)}} \\
+\midrule
+32 & request1 & ขอปรึกษาแพทย์ & INT & 0/1 \\
+33 & request2 & ขอยา/เวชภัณฑ์ & INT & 0/1 \\
+34 & request3 & ขอกายภาพบำบัด & INT & 0/1 \\
+35 & request4 & ขออุปกรณ์ช่วยเหลือ & INT & 0/1 \\
+36 & request5 & ขอส่งต่อโรงพยาบาล & INT & 0/1 \\
+37 & request6 & ขอสวัสดิการสังคม & INT & 0/1 \\
+38 & request7 & ขออื่นๆ & INT & 0/1 \\
+\bottomrule
+\end{longtable}
+
+\textbf{หมายเหตุ:} ฟิลด์ที่ 39--50+ ครอบคลุมข้อมูลสิ่งแวดล้อมในบ้าน, ผู้ดูแล, จำนวนสมาชิกในครอบครัว,
+แหล่งน้ำดื่ม, การจัดการขยะ, และข้อมูลเสริมตาม TOR
+
+% ----- Dataset 5: homehealth (40+ fields) -----
+\subsection{Dataset 5: homehealth --- ประวัติสุขภาพเพิ่มเติม (Home Health, 40+ fields)}
+
+\begin{longtable}{clllp{3.5cm}}
+\caption{โครงสร้างฟิลด์ชุดข้อมูล homehealth (40+ fields)} \\
+\toprule
+\textbf{\#} & \textbf{Field Name} & \textbf{ชื่อไทย} & \textbf{Type} & \textbf{Values} \\
+\midrule
+\endhead
+\multicolumn{5}{l}{\textbf{A. สถานะโรคเรื้อรัง (Chronic Disease Status)}} \\
+\midrule
+1 & ptcode & รหัสผู้ป่วย & VARCHAR & FK $\rightarrow$ pt \\
+2 & visitdate & วันที่เยี่ยม & DATE & YYYY-MM-DD \\
+3 & has\_dm & เป็นเบาหวาน & INT & 0=ไม่ 1=ใช่ \\
+4 & has\_hpt & เป็นความดัน & INT & 0=ไม่ 1=ใช่ \\
+5 & has\_cdvcl & เป็นโรคหัวใจ & INT & 0=ไม่ 1=ใช่ \\
+6 & has\_stroke & เป็นโรคหลอดเลือดสมอง & INT & 0=ไม่ 1=ใช่ \\
+7 & has\_ckd & เป็นโรคไต & INT & 0=ไม่ 1=ใช่ \\
+8 & has\_crd & เป็นโรคปอด & INT & 0=ไม่ 1=ใช่ \\
+9 & has\_cancer & เป็นมะเร็ง & INT & 0=ไม่ 1=ใช่ \\
+10 & has\_mental & มีปัญหาสุขภาพจิต & INT & 0=ไม่ 1=ใช่ \\
+\midrule
+\multicolumn{5}{l}{\textbf{B. การรักษา (Treatment)}} \\
+\midrule
+11 & med\_dm & ยาเบาหวาน & INT & 0=ไม่ 1=กิน 2=ฉีดอินซูลิน \\
+12 & med\_hpt & ยาความดัน & INT & 0=ไม่ 1=กิน \\
+13 & med\_lipid & ยาไขมัน & INT & 0=ไม่ 1=กิน \\
+14 & med\_other & ยาอื่น & TEXT & Description \\
+15 & compliance & ความร่วมมือในการรักษา & INT & 0=ไม่ดี 1=ปานกลาง 2=ดี \\
+\midrule
+\multicolumn{5}{l}{\textbf{C. ประวัติครอบครัว (Family History --- 8 diseases)}} \\
+\midrule
+16 & fh\_dm & ครอบครัวเป็นเบาหวาน & INT & 0/1 \\
+17 & fh\_hpt & ครอบครัวเป็นความดัน & INT & 0/1 \\
+18 & fh\_cdvcl & ครอบครัวเป็นโรคหัวใจ & INT & 0/1 \\
+19 & fh\_stroke & ครอบครัวเป็นหลอดเลือดสมอง & INT & 0/1 \\
+20 & fh\_ckd & ครอบครัวเป็นโรคไต & INT & 0/1 \\
+21 & fh\_cancer & ครอบครัวเป็นมะเร็ง & INT & 0/1 \\
+22 & fh\_dlp & ครอบครัวเป็นไขมันสูง & INT & 0/1 \\
+23 & fh\_obesity & ครอบครัวเป็นอ้วน & INT & 0/1 \\
+\midrule
+\multicolumn{5}{l}{\textbf{D. COVID-19 และวัคซีน (COVID \& Vaccination)}} \\
+\midrule
+24 & covid\_history & ประวัติติด COVID-19 & INT & 0=ไม่เคย 1=เคย \\
+25 & covid\_vaccine & รับวัคซีน COVID & INT & 0--5 (จำนวนเข็ม) \\
+26 & covid\_longcovid & อาการ Long COVID & INT & 0=ไม่มี 1=มี \\
+27 & flu\_vaccine & รับวัคซีนไข้หวัดใหญ่ & INT & 0=ไม่ 1=ใช่ \\
+\midrule
+\multicolumn{5}{l}{\textbf{E. อาหารและภูมิแพ้ (Diet \& Allergies)}} \\
+\midrule
+28 & diet\_sweet & อาหารหวาน & INT & 0--3 (ความถี่) \\
+29 & diet\_salty & อาหารเค็ม & INT & 0--3 (ความถี่) \\
+30 & diet\_fat & อาหารมัน & INT & 0--3 (ความถี่) \\
+31 & diet\_vegfruit & ผัก-ผลไม้ & INT & 0--3 (ความถี่) \\
+32 & food\_allergy & แพ้อาหาร & TEXT & รายการอาหารที่แพ้ \\
+33 & drug\_allergy & แพ้ยา & TEXT & รายการยาที่แพ้ \\
+\bottomrule
+\end{longtable}
+
+\textbf{หมายเหตุ:} ฟิลด์ที่ 34--40+ ครอบคลุมข้อมูลผู้ดูแล (caregiver), สถานะผู้สูงอายุ (geriatric assessment),
+การใช้สมุนไพร, และฟิลด์สำรองตาม TOR
+
+% ----- Dataset 6: labhealth (40+ fields) -----
+\subsection{Dataset 6: labhealth --- ผลตรวจเลือด (Lab Results, 40+ fields)}
+
+\begin{longtable}{clllp{3.5cm}}
+\caption{โครงสร้างฟิลด์ชุดข้อมูล labhealth (40+ fields)} \\
+\toprule
+\textbf{\#} & \textbf{Field Name} & \textbf{ชื่อไทย} & \textbf{Type} & \textbf{Values / Unit} \\
+\midrule
+\endhead
+\multicolumn{5}{l}{\textbf{A. CBC --- ความสมบูรณ์ของเลือด (Complete Blood Count)}} \\
+\midrule
+1 & ptcode & รหัสผู้ป่วย & VARCHAR & FK $\rightarrow$ pt \\
+2 & labdate & วันที่ตรวจ & DATE & YYYY-MM-DD \\
+3 & hb & ฮีโมโกลบิน & FLOAT & g/dL \\
+4 & hct & ฮีมาโตคริต & FLOAT & \% \\
+5 & wbc & เม็ดเลือดขาว & FLOAT & cells/$\mu$L \\
+6 & plt & เกล็ดเลือด & FLOAT & cells/$\mu$L \\
+7 & rbc & เม็ดเลือดแดง & FLOAT & M/uL \\
+8 & mcv & MCV & FLOAT & fL \\
+9 & mch & MCH & FLOAT & pg \\
+10 & mchc & MCHC & FLOAT & g/dL \\
+\midrule
+\multicolumn{5}{l}{\textbf{B. น้ำตาลในเลือด (Blood Sugar)}} \\
+\midrule
+11 & fbs & FBS (Fasting Blood Sugar) & FLOAT & mg/dL \\
+12 & hba1c & HbA1c & FLOAT & \% \\
+13 & ogtt & OGTT 2-hr & FLOAT & mg/dL \\
+\midrule
+\multicolumn{5}{l}{\textbf{C. ไขมันในเลือด (Lipid Profile)}} \\
+\midrule
+14 & tc & Total Cholesterol & FLOAT & mg/dL \\
+15 & ldl & LDL Cholesterol & FLOAT & mg/dL \\
+16 & hdl & HDL Cholesterol & FLOAT & mg/dL \\
+17 & tg & Triglyceride & FLOAT & mg/dL \\
+\midrule
+\multicolumn{5}{l}{\textbf{D. ตับ (Liver Function)}} \\
+\midrule
+18 & sgot & SGOT (AST) & FLOAT & U/L \\
+19 & sgpt & SGPT (ALT) & FLOAT & U/L \\
+20 & alp & Alkaline Phosphatase & FLOAT & U/L \\
+21 & albumin & Albumin & FLOAT & g/dL \\
+22 & globulin & Globulin & FLOAT & g/dL \\
+23 & total\_bilirubin & Total Bilirubin & FLOAT & mg/dL \\
+24 & direct\_bilirubin & Direct Bilirubin & FLOAT & mg/dL \\
+\midrule
+\multicolumn{5}{l}{\textbf{E. ไต (Kidney Function)}} \\
+\midrule
+25 & bun & BUN & FLOAT & mg/dL \\
+26 & creatinine & Creatinine & FLOAT & mg/dL \\
+27 & egfr & eGFR & FLOAT & mL/min/1.73m$^2$ \\
+28 & uric\_acid & Uric Acid & FLOAT & mg/dL \\
+\midrule
+\multicolumn{5}{l}{\textbf{F. ปัสสาวะ (Urinalysis)}} \\
+\midrule
+29 & ua\_protein & Urine Protein & VARCHAR & neg/trace/1+/2+/3+ \\
+30 & ua\_sugar & Urine Sugar & VARCHAR & neg/trace/1+/2+/3+ \\
+31 & ua\_blood & Urine Blood & VARCHAR & neg/trace/1+/2+/3+ \\
+32 & ua\_ph & Urine pH & FLOAT & 4.5--8.0 \\
+33 & ua\_sg & Urine Specific Gravity & FLOAT & 1.001--1.035 \\
+34 & microalbumin & Microalbumin & FLOAT & mg/L \\
+\midrule
+\multicolumn{5}{l}{\textbf{G. คัดกรองมะเร็ง (Cancer Screening)}} \\
+\midrule
+35 & psa & PSA (ต่อมลูกหมาก) & FLOAT & ng/mL \\
+36 & cea & CEA (ลำไส้ใหญ่) & FLOAT & ng/mL \\
+37 & afp & AFP (ตับ) & FLOAT & ng/mL \\
+38 & ca125 & CA-125 (รังไข่) & FLOAT & U/mL \\
+39 & fobt & Fecal Occult Blood & INT & 0=neg 1=pos \\
+40 & pap\_smear & Pap Smear & INT & 0=ปกติ 1=ผิดปกติ \\
+\bottomrule
+\end{longtable}
+
+% ----- NCD 8 diseases -----
+\subsection{โรค NCD 8 โรค และตัวชี้วัดที่เกี่ยวข้อง}
+
+\begin{table}[H]
+\centering
+\caption{โรค NCD 8 โรค พร้อมตัวชี้วัด (Indicators) และเกณฑ์คัดกรอง (Cutoffs)}
+\small
+\begin{tabular}{p{3cm}p{4cm}p{2.5cm}p{2.5cm}}
+\toprule
+\textbf{โรค (Disease)} & \textbf{ตัวชี้วัด (Indicator)} & \textbf{เกณฑ์ (Cutoff)} & \textbf{อ้างอิง} \\
+\midrule
+เบาหวาน (DM) & FBS, BMI, Waist & $\geq$ 126 mg/dL & ADA 2024 \\
+ความดันสูง (HT) & SBP, DBP & $\geq$ 140/90 mmHg & JNC 8 \\
+ไขมันสูง (DLP) & TC, LDL & $\geq$ 240 mg/dL & NCEP ATP III \\
+หลอดเลือดหัวใจ (CVD) & Cholesterol, LDL & $\geq$ 240/$\geq$ 160 & NCEP ATP III \\
+หลอดเลือดสมอง (Stroke) & SBP, Cholesterol & Composite & WHO \\
+ไตเรื้อรัง (CKD) & Creatinine, eGFR & $\geq$ 1.5 mg/dL & KDIGO \\
+โลหิตจาง (Anemia) & Hemoglobin & $<$ 12 g/dL (F) & WHO \\
+ทางเดินหายใจ (CRD) & CXR, Smoking & Composite & GOLD \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{ผลตรวจเพิ่มเติม 4 อย่าง (4 Additional Screening Tests)}
+
+\begin{table}[H]
+\centering
+\caption{ผลตรวจเพิ่มเติม 4 อย่าง ตาม TOR}
+\begin{tabular}{clp{7cm}}
+\toprule
+\textbf{ลำดับ} & \textbf{การตรวจ (Test)} & \textbf{รายละเอียด} \\
+\midrule
+1 & คลื่นไฟฟ้าหัวใจ (EKG) & ตรวจคลื่นไฟฟ้าหัวใจ ผลปกติ/ผิดปกติ (ekg field) สำหรับผู้อายุ $\geq$ 35 ปี \\
+2 & เอกซเรย์ปอด (Chest X-ray) & ตรวจเอกซเรย์ปอด (chest field: 0=ไม่ตรวจ 1=ปกติ 2=ผิดปกติ) คัดกรองวัณโรค \\
+3 & ตรวจเลือด (Blood Test) & FBS, Total Cholesterol, LDL, HDL, Triglyceride, Creatinine, eGFR, Hb \\
+4 & ตรวจจอประสาทตา (Fundoscopy) & คัดกรอง Diabetic Retinopathy (DR screening) สำหรับผู้ป่วยเบาหวาน \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{หมายเหตุ:} ข้อมูลผลตรวจเพิ่มเติม 4 อย่างในระบบปัจจุบันเป็นข้อมูลรวมระดับเขต
+ยังไม่สามารถวิเคราะห์ในระดับรายบุคคลได้ การวิเคราะห์เชิงลึกจะดำเนินการเมื่อข้อมูล individual-level พร้อม

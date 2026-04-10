@@ -1,0 +1,129 @@
+% =============================================================================
+% BMA Health — Single Disease Slide Deck (XeLaTeX via Tectonic)
+% Generated dynamically per disease request
+% =============================================================================
+\documentclass[aspectratio=169,11pt]{beamer}
+
+\newcommand{\bmaheaderleft}{<< disease_name_th >>}
+\newcommand{\bmaversion}{v1.0}
+\input{bma_beamer_preamble}
+
+% --- Thai font setup ---
+\setmainfont{GoogleSans-Regular.ttf}[
+  Path=assets/,
+  BoldFont=GoogleSans-Bold.ttf,
+]
+\setsansfont{GoogleSans-Regular.ttf}[
+  Path=assets/,
+  BoldFont=GoogleSans-Bold.ttf,
+]
+\setdefaultlanguage{english}
+
+\begin{document}
+
+% ===== Frame 1: Custom Title =====
+{
+\setbeamercolor{background canvas}{bg=bmagreen}
+\begin{frame}[plain]
+  \centering
+  \vspace{12pt}
+  % Logos on top
+  \includegraphics[height=2cm]{assets/bma_logo.png}\hspace{1.5cm}%
+  \includegraphics[height=2cm]{assets/msd_logo.png}\\[16pt]
+  % Title
+  {\Huge\bfseries\color{white}\bmafont << disease_name_th >>}\\[8pt]
+  {\large\color{white!80} ข้อมูลคัดกรองสุขภาพ กรุงเทพมหานคร}\\[16pt]
+  {\normalsize\color{white!70} สำนักการแพทย์ กรุงเทพมหานคร}\\[6pt]
+  {\small\color{white!50} << generated_date >>}
+  \vfill
+\end{frame}
+}
+
+% ===== Frame 2: Overview =====
+\begin{frame}{{\bmafont ภาพรวม — << disease_name_th >>}}
+  \begin{columns}[T]
+    \begin{column}{0.45\textwidth}
+      \metricbox{จำนวนผู้คัดกรองทั้งหมด}{<< total_screened >>}
+      \vspace{8pt}
+      \metricbox{สัดส่วนกลุ่มเสี่ยง}{\risklabel{<< avg_pct >>}}
+    \end{column}
+    \begin{column}{0.45\textwidth}
+      \metricbox{จำนวนกลุ่มเสี่ยง}{<< total_at_risk >>}
+      \vspace{8pt}
+      \metricbox{จำนวนเขต}{50 เขต}
+    \end{column}
+  \end{columns}
+  \vspace{10pt}
+  \begin{block}{สถิติเชิงพรรณนา}
+    \small
+    ค่าเฉลี่ย \textbf{<< avg_pct >>\%} ~~~
+    SD \textbf{<< std_pct >>\%} ~~~
+    ต่ำสุด \textbf{<< min_pct >>\%} ~~~
+    สูงสุด \textbf{<< max_pct >>\%}
+  \end{block}
+\end{frame}
+
+% ===== Frame 3: Top 10 Districts =====
+\begin{frame}{{\bmafont เขตที่มีความเสี่ยงสูงสุด 10 อันดับ}}
+  <% if chart_path %>
+  \begin{center}
+    \includegraphics[width=0.85\textwidth]{<< chart_path >>}
+  \end{center}
+  <% else %>
+  \begin{table}
+    \centering\small
+    \begin{tabular}{clc}
+      \toprule
+      \textbf{อันดับ} & \textbf{เขต} & \textbf{สัดส่วนเสี่ยง} \\
+      \midrule
+      <% for d in top_districts[:10] %>
+      << loop.index >> & << d.name >> & \risklabel{<< d.pct >>} \\
+      <% endfor %>
+      \bottomrule
+    \end{tabular}
+  \end{table}
+  <% endif %>
+\end{frame}
+
+% ===== Frame 4: Bottom 10 Districts =====
+\begin{frame}{{\bmafont เขตที่มีความเสี่ยงต่ำสุด 10 อันดับ}}
+  \begin{table}
+    \centering\small
+    \begin{tabular}{clc}
+      \toprule
+      \textbf{อันดับ} & \textbf{เขต} & \textbf{สัดส่วนเสี่ยง} \\
+      \midrule
+      <% for d in bottom_districts[:10] %>
+      << loop.index >> & << d.name >> & \risklabel{<< d.pct >>} \\
+      <% endfor %>
+      \bottomrule
+    \end{tabular}
+  \end{table}
+\end{frame}
+
+% ===== Frame 5: AI Insights =====
+\begin{frame}{{\bmafont การวิเคราะห์โดย AI}}
+  \begin{block}{สรุปข้อค้นพบ}
+    << ai_insight >>
+  \end{block}
+
+  \vspace{6pt}
+  \begin{alertblock}{ข้อควรระวัง}
+    \small ข้อมูลนี้เป็นสัดส่วนในกลุ่มผู้เข้ารับการคัดกรองเท่านั้น ไม่ใช่ความชุกของประชากรทั้งเขต
+  \end{alertblock}
+\end{frame}
+
+% ===== Frame 6: Thank You =====
+{
+\setbeamercolor{background canvas}{bg=bmagreen}
+\begin{frame}[plain]
+  \centering
+  \vfill
+  {\Huge\bfseries\color{white}\bmafont ขอบคุณครับ}\\[12pt]
+  {\large\color{white!80} สำนักการแพทย์ กรุงเทพมหานคร}\\[6pt]
+  {\small\color{white!60} ข้อมูลจากระบบคัดกรองสุขภาพ 1 ล้านคน}
+  \vfill
+\end{frame}
+}
+
+\end{document}

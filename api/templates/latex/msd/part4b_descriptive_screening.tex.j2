@@ -1,0 +1,86 @@
+% =====================================================================
+% ส่วนที่ 4ข: ผลการตรวจคัดกรองเพิ่มเติม (Additional Screening Results) — TOR 1.1.2
+% =====================================================================
+\section{ผลการตรวจคัดกรองเพิ่มเติม (Additional Screening Results)}
+
+ตาม TOR กำหนดให้วิเคราะห์ผลการตรวจเพิ่มเติม 4 อย่าง ได้แก่
+คลื่นไฟฟ้าหัวใจ (Electrocardiogram: EKG) เอกซเรย์ปอด (Chest X-ray: CXR)
+ตรวจเลือด (Blood Test) และตรวจจอประสาทตา (Fundoscopy / DR Screening)
+รวมถึงผลตรวจทางห้องปฏิบัติการ (Laboratory Results) เพิ่มเติม
+
+\subsection{ภาพรวมผลตรวจเพิ่มเติม 4 อย่าง}
+
+\begin{table}[H]
+\centering
+\caption{สรุปผลการตรวจเพิ่มเติม 4 อย่าง จากผู้คัดกรอง << data.total_screened|number_format >> คน}
+\label{tab:screening_overview}
+\begin{tabular}{lrrr}
+\toprule
+\textbf{การตรวจ (Test)} & \textbf{ปกติ (\%)} & \textbf{ผิดปกติ (\%)} & \textbf{ไม่ได้ตรวจ (\%)} \\
+\midrule
+<% for test in data.screening_tests_detail %>
+<< test.name_th >> & << test.normal_pct >>\% & \riskcell{<< test.abnormal_pct >>} & << test.not_done_pct >>\% \\
+<% endfor %>
+\bottomrule
+\end{tabular}
+\end{table}
+
+<% for test in data.screening_tests_detail %>
+\subsection{<< test.name_th >>}
+
+ผลการตรวจ<< test.name_th >> พบว่าร้อยละ \textbf{<< test.normal_pct >>} ปกติ
+ร้อยละ \textbf{<< test.abnormal_pct >>} ผิดปกติ
+และร้อยละ \textbf{<< test.not_done_pct >>} ไม่ได้รับการตรวจ
+
+\IfFileExists{charts/pie_<< test.name|lower >>.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.55\textwidth]{charts/pie_<< test.name|lower >>.png}
+\caption{แผนภูมิวงกลม (Pie Chart) ผลการตรวจ<< test.name_th >>: ปกติ / ผิดปกติ / ไม่ได้ตรวจ}
+\label{fig:pie_<< test.name|lower >>}
+\end{figure}
+}{}
+
+<% endfor %>
+
+\subsection{ผลตรวจทางห้องปฏิบัติการ (Laboratory Results)}
+
+\begin{longtable}{p{5cm}lrrrr}
+\caption{สรุปผลตรวจทางห้องปฏิบัติการ 16 ตัวชี้วัด (Laboratory Indicators)} \\
+\toprule
+\textbf{ตัวชี้วัด (Indicator)} & \textbf{หน่วย} & \textbf{ค่าเฉลี่ย} & \textbf{SD} & \textbf{เกณฑ์ (Cutoff)} & \textbf{\% เกิน} \\
+\midrule
+\endhead
+<% for lab in data.lab_panel %>
+<< lab.name_th >> & << lab.unit >> & << lab.mean >> & << lab.sd >> &
+<% if lab.cutoff %><< lab.cutoff >><% else %>---<% endif %> &
+<% if lab.pct_above is not none %>\riskcell{<< lab.pct_above >>}<% else %>---<% endif %> \\
+<% endfor %>
+\bottomrule
+\end{longtable}
+
+\subsection{การกระจายค่าตรวจทางห้องปฏิบัติการ (Laboratory Indicator Distributions)}
+
+<% for lab in data.lab_panel %>
+\IfFileExists{charts/histogram_<< lab.key >>.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.65\textwidth]{charts/histogram_<< lab.key >>.png}
+\caption{ฮิสโทแกรม (Histogram) การกระจายค่า<< lab.name_th >> (<< lab.unit >>)
+  เส้นประแดงแสดงจุดตัด (Cutoff) ที่ << lab.cutoff|default('N/A') >>}
+\label{fig:histogram_<< lab.key >>}
+\end{figure}
+}{}
+<% endfor %>
+
+\subsection{การคัดกรองมะเร็ง (Cancer Screening)}
+
+การคัดกรองมะเร็ง 2 ชนิดตาม TOR:
+\begin{compactlist}
+  \item \textbf{มะเร็งปากมดลูก (Cervical Cancer)}: ตรวจ HPV (Human Papillomavirus) ในสตรี
+  \item \textbf{มะเร็งลำไส้ใหญ่ (Colorectal Cancer)}: ตรวจ FIT Test (Fecal Immunochemical Test)
+  \item \textbf{การตรวจเอดส์ (HIV Screening)}: Anti-HIV สำหรับผู้ต้องการตรวจ
+\end{compactlist}
+
+\textbf{หมายเหตุ:} ผลตรวจมะเร็งและ HIV เป็นข้อมูลระดับรวม (aggregate) เท่านั้น
+ไม่มีข้อมูลรายบุคคลในรายงานนี้ ตามนโยบาย PDPA

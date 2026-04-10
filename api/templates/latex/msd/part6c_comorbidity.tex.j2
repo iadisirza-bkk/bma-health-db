@@ -1,0 +1,87 @@
+% =====================================================================
+% ส่วนที่ 6ค: การวิเคราะห์โรคร่วม (Comorbidity Analysis) — TOR 1.1.3
+% =====================================================================
+\section{การวิเคราะห์โรคร่วม (Comorbidity Analysis)}
+
+การวิเคราะห์โรคร่วม (Comorbidity) ศึกษาความสัมพันธ์ระหว่างโรค NCD 8 โรค
+เพื่อระบุรูปแบบการเกิดโรคร่วม (Co-occurrence Patterns) ที่พบบ่อย
+
+\subsection{เมทริกซ์สหสัมพันธ์โรคร่วม (Comorbidity Correlation Matrix)}
+
+ค่าสัมประสิทธิ์สหสัมพันธ์เพียร์สัน (Pearson Correlation Coefficient: $r$)
+คำนวณจากร้อยละผู้มีความเสี่ยงในแต่ละเขต ($n = << data.district_count >>$ เขต)
+
+\IfFileExists{charts/comorbidity_heatmap.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{charts/comorbidity_heatmap.png}
+\caption{เมทริกซ์สหสัมพันธ์โรคร่วม (Comorbidity Correlation Matrix) 8 โรค NCD
+  ค่า $r$ ที่สูง (สีเข้ม) บ่งชี้ว่าเขตที่มีโรค A สูงมักมีโรค B สูงด้วย}
+\label{fig:comorbidity_matrix}
+\end{figure}
+}{}
+
+<% if data.comorbidity_matrix and data.comorbidity_disease_labels %>
+\begin{table}[H]
+\centering
+\caption{ค่าสัมประสิทธิ์สหสัมพันธ์เพียร์สัน (Pearson $r$) ระหว่างโรค NCD 8 โรค}
+\tiny
+\begin{tabular}{l<% for _ in data.comorbidity_disease_labels %>r<% endfor %>}
+\toprule
+& <% for label in data.comorbidity_disease_labels %>\textbf{<< label[:4] >>}<% if not loop.last %> & <% endif %><% endfor %> \\
+\midrule
+<% for i in range(data.comorbidity_matrix|length) %>
+\textbf{<< data.comorbidity_disease_labels[i][:6] >>} <% for j in range(data.comorbidity_matrix[i]|length) %>& << data.comorbidity_matrix[i][j] >> <% endfor %>\\
+<% endfor %>
+\bottomrule
+\end{tabular}
+\end{table}
+<% endif %>
+
+\textbf{การตีความ:}
+\begin{compactlist}
+  \item $r > 0.5$: สหสัมพันธ์สูง --- โรคมักเกิดร่วมกันในเขตเดียวกัน
+  \item $0.3 < r \leq 0.5$: สหสัมพันธ์ปานกลาง
+  \item $r \leq 0.3$: สหสัมพันธ์ต่ำ --- โรคเกิดเป็นอิสระจากกัน
+\end{compactlist}
+
+\subsection{รูปแบบการเกิดโรคร่วมหลายโรค (Multi-Morbidity Patterns)}
+
+\begin{table}[H]
+\centering
+\caption{สัดส่วนผู้มีโรค NCD ร่วมหลายโรค (Multi-Morbidity)}
+\begin{tabular}{lr}
+\toprule
+\textbf{จำนวนโรค NCD ที่เสี่ยง} & \textbf{ร้อยละ (\%)} \\
+\midrule
+ไม่มีโรค (0 diseases) & << data.multi_morbidity.zero >>\% \\
+1 โรค (1 disease) & << data.multi_morbidity.one >>\% \\
+2 โรค (2 diseases) & << data.multi_morbidity.two >>\% \\
+3 โรคขึ้นไป (3+ diseases) & \riskcell{<< data.multi_morbidity.three_plus >>} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+ผู้ที่มีโรค NCD ร่วม 3 โรคขึ้นไป คิดเป็นร้อยละ \textbf{<< data.multi_morbidity.three_plus >>}
+ของผู้คัดกรองทั้งหมด กลุ่มนี้ต้องการการดูแลแบบบูรณาการ (Integrated Care)
+ไม่ใช่การรักษาแยกรายโรค
+
+\IfFileExists{charts/pie_multi_morbidity.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.55\textwidth]{charts/pie_multi_morbidity.png}
+\caption{แผนภูมิวงกลม (Pie Chart) สัดส่วนผู้มีโรค NCD ร่วมหลายโรค (Multi-Morbidity):
+  0 โรค / 1 โรค / 2 โรค / 3 โรคขึ้นไป}
+\label{fig:pie_multi_morbidity}
+\end{figure}
+}{}
+
+\subsection{สุขภาพจิตกับโรค NCD (Mental Health × NCD Comorbidity)}
+
+งานวิจัยระบุว่าโรคซึมเศร้า (Depression) มีความสัมพันธ์กับโรค NCD หลายโรค
+โดยเฉพาะโรคเบาหวาน (DM) และโรคหลอดเลือดหัวใจ (CVD)
+ในกลุ่มผู้คัดกรองที่มีผล 2Q บวก (r้อยละ << data.mental_health.depression_2q_positive_pct >>)
+ควรได้รับการประเมินร่วมกับโรค NCD ที่มีอยู่
+
+\textbf{ข้อจำกัด:} การวิเคราะห์ใช้ข้อมูลรวมระดับเขต (Ecological Correlation)
+ไม่สามารถยืนยันความสัมพันธ์ระดับบุคคล (Individual-Level Association) ได้

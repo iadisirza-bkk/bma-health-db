@@ -46,8 +46,13 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       SECRET_KEY: ${SECRET_KEY:-change-me-in-production-use-random-secret}
+      LMSTUDIO_URL: ${LMSTUDIO_URL:-http://host.docker.internal:5555}
+      LLM_MODEL: ${LLM_MODEL:-google/gemma-4-26b-a4b}
+      REPORTS_DIR: /app/data/reports
+      TECTONIC_PATH: /usr/local/bin/tectonic
     volumes:
       - ./etl:/app/etl
+      - ./data/reports:/app/data/reports
     depends_on:
       postgres:
         condition: service_healthy

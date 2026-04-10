@@ -1,0 +1,43 @@
+% =====================================================================
+% เอกสารแนบ 3: โซนสุขภาพ กทม. (BMA Health Zones) — เอกสารแนบ ๓ ตาม TOR
+% =====================================================================
+\section{เอกสารแนบ 3: โซนสุขภาพ กรุงเทพมหานคร (BMA Health Zones)}
+\label{app:zones}
+
+กรุงเทพมหานครแบ่งพื้นที่การดูแลสุขภาพเป็น 8 โซนสุขภาพ (Health Zone)
+ตามโครงสร้างสำนักการแพทย์ กรุงเทพมหานคร (Medical Service Department: MSD)
+
+\begin{longtable}{clp{7cm}c}
+\caption{โซนสุขภาพ กทม. 8 โซน พร้อมรายชื่อเขตและจำนวนศูนย์บริการสาธารณสุข} \\
+\toprule
+\textbf{โซน} & \textbf{โรงพยาบาลแม่ข่าย} & \textbf{เขต (Districts)} & \textbf{ศูนย์ฯ} \\
+\midrule
+\endhead
+<% for zone in data.zone_summaries %>
+<< zone.zone >> & << zone.facilitator >> &
+<% for entry in zone.district_entries %>
+<< entry.name_th >><% if not loop.last %>, <% endif %>
+<% endfor %>
+& << zone.area_managers >> \\
+<% if not loop.last %>\midrule<% endif %>
+<% endfor %>
+\bottomrule
+\end{longtable}
+
+\subsection{สรุปจำนวนผู้คัดกรองรายโซน}
+
+\begin{table}[H]
+\centering
+\caption{จำนวนผู้คัดกรองสุขภาพจำแนกตาม 8 โซนสุขภาพ}
+\begin{tabular}{clrr}
+\toprule
+\textbf{โซน} & \textbf{โรงพยาบาลแม่ข่าย} & \textbf{จำนวนเขต} & \textbf{จำนวนคัดกรอง (คน)} \\
+\midrule
+<% for zone in data.zone_summaries %>
+<< zone.zone >> & << zone.facilitator >> & << zone.districts >> & << zone.total_screened|number_format >> \\
+<% endfor %>
+\midrule
+\textbf{รวม} & & \textbf{<< data.district_count >>} & \textbf{<< data.total_screened|number_format >>} \\
+\bottomrule
+\end{tabular}
+\end{table}

@@ -1,0 +1,130 @@
+% =====================================================================
+% ส่วนที่ 7ข: การวิเคราะห์ตามฤดูกาลและปัจจัยสิ่งแวดล้อม — TOR 1.1.4
+% =====================================================================
+\section{การวิเคราะห์ตามฤดูกาลและปัจจัยสิ่งแวดล้อม (Seasonal \& Environmental Analysis)}
+
+\subsection{การแยกองค์ประกอบตามฤดูกาล (Seasonal Decomposition)}
+
+แยกข้อมูลรายเดือนออกเป็น 3 องค์ประกอบ: แนวโน้ม (Trend) ฤดูกาล (Seasonal)
+และส่วนเหลือ (Residual) สำหรับโรค NCD แต่ละโรค
+
+<% for sd in data.seasonal_decomposition %>
+\subsubsection{<< sd.disease_th >> (<< sd.disease|capitalize >>)}
+
+\begin{table}[H]
+\centering
+\caption{การแยกองค์ประกอบรายเดือนของ<< sd.disease_th >> (12 เดือน)}
+\small
+\begin{tabular}{crrrr}
+\toprule
+\textbf{เดือน} & \textbf{ค่าจริง (\%)} & \textbf{แนวโน้ม (\%)} & \textbf{ฤดูกาล} & \textbf{ส่วนเหลือ} \\
+\midrule
+<% for m in sd.months %>
+<< m.month >> & << m.value >> & << m.trend >> & << m.seasonal >> & << m.residual >> \\
+<% endfor %>
+\bottomrule
+\end{tabular}
+\end{table}
+
+\IfFileExists{charts/seasonal_<< sd.disease >>.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.8\textwidth]{charts/seasonal_<< sd.disease >>.png}
+\caption{การแยกองค์ประกอบตามฤดูกาล (Seasonal Decomposition) ของ<< sd.disease_th >>:
+  แนวโน้ม (Trend) ฤดูกาล (Seasonal) และส่วนเหลือ (Residual)}
+\label{fig:seasonal_<< sd.disease >>}
+\end{figure}
+}{}
+
+<% endfor %>
+
+\subsection{แผนภาพความร้อนรายสัปดาห์ (Weekly Heatmap)}
+
+แผนภาพความร้อน (Heatmap) แสดงร้อยละผู้มีความเสี่ยง 8 โรค NCD
+ตลอด 52 สัปดาห์ของปี สีเข้มหมายถึงความเสี่ยงสูง
+
+\IfFileExists{charts/heatmap_weekly.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\textwidth]{charts/heatmap_weekly.png}
+\caption{แผนภาพความร้อนรายสัปดาห์ (Weekly Heatmap) 52 สัปดาห์ $\times$ 8 โรค NCD}
+\label{fig:weekly_heatmap}
+\end{figure}
+}{}
+
+\subsection{ความสัมพันธ์ PM2.5 กับโรคทางเดินหายใจ --- การวิเคราะห์ Lag}
+
+วิเคราะห์ความสัมพันธ์ระหว่างค่า PM2.5 ($\mu$g/m$^3$) กับร้อยละผู้มีความเสี่ยง
+โรคระบบทางเดินหายใจเรื้อรัง (Chronic Respiratory Disease: CRD)
+โดยทดสอบ time lag 0--3 เดือน
+
+\begin{table}[H]
+\centering
+\caption{สัมประสิทธิ์สหสัมพันธ์สเปียร์แมน (Spearman $\rho$) ระหว่าง PM2.5 กับโรคทางเดินหายใจ
+  ที่ time lag ต่างๆ}
+\label{tab:pm25_lag}
+\begin{tabular}{lrl}
+\toprule
+\textbf{Time Lag} & \textbf{Spearman $\rho$} & \textbf{นัยสำคัญ} \\
+\midrule
+Lag 0 (เดือนเดียวกัน) & << data.pm25_lag_analysis.lag_0_r >> & \\
+Lag 1 เดือน & \textbf{<< data.pm25_lag_analysis.lag_1_r >>} & $\leftarrow$ สูงสุด \\
+Lag 2 เดือน & << data.pm25_lag_analysis.lag_2_r >> & \\
+Lag 3 เดือน & << data.pm25_lag_analysis.lag_3_r >> & \\
+\midrule
+\textbf{Best lag} & \textbf{<< data.pm25_lag_analysis.best_lag >> เดือน} & $p = << data.pm25_lag_analysis.best_lag_p >>$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+ผลวิเคราะห์พบว่า PM2.5 มีสหสัมพันธ์สูงสุดกับโรคทางเดินหายใจที่ time lag
+\textbf{<< data.pm25_lag_analysis.best_lag >> เดือน} ($\rho = << data.pm25_lag_analysis.lag_1_r >>$,
+$p = << data.pm25_lag_analysis.best_lag_p >>$)
+หมายความว่าผลกระทบของ PM2.5 ต่อโรคทางเดินหายใจปรากฏหลังจากสัมผัสประมาณ 1 เดือน
+
+\IfFileExists{charts/scatter_pm25.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{charts/scatter_pm25.png}
+\caption{กราฟกระจาย (Scatter Plot) แสดงความสัมพันธ์ระหว่าง PM2.5 กับโรคทางเดินหายใจเรื้อรัง
+  พร้อมเส้นถดถอย (Regression Line)}
+\label{fig:pm25_scatter}
+\end{figure}
+}{}
+
+\subsection{แหล่งมลพิษตาม 28 ชั้นข้อมูล GIS (Pollution Sources from 28 GIS Layers)}
+
+ข้อมูลแหล่งมลพิษ 9 ประเภท (items 20--28 จาก BMA GIS MapServer)
+จำแนกรายโซนสุขภาพ สำหรับใช้ประกอบการวิเคราะห์ PM2.5 × โรคทางเดินหายใจ
+
+\begin{table}[H]
+\centering
+\caption{จำนวนแหล่งมลพิษ 9 ประเภท จำแนกตาม 8 โซนสุขภาพ (จาก BMA GIS API)}
+\small
+\begin{tabular}{lp{8cm}}
+\toprule
+\textbf{ประเภทแหล่งมลพิษ} & \textbf{หมายเหตุ} \\
+\midrule
+กิจการแพลนท์ปูน (Cement Plants) & Layer 20 \\
+โครงการก่อสร้าง 50 เขต (Construction Projects) & Layer 21 \\
+โรงงานที่รายงาน รว.3 (Factories) & Layer 22 \\
+กิจการผลิตธูป (Incense Manufacturing) & Layer 23 \\
+อู่พ่นสีรถยนต์ (Paint Spray Shops) & Layer 24 \\
+จุดตรวจวัดควันดำ (Black Smoke Check Points) & Layer 25 \\
+กิจการประดิษฐ์หิน (Stone Crafts) & Layer 26 \\
+กิจการใช้หม้อน้ำ (Boiler Businesses) & Layer 27 \\
+กิจการหลอม/หล่อโลหะ (Metal Smelting) & Layer 28 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{หมายเหตุ:} ข้อมูลจาก BMA GIS API (https://bmamap.bangkok.go.th) ต้องมีสิทธิ์การเข้าถึง
+ข้อมูลในตารางนี้จะอัพเดตอัตโนมัติเมื่อเชื่อมต่อ API สำเร็จ
+
+\subsection{การวิเคราะห์ช่วงโควิด-19 (COVID-19 Period Analysis)}
+
+เปรียบเทียบร้อยละผู้มีความเสี่ยงโรค NCD ก่อนและหลังโครงการฉีดวัคซีนโควิด-19
+เพื่อประเมินผลกระทบของนโยบายสุขภาพต่อการคัดกรอง
+
+\textbf{ข้อจำกัด:} การเปรียบเทียบเป็น observational เท่านั้น
+ไม่สามารถสรุปเป็น causal inference ได้ เนื่องจากมีปัจจัยรบกวนอื่นๆ

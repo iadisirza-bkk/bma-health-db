@@ -1,0 +1,120 @@
+% =====================================================================
+% ส่วนที่ 7: การวิเคราะห์แนวโน้ม (Trend Analysis) — TOR 1.1.4
+% =====================================================================
+\section{การวิเคราะห์แนวโน้ม (Trend Analysis)}
+
+ส่วนนี้ใช้แบบจำลองวิเคราะห์แนวโน้มเพื่อประเมินความแตกต่างของความเสี่ยงต่อการเกิดโรค
+ในแต่ละช่วงเวลา โดยเฉพาะอย่างยิ่งตามฤดูกาลหรือช่วงเวลาที่แตกต่างกัน
+เพื่อระบุช่วงเวลาที่มีการเปลี่ยนแปลงของปัจจัยเสี่ยงและออกแบบมาตรการป้องกันที่เหมาะสม
+
+% =====================================================================
+\subsection{การทดสอบ Mann-Kendall (Mann-Kendall Trend Test)}
+
+แบ่งข้อมูล 27 เดือนออกเป็น 2 ครึ่ง (Half-Period Comparison)
+แล้วเปรียบเทียบค่าเฉลี่ย (Mean Comparison) พร้อมทดสอบนัยสำคัญทางสถิติ
+ใช้ threshold 0.5 percentage points ในการตัดสินว่าเป็นแนวโน้มเพิ่มขึ้นหรือลดลง
+
+\textbf{คำเตือน (Simulated Data Notice):} ข้อมูลรายเดือนในส่วนนี้สร้างจาก synthetic monthly series
+ที่ประมาณจากข้อมูลรวมระดับเขต ผลลัพธ์ Mann-Kendall tau และทิศทางแนวโน้มอาจไม่สะท้อน
+แนวโน้มระบาดวิทยาจริง เมื่อข้อมูลรายเดือนจริงพร้อม ระบบจะคำนวณใหม่โดยอัตโนมัติ
+
+\begin{table}[H]
+\centering
+\caption{ผลการทดสอบ Mann-Kendall แนวโน้มความเสี่ยงโรค NCD 8 โรค}
+\label{tab:mann_kendall}
+\begin{tabular}{lccccl}
+\toprule
+\textbf{โรค (Disease)} & \textbf{ครึ่งแรก (\%)} & \textbf{ครึ่งหลัง (\%)} & \textbf{$\tau$} & \textbf{p-value} & \textbf{แนวโน้ม} \\
+\midrule
+<% for trend in data.trends %>
+<< trend.name_th >> (<< trend.name_en >>) &
+<% if trend.monthly_data|length > 6 %>
+<< (trend.monthly_data[:6]|sum / 6)|round(1) >> &
+<< (trend.monthly_data[6:]|sum / (trend.monthly_data|length - 6))|round(1) >> &
+<% else %>
+--- & --- &
+<% endif %>
+<< trend.tau >> & << trend.p_value >> \sigmark{<< trend.p_value >>} &
+<% if trend.direction == 'increasing' %>\trendUp เพิ่มขึ้น
+<% elif trend.direction == 'decreasing' %>\trendDown ลดลง
+<% else %>\trendStable คงที่
+<% endif %> \\
+<% endfor %>
+\bottomrule
+\end{tabular}
+\end{table}
+
+\IfFileExists{charts/trend_overview.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{charts/trend_overview.png}
+\caption{แนวโน้มความเสี่ยงโรค NCD 8 โรค ตลอดช่วง 27 เดือน แบ่งครึ่ง (เส้นประ)}
+\label{fig:trend_overview}
+\end{figure}
+}{}
+
+\subsubsection{เส้นแนวโน้มรายโรค (Individual Disease Trend Lines)}
+
+\textbf{หมายเหตุ:} แถบสีแสดงช่วงความเชื่อมั่น 95\% (95\% Confidence Interval)
+คำนวณจากข้อมูลรายเดือนจำลอง (simulated monthly data)
+ดังนั้น CI ไม่มีความหมายทาง inferential ในระดับ individual-level
+เมื่อข้อมูลรายเดือนจริงพร้อม CI จะสะท้อนความแปรปรวนจริง
+
+<% for trend in data.trends %>
+\IfFileExists{charts/trend_<< trend.disease >>.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{charts/trend_<< trend.disease >>.png}
+\caption{เส้นแนวโน้ม (Trend Line) ร้อยละความเสี่ยง<< trend.name_th >> (<< trend.name_en >>)
+  ตลอด 27 เดือน พร้อมเส้นถดถอย (Regression Line)}
+\label{fig:trend_<< trend.disease >>}
+\end{figure}
+}{}
+<% endfor %>
+
+% =====================================================================
+\subsection{การวิเคราะห์ตามฤดูกาล (Seasonal Analysis)}
+
+เปรียบเทียบช่วง ม.ค.--มี.ค. (high season: อากาศเย็น ฝุ่นสูง) กับ มิ.ย.--ส.ค. (low season: ฤดูฝน)
+ค่า seasonal\_difference\_index แสดงความแตกต่าง \textbf{ไม่ใช่} Pearson correlation
+หรือ Spearman correlation
+
+\begin{table}[H]
+\centering
+\caption{เปรียบเทียบความเสี่ยงช่วง High Season (ม.ค.--มี.ค.) กับ Low Season (มิ.ย.--ส.ค.)}
+\label{tab:seasonal}
+\begin{tabular}{lccc}
+\toprule
+\textbf{โรค (Disease)} & \textbf{High Season (\%)} & \textbf{Low Season (\%)} & \textbf{ผลต่าง (pp)} \\
+\midrule
+<% for trend in data.trends %>
+<% if trend.monthly_data|length >= 8 %>
+<< trend.name_th >> &
+<< ((trend.monthly_data[0] + trend.monthly_data[1] + trend.monthly_data[2]) / 3)|round(1) >> &
+<< ((trend.monthly_data[5] + trend.monthly_data[6] + trend.monthly_data[7]) / 3)|round(1) >> &
+<< ((trend.monthly_data[0] + trend.monthly_data[1] + trend.monthly_data[2]) / 3 - (trend.monthly_data[5] + trend.monthly_data[6] + trend.monthly_data[7]) / 3)|round(1) >> \\
+<% endif %>
+<% endfor %>
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{ข้อจำกัด (Caveat):} ผลต่างตามฤดูกาลเป็นเพียง observational association
+ไม่สามารถสรุปเป็นความสัมพันธ์เชิงสาเหตุ (Causal Inference) ได้
+เนื่องจากมี confounders ที่ไม่ได้ควบคุม เช่น ฤดูกาล พฤติกรรมการออกกำลังกาย อาหาร สภาพอากาศ
+
+% =====================================================================
+\subsection{ความสัมพันธ์ PM2.5 กับโรคทางเดินหายใจ (PM2.5 and Respiratory Disease)}
+
+วิเคราะห์ความสัมพันธ์ระหว่างค่าฝุ่นละอองขนาดเล็ก PM2.5 ($\mu$g/m$^3$)
+กับร้อยละผู้มีความเสี่ยงโรคระบบทางเดินหายใจเรื้อรัง (Chronic Respiratory Disease: CRD)
+
+\begin{compactlist}
+  \item เปรียบเทียบช่วง ม.ค.--มี.ค. (high season ฝุ่นสูง) กับ มิ.ย.--ส.ค. (low season ฝุ่นต่ำ)
+  \item ใช้สัมประสิทธิ์สหสัมพันธ์อันดับสเปียร์แมน (Spearman Rank Correlation Coefficient)
+  \item ผลการวิเคราะห์เป็น observational association เท่านั้น ไม่ใช่ causal inference
+\end{compactlist}
+
+\textbf{ข้อควรระวัง (Ecological Fallacy Warning):}
+ข้อมูลรวมระดับเขตไม่สามารถอนุมานเป็นความสัมพันธ์ระดับบุคคลได้
+มี confounders ที่ไม่ได้ควบคุม เช่น ฤดูกาล พฤติกรรมการออกกำลังกาย สภาพอากาศ

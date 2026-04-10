@@ -1,0 +1,160 @@
+% =====================================================================
+% ส่วนที่ 8: รายงานรายโซนสุขภาพ (Health Zone Reports) — TOR 1.1.5
+% =====================================================================
+\section{รายงานรายโซนสุขภาพ (Health Zone Reports)}
+
+ส่วนนี้นำเสนอข้อมูลคัดกรองสุขภาพจำแนกตาม 8 โซนสุขภาพ (Health Zone) กรุงเทพมหานคร
+แต่ละโซนแสดงข้อมูลโรงพยาบาลแม่ข่าย (Health Zone Manager) จำนวนเขต จำนวนผู้คัดกรอง
+และร้อยละผู้มีความเสี่ยงโรค NCD 8 โรค จำแนกรายเขตในโซน
+
+<% for zone in data.zone_summaries %>
+% =====================================================================
+\subsection{โซน << zone.zone >> --- << zone.facilitator >>}
+\label{sec:zone_<< zone.zone >>}
+
+\begin{table}[H]
+\centering
+\caption{ข้อมูลพื้นฐานโซน << zone.zone >>}
+\begin{tabular}{ll}
+\toprule
+\kvrow{โรงพยาบาลแม่ข่าย (Health Zone Manager)}{<< zone.facilitator >>}
+\kvrow{จำนวนเขต (Districts)}{<< zone.districts >> เขต}
+\kvrow{จำนวนผู้คัดกรอง (Screened Population)}{<< zone.total_screened|number_format >> คน}
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{ร้อยละผู้มีความเสี่ยงโรค NCD รายเขตในโซน << zone.zone >>}
+
+\begin{table}[H]
+\centering
+\caption{ร้อยละผู้มีความเสี่ยงโรค NCD 8 โรค จำแนกตามเขตในโซน << zone.zone >>}
+\label{tab:zone_<< zone.zone >>_diseases}
+\small
+\begin{tabular}{l<% for d in data.city_disease_summary %>r<% endfor %>}
+\toprule
+\textbf{เขต}
+<% for d in data.city_disease_summary %>
+& \textbf{<< d.name_th[:4] >>}
+<% endfor %> \\
+\midrule
+<% for entry in zone.district_entries %>
+<< entry.name_th >>
+<% for d in data.city_disease_summary %>
+<% set dd = data.district_data.get(entry.dcode, {}) %>
+<% if d.disease in dd.get('diseases', {}) %>
+& \riskcell{<< dd.diseases[d.disease].pct_at_risk >>}
+<% else %>
+& ---
+<% endif %>
+<% endfor %> \\
+<% endfor %>
+\bottomrule
+\end{tabular}
+\end{table}
+
+\IfFileExists{charts/zone_<< zone.zone >>.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{charts/zone_<< zone.zone >>.png}
+\caption{ภาพรวมร้อยละความเสี่ยง 8 โรค NCD โซน << zone.zone >> (<< zone.facilitator >>)}
+\label{fig:zone_<< zone.zone >>}
+\end{figure}
+}{}
+
+\IfFileExists{charts/radar_zone_<< zone.zone >>.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.6\textwidth]{charts/radar_zone_<< zone.zone >>.png}
+\caption{แผนภูมิเรดาร์ (Radar Chart) เปรียบเทียบร้อยละความเสี่ยง 8 โรค NCD โซน << zone.zone >>
+  กับค่าเฉลี่ยกรุงเทพมหานคร}
+\label{fig:radar_zone_<< zone.zone >>}
+\end{figure}
+}{}
+
+<% for d in data.city_disease_summary %>
+\IfFileExists{charts/zone_<< zone.zone >>_disease_<< d.disease >>.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{charts/zone_<< zone.zone >>_disease_<< d.disease >>.png}
+\caption{แผนภูมิแท่ง (Bar Chart) ร้อยละความเสี่ยง<< d.name_th >> รายเขตในโซน << zone.zone >>}
+\label{fig:zone_<< zone.zone >>_disease_<< d.disease >>}
+\end{figure}
+}{}
+<% endfor %>
+
+\subsubsection{เปรียบเทียบกับเกณฑ์กระทรวงสาธารณสุข (MoPH KPI Benchmarking)}
+
+\begin{table}[H]
+\centering
+\caption{เปรียบเทียบ prevalence โซน << zone.zone >> กับเกณฑ์ KPI กระทรวงสาธารณสุข}
+\small
+\begin{tabular}{lrrrl}
+\toprule
+\textbf{ตัวชี้วัด (KPI)} & \textbf{เป้า} & \textbf{โซน << zone.zone >>} & \textbf{ผลต่าง} & \textbf{สถานะ} \\
+\midrule
+DM Screening Rate & $\geq$ 90\% & --- & --- & รอข้อมูล \\
+HT Screening Rate & $\geq$ 90\% & --- & --- & รอข้อมูล \\
+DM ควบคุมได้ (HbA1c $<$ 7\%) & $\geq$ 40\% & --- & --- & รอข้อมูล \\
+HT ควบคุมได้ (BP $<$ 140/90) & $\geq$ 50\% & --- & --- & รอข้อมูล \\
+CKD Screening ใน DM+HT & $\geq$ 80\% & --- & --- & รอข้อมูล \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{หมายเหตุ:} เกณฑ์ KPI กระทรวงสาธารณสุข (MoPH) เป็นตัวชี้วัด ``การควบคุมโรค''
+(Disease Control Rate) ไม่ใช่ ``อัตราความชุก'' (Prevalence Rate) ที่รายงานนี้นำเสนอ
+เมื่อข้อมูล individual-level (HbA1c, BP control) พร้อม จะเพิ่ม KPI columns ให้อัตโนมัติ
+ระหว่างนี้ข้อมูล prevalence ในรายงานสามารถใช้เป็นตัวชี้วัดเสริม (Supplementary Indicator)
+สำหรับการวางแผนทรัพยากรและกำหนดพื้นที่เป้าหมาย
+
+\subsubsection{ข้อเสนอแนะเฉพาะโซน << zone.zone >> (<< zone.facilitator >>)}
+
+<% set zone_diseases_sorted = zone.get('disease_avgs', {})|dictsort(reverse=true) if zone.get('disease_avgs') else [] %>
+โซน << zone.zone >> (<< zone.facilitator >>) ดูแล << zone.districts >> เขต
+ผู้คัดกรอง << zone.total_screened|number_format >> คน มีปัญหาหลักด้านโรค NCD ดังนี้:
+
+\begin{compactlist}
+<% if zone.get('disease_avgs') %>
+<% set top_disease = zone.disease_avgs|dictsort(by='value', reverse=true)|first if zone.disease_avgs else none %>
+  \item \textbf{โรคที่มีความเสี่ยงสูงสุดในโซน << zone.zone >>}:
+    เร่งรัดคัดกรองเชิงรุก โดยเฉพาะในเขตที่ pct\_at\_risk สูงกว่าค่าเฉลี่ยโซน
+    จัดหน่วยคัดกรองเคลื่อนที่ (Mobile Screening Unit) ลงพื้นที่เขตเสี่ยงสูง
+<% endif %>
+  \item \textbf{การจัดสรรทรัพยากร}: จัดสรรบุคลากรศูนย์บริการสาธารณสุข
+    (<< zone.get('area_managers', 0) >> แห่ง) ตามสัดส่วนความเสี่ยงของแต่ละเขต
+    เขตที่มี prevalence สูงควรมีจำนวน อสส. มากกว่า
+  \item \textbf{การส่งต่อ}: ประสาน<< zone.facilitator >> (Health Zone Manager)
+    จัดระบบส่งต่อผู้ป่วย NCD ที่ต้องการการดูแลเฉพาะทาง (Specialist Referral)
+    โดยเฉพาะผู้ป่วยที่มีโรคร่วมหลายโรค (Multi-Morbidity) ซึ่งคิดเป็นร้อยละ 14.1
+  \item \textbf{การรณรงค์เฉพาะพื้นที่}: จัดโครงการส่งเสริมสุขภาพตามบริบทพื้นที่
+<% if zone.zone == '1' %>
+    เช่น รณรงค์ลดน้ำตาลในพื้นที่เขตบางบอน (prevalence เบาหวานสูงสุด)
+    จัดกิจกรรมออกกำลังกายในสวนสาธารณะเขตทวีวัฒนา (พื้นที่ชานเมือง)
+<% elif zone.zone == '2' %>
+    เช่น จัดคัดกรองเชิงรุกในชุมชนริมน้ำเขตบางกอกน้อย/คลองสาน
+    รณรงค์ลดเค็มลดมันในตลาดเขตธนบุรี
+<% elif zone.zone == '3' %>
+    เช่น จัด NCD clinic ในอาคารสำนักงานย่านธุรกิจเขตสาทร/สีลม (ปทุมวัน, บางรัก)
+    คัดกรองกลุ่มแรงงานเขตคลองเตย ซึ่งมี accessibility ต่ำ
+<% elif zone.zone == '4' %>
+    เช่น คัดกรองผู้สูงอายุในชุมชนเก่าเขตพระนคร/ดุสิต
+    จัดหน่วยเคลื่อนที่ในเขตบางพลัด (ชุมชนหนาแน่น)
+<% elif zone.zone == '5' %>
+    เช่น จัดคัดกรองในตลาดนัดและย่านการค้าเขตราชเทวี/พญาไท
+    รณรงค์ลดบุหรี่ในเขตดินแดง/ห้วยขวาง (กลุ่มแรงงาน)
+<% elif zone.zone == '6' %>
+    เช่น จัดคัดกรองในหมู่บ้านจัดสรรเขตดอนเมือง/สายไหม
+    รณรงค์ออกกำลังกายในสวนจตุจักร/ลาดพร้าว
+<% elif zone.zone == '7' %>
+    เช่น จัดคัดกรองเชิงรุกในนิคมอุตสาหกรรมเขตลาดกระบัง
+    รณรงค์ลดพฤติกรรมเสี่ยงในหมู่บ้านจัดสรรเขตบางนา/สะพานสูง
+<% elif zone.zone == '8' %>
+    เช่น จัดหน่วยเคลื่อนที่เข้าชุมชนห่างไกลเขตหนองจอก/คลองสามวา
+    ประสานอาสาสมัครสาธารณสุข (อสส.) ลงพื้นที่เขตมีนบุรี/บึงกุ่ม
+<% endif %>
+\end{compactlist}
+
+
+<% if not loop.last %>\newpage<% endif %>
+<% endfor %>

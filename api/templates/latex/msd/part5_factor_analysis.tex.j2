@@ -1,0 +1,71 @@
+% =====================================================================
+% ส่วนที่ 5: วิเคราะห์ปัจจัยเสี่ยง (Risk Factor Analysis) — TOR 1.1.2 + 1.1.3
+% =====================================================================
+\section{วิเคราะห์ปัจจัยเสี่ยง (Risk Factor Analysis)}
+
+ส่วนนี้วิเคราะห์ความสัมพันธ์ระหว่างปัจจัยนำ (Leading Factors) 5 เรื่อง
+ได้แก่ เพศ (Sex) กลุ่มอายุ (Age Group) การสูบบุหรี่ (Smoking) การดื่มสุรา (Alcohol)
+และการออกกำลังกาย (Exercise) กับความเสี่ยงต่อโรค NCD 8 โรค
+ข้อมูลจำแนกตามกลุ่มประชากรเพื่อระบุกลุ่มเสี่ยงสูง
+
+<% for factor in data.factors %>
+\subsection{<< factor.label_th >> (<< factor.label >>)}
+
+\begin{table}[H]
+\centering
+\caption{ร้อยละผู้มีความเสี่ยงโรค NCD จำแนกตาม<< factor.label_th >> (<< factor.label >>)}
+\label{tab:factor_<< factor.factor >>}
+\small
+\begin{tabular}{l r r <% for d in factor.categories[0].disease_risks %>r <% endfor %>}
+\toprule
+\textbf{กลุ่ม} & \textbf{จำนวน} & \textbf{\%ทั้งหมด}
+<% for d in factor.categories[0].disease_risks %>
+& \textbf{<< d.name_th[:4] >>}
+<% endfor %> \\
+\midrule
+<% for cat in factor.categories %>
+<< cat.name_th >> & << cat.count|number_format >> & << cat.pct_of_total >>\%
+<% for d in cat.disease_risks %>
+& \riskcell{<< d.pct >>}
+<% endfor %> \\
+<% endfor %>
+\bottomrule
+\end{tabular}
+\end{table}
+
+<% if factor.factor == 'age_group' %>
+กลุ่มอายุ 70 ปีขึ้นไป มีความเสี่ยงสูงที่สุดในเกือบทุกโรค ยกเว้นโรคโลหิตจาง (Anemia)
+ที่กระจายค่อนข้างสม่ำเสมอทุกกลุ่มอายุ ข้อมูลนี้สนับสนุนการคัดกรองเชิงรุกในกลุ่มผู้สูงอายุ
+<% elif factor.factor == 'sex' %>
+เพศชาย (Male) มีความเสี่ยงสูงกว่าเพศหญิง (Female) ในโรคหลอดเลือดหัวใจ (CVD)
+โรคหลอดเลือดสมอง (Stroke) และโรคระบบทางเดินหายใจเรื้อรัง (CRD)
+ขณะที่เพศหญิงมีความเสี่ยงโรคโลหิตจาง (Anemia) สูงกว่า
+<% elif factor.factor == 'smoking' %>
+ผู้สูบบุหรี่ปัจจุบัน (Current Smoker) มีความเสี่ยงโรคระบบทางเดินหายใจเรื้อรัง (CRD)
+สูงถึง 3 เท่าของผู้ไม่เคยสูบ (Never Smoker) และมีความเสี่ยงโรคหลอดเลือดสมอง (Stroke)
+สูงกว่า 1.7 เท่า ข้อมูลนี้สนับสนุนนโยบายรณรงค์ลด/เลิกบุหรี่
+<% elif factor.factor == 'alcohol' %>
+ผู้ดื่มสุราหนัก (Heavy Drinker) มีความเสี่ยงสูงขึ้นในทุกโรค โดยเฉพาะ
+โรคหลอดเลือดสมอง (Stroke) ที่สูงกว่าผู้ไม่ดื่ม (Non-drinker) 1.6 เท่า
+และโรคไตเรื้อรัง (CKD) ที่สูงกว่า 1.55 เท่า
+<% elif factor.factor == 'exercise' %>
+ผู้ที่ไม่ออกกำลังกาย (Sedentary) มีความเสี่ยงสูงกว่าผู้ออกกำลังกายสม่ำเสมอ (Active)
+ในทุกโรค โดยเฉพาะโรคหลอดเลือดหัวใจ (CVD) ที่สูงกว่า 1.35 เท่า
+ข้อมูลนี้สนับสนุนนโยบายส่งเสริมการออกกำลังกายในชุมชน
+<% endif %>
+
+<% for disease in data.city_disease_summary %>
+\IfFileExists{charts/factor_<< factor.factor >>_<< disease.disease >>.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.75\textwidth]{charts/factor_<< factor.factor >>_<< disease.disease >>.png}
+\caption{ร้อยละผู้มีความเสี่ยง<< disease.name_th >> จำแนกตาม<< factor.label_th >>}
+\label{fig:factor_<< factor.factor >>_<< disease.disease >>}
+\end{figure}
+}{}
+<% endfor %>
+
+<% if not loop.last %>
+\newpage
+<% endif %>
+<% endfor %>

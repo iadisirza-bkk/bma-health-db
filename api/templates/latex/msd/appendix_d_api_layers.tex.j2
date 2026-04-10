@@ -1,0 +1,239 @@
+% =====================================================================
+% เอกสารแนบ 4: แหล่งข้อมูลภูมิสารสนเทศ (GIS Data Sources) — ตาม TOR
+% =====================================================================
+\section{เอกสารแนบ 4: แหล่งข้อมูลภูมิสารสนเทศ (GIS Data Sources)}
+\label{app:gis}
+
+ระบบเชื่อมต่อข้อมูลภูมิสารสนเทศจากบริการแผนที่ กรุงเทพมหานคร (BMA GIS) จำนวน 28 ชั้นข้อมูล
+ผ่าน ArcGIS REST API เพื่อวิเคราะห์ความสัมพันธ์เชิงพื้นที่ระหว่างปัจจัยสิ่งแวดล้อมกับสุขภาวะ
+
+\textbf{หมายเหตุ:} ข้อมูลจากแหล่งภายนอกใช้เฉพาะจำนวนรวมระดับเขต (Aggregate Count per District)
+ไม่มีการเก็บข้อมูลพิกัดรายจุด เพื่อความปลอดภัยของข้อมูล
+
+\subsection{แผนที่ฐาน (Base Maps) --- ชั้นข้อมูลที่ 1--3}
+
+\begin{longtable}{clp{5.5cm}lc}
+\caption{ชั้นข้อมูลแผนที่ฐาน (Base Map Layers)} \\
+\toprule
+\textbf{ลำดับ} & \textbf{ชื่อชั้นข้อมูล} & \textbf{URL/Endpoint} & \textbf{ประเภท} & \textbf{สถานะ} \\
+\midrule
+\endhead
+1 & พื้นที่เขตการปกครอง &
+  \small\texttt{cpudgiapp.../Basemap1000/MapServer/12}
+  & MapServer & \checkmark \\
+\midrule
+2 & เส้นกึ่งกลางถนน &
+  \small\texttt{cpudgiapp.../Basemap1000/MapServer/7}
+  & MapServer & \checkmark \\
+\midrule
+3 & ขอบเขตชุมชน &
+  \small\texttt{cpudgiapp.../Community/FeatureServer/14}
+  & FeatureServer & \checkmark \\
+\bottomrule
+\end{longtable}
+
+\subsection{ระบบขนส่งและอาคาร (Transportation \& Buildings) --- ชั้นข้อมูลที่ 4--6}
+
+\begin{longtable}{clp{5.5cm}lc}
+\caption{ชั้นข้อมูลระบบขนส่งและอาคาร} \\
+\toprule
+\textbf{ลำดับ} & \textbf{ชื่อชั้นข้อมูล} & \textbf{URL/Endpoint} & \textbf{ประเภท} & \textbf{สถานะ} \\
+\midrule
+\endhead
+4 & สนามบิน (Airports) &
+  \small\texttt{cpudgiapp.../GI\_Platform/MapServer/93}
+  & MapServer & \checkmark \\
+\midrule
+5 & สถานีรถไฟฟ้า BTS/MRT &
+  \small\texttt{cpudgiapp.../Basemap\_Traffic/MapServer/4}
+  & MapServer & \checkmark \\
+\midrule
+6 & อาคาร (Buildings) &
+  \small\texttt{cpudgiapp.../Basemap1000/MapServer/5}
+  & MapServer & \checkmark \\
+\bottomrule
+\end{longtable}
+
+\subsection{สถานพยาบาล (Health Facilities) --- ชั้นข้อมูลที่ 7--9}
+
+\begin{longtable}{clp{5.5cm}lc}
+\caption{ชั้นข้อมูลสถานพยาบาล} \\
+\toprule
+\textbf{ลำดับ} & \textbf{ชื่อชั้นข้อมูล} & \textbf{URL/Endpoint} & \textbf{ประเภท} & \textbf{สถานะ} \\
+\midrule
+\endhead
+7 & โรงพยาบาล (Hospitals) &
+  \small\texttt{bmagis.../จุดสนับสนุนสถานที่/MapServer/16}
+  & MapServer & \checkmark \\
+\midrule
+8 & ศูนย์บริการสาธารณสุข &
+  \small\texttt{cpudgiapp.../GI\_Platform/MapServer/96}
+  & MapServer & \checkmark \\
+\midrule
+9 & ศูนย์บริการสาธารณสุขสาขา &
+  \small\texttt{cpudgiapp.../GI\_Platform/MapServer/97}
+  & MapServer & \checkmark \\
+\bottomrule
+\end{longtable}
+
+\subsection{สาธารณูปโภค (Infrastructure) --- ชั้นข้อมูลที่ 10--11}
+
+\begin{longtable}{clp{5.5cm}lc}
+\caption{ชั้นข้อมูลสาธารณูปโภค} \\
+\toprule
+\textbf{ลำดับ} & \textbf{ชื่อชั้นข้อมูล} & \textbf{URL/Endpoint} & \textbf{ประเภท} & \textbf{สถานะ} \\
+\midrule
+\endhead
+10 & โรงควบคุมคุณภาพน้ำ &
+  \small\texttt{cpudgiapp.../GI\_Platform/MapServer/73}
+  & MapServer & \checkmark \\
+\midrule
+11 & ศูนย์กำจัดขยะ &
+  \small\texttt{cpudgiapp.../GI\_Platform/MapServer/70}
+  & MapServer & \checkmark \\
+\bottomrule
+\end{longtable}
+
+\subsection{สถานศึกษา (Education) --- ชั้นข้อมูลที่ 12--17}
+
+\begin{longtable}{clp{5.5cm}lc}
+\caption{ชั้นข้อมูลสถานศึกษา 5 สังกัด + มหาวิทยาลัย} \\
+\toprule
+\textbf{ลำดับ} & \textbf{ชื่อชั้นข้อมูล} & \textbf{URL/Endpoint} & \textbf{ประเภท} & \textbf{สถานะ} \\
+\midrule
+\endhead
+12 & โรงเรียนสังกัด กทม. &
+  \small\texttt{cpudgiapp.../GI\_Platform/MapServer/87}
+  & MapServer & \checkmark \\
+\midrule
+13 & โรงเรียนเอกชน &
+  \small\texttt{cpudgiapp.../GI\_Platform/MapServer/88}
+  & MapServer & \checkmark \\
+\midrule
+14 & โรงเรียนสังกัด สพฐ. (OBEC) &
+  \small\texttt{cpudgiapp.../GI\_Platform/MapServer/90}
+  & MapServer & \checkmark \\
+\midrule
+15 & โรงเรียนสังกัด สช. (OPEC) &
+  \small\texttt{cpudgiapp.../GI\_Platform/MapServer/91}
+  & MapServer & \checkmark \\
+\midrule
+16 & สถานศึกษาอาชีวะ (Vocational) &
+  \small\texttt{cpudgiapp.../GI\_Platform/MapServer/92}
+  & MapServer & \checkmark \\
+\midrule
+17 & มหาวิทยาลัย (Universities) &
+  \small\texttt{cpudgiapp.../GI\_Platform/MapServer/89}
+  & MapServer & \checkmark \\
+\bottomrule
+\end{longtable}
+
+\subsection{แหล่งพาณิชยกรรม (Commercial) --- ชั้นข้อมูลที่ 18}
+
+\begin{longtable}{clp{5.5cm}lc}
+\caption{ชั้นข้อมูลแหล่งพาณิชยกรรม} \\
+\toprule
+\textbf{ลำดับ} & \textbf{ชื่อชั้นข้อมูล} & \textbf{URL/Endpoint} & \textbf{ประเภท} & \textbf{สถานะ} \\
+\midrule
+\endhead
+18 & ตลาดที่ขึ้นทะเบียน &
+  \small\texttt{cpudgiapp.../GI\_Platform/MapServer/82}
+  & MapServer & \checkmark \\
+\bottomrule
+\end{longtable}
+
+\subsection{คุณภาพอากาศ (Air Quality) --- ชั้นข้อมูลที่ 19}
+
+\begin{longtable}{clp{5.5cm}lc}
+\caption{ชั้นข้อมูลคุณภาพอากาศ PM2.5} \\
+\toprule
+\textbf{ลำดับ} & \textbf{ชื่อชั้นข้อมูล} & \textbf{URL/Endpoint} & \textbf{ประเภท} & \textbf{สถานะ} \\
+\midrule
+\endhead
+19 & ข้อมูล PM2.5 &
+  \small\texttt{bmagis.../air\_quality\_data/FeatureServer/0}
+  & FeatureServer & \checkmark \\
+\bottomrule
+\end{longtable}
+
+\subsection{แหล่งมลพิษ (Pollution Sources) --- ชั้นข้อมูลที่ 20--28}
+
+9 ประเภทแหล่งมลพิษฝุ่นละอองตาม TOR จากบริการ dust\_pollution MapServer:
+
+\begin{longtable}{clp{5.5cm}lc}
+\caption{ชั้นข้อมูลแหล่งกำเนิดฝุ่นละออง 9 ประเภท} \\
+\toprule
+\textbf{ลำดับ} & \textbf{ชื่อชั้นข้อมูล} & \textbf{URL/Endpoint} & \textbf{ประเภท} & \textbf{สถานะ} \\
+\midrule
+\endhead
+20 & กิจการแพลนท์ปูน (Cement Plants) &
+  \small\texttt{bmamap.../dust\_pollution/MapServer/0}
+  & MapServer & \checkmark \\
+\midrule
+21 & โครงการก่อสร้าง (Construction) &
+  \small\texttt{bmamap.../dust\_pollution/MapServer/1}
+  & MapServer & \checkmark \\
+\midrule
+22 & โรงงาน รง.3 (Factories) &
+  \small\texttt{bmamap.../dust\_pollution/MapServer/2}
+  & MapServer & \checkmark \\
+\midrule
+23 & กิจการทำธูป (Incense Makers) &
+  \small\texttt{bmamap.../dust\_pollution/MapServer/3}
+  & MapServer & \checkmark \\
+\midrule
+24 & ร้านพ่นสี (Paint Shops) &
+  \small\texttt{bmamap.../dust\_pollution/MapServer/4}
+  & MapServer & \checkmark \\
+\midrule
+25 & จุดตรวจควันดำ (Smoke Check Stations) &
+  \small\texttt{bmamap.../dust\_pollution/MapServer/5}
+  & MapServer & \checkmark \\
+\midrule
+26 & จุดตรวจวัดค่าฝุ่น (Dust Stations) &
+  \small\texttt{bmamap.../dust\_pollution/MapServer/6}
+  & MapServer & \checkmark \\
+\midrule
+27 & กิจการหม้อไอน้ำ (Boilers) &
+  \small\texttt{bmamap.../dust\_pollution/MapServer/7}
+  & MapServer & \checkmark \\
+\midrule
+28 & กิจการหลอมโลหะ (Metal Smelting) &
+  \small\texttt{bmamap.../dust\_pollution/MapServer/8}
+  & MapServer & \checkmark \\
+\bottomrule
+\end{longtable}
+
+\subsection{สรุปภาพรวมชั้นข้อมูล}
+
+\begin{table}[H]
+\centering
+\caption{สรุปจำนวนชั้นข้อมูลภูมิสารสนเทศจำแนกตามหมวดหมู่}
+\begin{tabular}{clc}
+\toprule
+\textbf{ลำดับ} & \textbf{หมวดหมู่ (Category)} & \textbf{จำนวนชั้นข้อมูล} \\
+\midrule
+1 & แผนที่ฐาน (Base Maps) & 3 \\
+2 & ระบบขนส่งและอาคาร (Transport \& Buildings) & 3 \\
+3 & สถานพยาบาล (Health Facilities) & 3 \\
+4 & สาธารณูปโภค (Infrastructure) & 2 \\
+5 & สถานศึกษา (Education) & 6 \\
+6 & แหล่งพาณิชยกรรม (Commercial) & 1 \\
+7 & คุณภาพอากาศ (Air Quality) & 1 \\
+8 & แหล่งมลพิษ (Pollution Sources) & 9 \\
+\midrule
+  & \textbf{รวมทั้งหมด} & \textbf{28} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{การเชื่อมต่อ API (API Integration Architecture)}
+
+\begin{compactlist}
+  \item \textbf{Protocol:} ArcGIS REST API (MapServer/FeatureServer) $\rightarrow$ GeoJSON normalization
+  \item \textbf{Security:} Aggregate counts per district only --- no individual coordinates stored
+  \item \textbf{Cache:} 1 hour TTL (general layers), 15 minutes (PM2.5 real-time data)
+  \item \textbf{Rate Limit:} Maximum 60 requests/minute per endpoint, 30-second timeout
+  \item \textbf{Fallback:} Graceful degradation --- returns empty collection with error metadata on failure
+  \item \textbf{Privacy:} ข้อมูลพิกัดรายจุดใช้เฉพาะนับจำนวนต่อเขต ไม่เก็บข้อมูลตำแหน่งรายจุด
+\end{compactlist}

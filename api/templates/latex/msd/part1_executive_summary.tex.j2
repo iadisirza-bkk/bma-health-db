@@ -1,0 +1,163 @@
+% =====================================================================
+% Infographic 1 หน้า — สำหรับสื่อมวลชนและแถลงข่าว
+% =====================================================================
+\thispagestyle{empty}
+\begin{center}
+
+\includegraphics[height=1.5cm]{assets/bma_logo.png}\hspace{1cm}
+\includegraphics[height=1.5cm]{assets/msd_logo.png}
+
+\vspace{0.5cm}
+{\LARGE\bmafont\bfseries\color{bmagreen} สรุปผลคัดกรองสุขภาพ กรุงเทพมหานคร \par}
+\vspace{0.3cm}
+{\large\color{bmadark} โครงการคัดกรองสุขภาพประชาชน --- สำนักการแพทย์ กรุงเทพมหานคร \par}
+
+\vspace{0.5cm}
+\rule{\textwidth}{1pt}
+\vspace{0.5cm}
+
+% --- KPI Boxes ---
+\begin{tabular}{ccc}
+\fcolorbox{bmagreen}{bmagreen!10}{\parbox{4cm}{\centering
+  {\Huge\bfseries\color{bmagreen} << data.total_screened|number_format >>}\\[2pt]
+  {\small คนเข้ารับการคัดกรอง}
+}} &
+\fcolorbox{bmagreen}{bmagreen!10}{\parbox{4cm}{\centering
+  {\Huge\bfseries\color{bmagreen} << data.district_count >>}\\[2pt]
+  {\small เขต << data.zone_count >> โซนสุขภาพ}
+}} &
+\fcolorbox{bmagreen}{bmagreen!10}{\parbox{4cm}{\centering
+  {\Huge\bfseries\color{bmagreen} << data.disease_count >>}\\[2pt]
+  {\small โรค NCD วิเคราะห์}
+}} \\
+\end{tabular}
+
+\vspace{0.5cm}
+
+% --- Top 3 Diseases ---
+{\large\bfseries\color{bmagreen} โรค NCD ที่พบมากที่สุด 3 อันดับ \par}
+\vspace{0.3cm}
+
+\begin{tabular}{clc}
+\toprule
+\textbf{อันดับ} & \textbf{โรค (Disease)} & \textbf{ค่าเฉลี่ย} \\
+\midrule
+<% for d in data.top_diseases[:3] %>
+\textbf{\color{bmagreen} << loop.index >>} & << d.name_th >> (<< d.name_en >>) & \textbf{\color{errred} << d.avg_pct >>\%} \\
+<% endfor %>
+\bottomrule
+\end{tabular}
+
+\vspace{0.5cm}
+
+% --- Key Numbers ---
+\begin{tabular}{cc}
+\fcolorbox{errred}{errred!5}{\parbox{6cm}{\centering
+  {\large\bfseries\color{errred} 5 ปัจจัยเสี่ยงหลัก}\\[4pt]
+  {\small เพศ $\bullet$ กลุ่มอายุ $\bullet$ สูบบุหรี่ $\bullet$ ดื่มสุรา $\bullet$ ออกกำลังกาย}\\[4pt]
+  {\footnotesize กลุ่มอายุ 70+ ปี เสี่ยงสูงสุดในเกือบทุกโรค}
+}} &
+\fcolorbox{warnblue}{warnblue!5}{\parbox{6cm}{\centering
+  {\large\bfseries\color{warnblue} 8 โซนสุขภาพ}\\[4pt]
+  {\small ครอบคลุม 50 เขต กทม.}\\[4pt]
+  {\footnotesize ศูนย์บริการสาธารณสุข 69 แห่ง $\bullet$ รพ. 11 แห่ง}
+}} \\
+\end{tabular}
+
+\vspace{0.5cm}
+
+% --- Disease overview chart ---
+\IfFileExists{charts/disease_overview.png}{%
+\includegraphics[width=0.85\textwidth]{charts/disease_overview.png}
+}{}
+
+\vspace{0.3cm}
+\rule{\textwidth}{0.5pt}
+\vspace{0.2cm}
+
+{\footnotesize\color{gray}
+ข้อมูลรวมระดับเขต (Aggregate District-Level) $\bullet$
+ไม่มีข้อมูลส่วนบุคคล $\bullet$
+PDPA Compliant\\
+Dashboard: health2.bangkok.go.th $\bullet$
+สายด่วนสุขภาพ: 1555\\
+สำนักการแพทย์ กรุงเทพมหานคร $\bullet$ << generated_date >> \par}
+
+\end{center}
+\newpage
+
+% =====================================================================
+% ส่วนที่ 1: บทสรุปผู้บริหาร (Executive Summary) — TOR 1.1.5
+% =====================================================================
+\section{บทสรุปผู้บริหาร (Executive Summary)}
+
+รายงานฉบับนี้เป็นผลการวิเคราะห์ข้อมูลโครงการคัดกรองสุขภาพ กรุงเทพมหานคร
+จากผู้เข้ารับการคัดกรอง \textbf{<< data.total_screened|number_format >>} คน
+ใน \textbf{<< data.district_count >>} เขต \textbf{<< data.zone_count >>} โซนสุขภาพ (Health Zone)
+ครอบคลุมโรคไม่ติดต่อเรื้อรัง (Non-Communicable Diseases: NCD) \textbf{<< data.disease_count >>} โรค
+จำแนกตามปัจจัยนำ (Leading Factors) 5 เรื่อง: เพศ (Sex) กลุ่มอายุ (Age Group)
+การสูบบุหรี่ (Smoking) การดื่มสุรา (Alcohol) และการออกกำลังกาย (Exercise)
+
+\subsection{ตัวชี้วัดสำคัญ (Key Performance Indicators: KPI)}
+
+\begin{table}[H]
+\centering
+\caption{ตัวชี้วัดสำคัญของโครงการคัดกรองสุขภาพ กทม.}
+\begin{tabular}{lc}
+\toprule
+\textbf{ตัวชี้วัด (Indicator)} & \textbf{ค่า (Value)} \\
+\midrule
+\kvrow{จำนวนผู้คัดกรอง (Screened Population)}{<< data.total_screened|number_format >> คน}
+\kvrow{จำนวนเขตที่ครอบคลุม (Districts Covered)}{<< data.district_count >> เขต}
+\kvrow{จำนวนโซนสุขภาพ (Health Zones)}{<< data.zone_count >> โซน}
+\kvrow{โรค NCD ที่วิเคราะห์ (NCD Diseases Analyzed)}{<< data.disease_count >> โรค}
+\kvrow{ปัจจัยนำที่วิเคราะห์ (Risk Factors Analyzed)}{5 ปัจจัย}
+\kvrow{ศูนย์บริการสาธารณสุข (Health Centers)}{69 แห่ง}
+\kvrow{โรงพยาบาลสังกัด สนพ. (MSD Hospitals)}{11 แห่ง}
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{โรคที่มีความเสี่ยงสูงสุด 3 อันดับแรก (Top 3 High-Risk Diseases)}
+
+\begin{table}[H]
+\centering
+\caption{โรค NCD ที่มีอัตราความเสี่ยงสูงสุด 3 อันดับแรก จากผู้คัดกรอง << data.total_screened|number_format >> คน}
+\begin{tabular}{clccc}
+\toprule
+\textbf{อันดับ} & \textbf{โรค (Disease)} & \textbf{ค่าเฉลี่ย (\%)} & \textbf{สูงสุด (\%)} & \textbf{ต่ำสุด (\%)} \\
+\midrule
+<% for d in data.top_diseases %>
+<< loop.index >> & << d.name_th >> (<< d.name_en >>) & \riskcell{<< d.avg_pct >>} & << d.max_pct >>\% & << d.min_pct >>\% \\
+<% endfor %>
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{QR Code --- เข้าถึง Dashboard แบบ Interactive}
+
+\begin{center}
+\fcolorbox{bmagreen}{bmagreen!5}{%
+\parbox{0.85\textwidth}{%
+\centering
+\textbf{\color{bmagreen} สแกน QR Code เพื่อเข้าถึง Dashboard แบบ Interactive}\\[6pt]
+\texttt{https://health2.bangkok.go.th} --- Dashboard สำนักการแพทย์\\[4pt]
+\texttt{http://localhost:3000} --- ระบบวิเคราะห์ข้อมูลเชิงพื้นที่ (ส่วนเสริม)\\[8pt]
+{\small สามารถดูแผนที่ความเสี่ยงรายเขต กรองตามโรค/ปัจจัย ถาม AI Assistant\\
+ดาวน์โหลด CSV/Excel เปรียบเทียบโซน ดู Ranking/Compare ได้ทันที}%
+}}
+\end{center}
+
+\subsection{ข้อค้นพบสำคัญ (Key Findings)}
+
+\begin{enumerate}
+<% for d in data.city_disease_summary[:3] %>
+  \item \textbf{<< d.name_th >> (<< d.name_en >>)} มีอัตราเสี่ยงเฉลี่ย \textbf{<< d.avg_pct >>\%}
+    โดยเขตที่มีความเสี่ยงสูงสุดอยู่ที่ << d.max_pct >>\% และต่ำสุด << d.min_pct >>\%
+    (ส่วนเบี่ยงเบนมาตรฐาน (Standard Deviation: SD) = << d.std_pct >>)
+<% endfor %>
+  \item ปัจจัยนำที่มีอิทธิพลสูงสุดคือ \textbf{กลุ่มอายุ (Age Group)} โดยกลุ่ม 70 ปีขึ้นไป
+    มีความเสี่ยงสูงกว่ากลุ่มอ้างอิงในทุกโรค
+  \item \textbf{การสูบบุหรี่ (Smoking)} เพิ่มความเสี่ยงโรคระบบทางเดินหายใจเรื้อรัง
+    (Chronic Respiratory Disease) สูงถึง 3 เท่าของผู้ไม่สูบ
+\end{enumerate}

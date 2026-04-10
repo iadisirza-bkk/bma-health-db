@@ -1,0 +1,131 @@
+% =============================================================================
+% รายงานวิเคราะห์ข้อมูลโครงการคัดกรองสุขภาพ กรุงเทพมหานคร
+% ฉบับสมบูรณ์ สำนักการแพทย์ (สนพ.)
+%
+% Auto-generated: ตัวเลข กราฟ ตาราง อัพเดตอัตโนมัติเมื่อข้อมูลเปลี่ยน
+% Auto-generated from Jinja2 templates
+% =============================================================================
+\documentclass[11pt,a4paper]{article}
+
+\newcommand{\bmaheaderleft}{รายงานวิเคราะห์ข้อมูลคัดกรองสุขภาพ กทม.}
+\newcommand{\bmaversion}{ฉบับสมบูรณ์ สนพ.}
+\input{bma_article_preamble}
+
+% --- Thai font (Google Sans supports Thai+Latin) ---
+\setmainfont{GoogleSans-Regular.ttf}[Path=assets/, BoldFont=GoogleSans-Bold.ttf]
+\setsansfont{GoogleSans-Regular.ttf}[Path=assets/, BoldFont=GoogleSans-Bold.ttf]
+\setdefaultlanguage{english}
+
+% --- Additional packages ---
+\usepackage{pdflscape}
+
+% --- Counters ---
+\setcounter{secnumdepth}{3}
+\setcounter{tocdepth}{2}
+
+\begin{document}
+
+% ===================== TITLE PAGE =====================
+\begin{titlepage}
+\centering
+\vspace*{0.5cm}
+\includegraphics[height=2.5cm]{assets/bma_logo.png}\hspace{2cm}
+\includegraphics[height=2.5cm]{assets/msd_logo.png}
+\vspace{2cm}
+
+{\Huge\bmafont\bfseries\color{bmagreen}
+รายงานวิเคราะห์ข้อมูล\\[0.3cm]
+โครงการคัดกรองสุขภาพ\\[0.3cm]
+กรุงเทพมหานคร \par}
+\vspace{0.8cm}
+{\Large\bmafont\color{bmadark}
+Comprehensive Health Screening Analysis Report \par}
+\vspace{2cm}
+
+\begin{tabular}{c}
+  {\large\bmafont สำนักการแพทย์ กรุงเทพมหานคร} \\[4pt]
+  {\large\bmafont Medical Service Department, BMA} \\[16pt]
+  \hline \\[8pt]
+  {\normalsize จำนวนผู้เข้ารับการคัดกรอง (Screened Population):
+    \textbf{<< data.total_screened|number_format >>} คน} \\[4pt]
+  {\normalsize พื้นที่ครอบคลุม: \textbf{<< data.district_count >>} เขต
+    \textbf{<< data.zone_count >>} โซนสุขภาพ (Health Zone)} \\[4pt]
+  {\normalsize โรคไม่ติดต่อเรื้อรัง (Non-Communicable Diseases: NCD):
+    \textbf{<< data.disease_count >>} โรค} \\[4pt]
+  {\normalsize ปัจจัยนำ (Leading Risk Factors): \textbf{5} ปัจจัย} \\
+\end{tabular}
+\vspace{3cm}
+
+{\large << generated_date >> \par}
+\vspace{0.5cm}
+{\small\color{gray}
+ข้อมูลรวมระดับเขต (Aggregate District-Level Data) เท่านั้น --- ไม่มีข้อมูลส่วนบุคคล\\
+สอดคล้องกับ พ.ร.บ.คุ้มครองข้อมูลส่วนบุคคล พ.ศ. 2562 (PDPA)\\[4pt]
+ส่วนเสริม Dashboard สำนักการแพทย์ (health2.bangkok.go.th) \par}
+\end{titlepage}
+
+% ===================== TABLE OF CONTENTS =====================
+\tableofcontents
+\newpage
+\listoftables
+\listoffigures
+\newpage
+
+% ===================== PARTS =====================
+\input{msd/part1_executive_summary}
+\newpage
+\input{msd/part2_introduction}
+\newpage
+\input{msd/part2b_system_overview}
+\newpage
+\input{msd/part3_methodology}
+\newpage
+\input{msd/part4_descriptive}
+\newpage
+\input{msd/part4b_descriptive_screening}
+\newpage
+\input{msd/part4c_descriptive_mental}
+\newpage
+\input{msd/part4d_descriptive_socio}
+\newpage
+\input{msd/part5_factor_analysis}
+\newpage
+\input{msd/part6_inferential}
+\newpage
+\input{msd/part6b_logistic}
+\newpage
+\input{msd/part6c_comorbidity}
+\newpage
+\input{msd/part7_trend}
+\newpage
+\input{msd/part7b_seasonal}
+\newpage
+\input{msd/part8_zones}
+\newpage
+<# \input{msd/part8b_zone_comparison} — disabled pending data fix #>
+
+\input{msd/part9_policy}
+\newpage
+
+% ===================== APPENDICES =====================
+\appendix
+\input{msd/appendix_a_schema}
+\newpage
+\input{msd/appendix_b_factors}
+\newpage
+\input{msd/appendix_c_zones}
+\newpage
+\input{msd/appendix_d_api_layers}
+\newpage
+\input{msd/appendix_d_references}
+
+\vspace{2cm}
+\begin{center}
+\rule{0.5\textwidth}{0.5pt}\\[0.5cm]
+{\small\color{gray}
+รายงานฉบับนี้สร้างอัตโนมัติจากข้อมูลคัดกรองสุขภาพจริง\\
+ตัวเลข กราฟ ตาราง อัพเดตทุกครั้งที่มีข้อมูลใหม่\\[0.3cm]
+สำนักการแพทย์ กรุงเทพมหานคร $\bullet$ << generated_date >>}
+\end{center}
+
+\end{document}

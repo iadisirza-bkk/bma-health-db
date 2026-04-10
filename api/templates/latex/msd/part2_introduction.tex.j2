@@ -1,0 +1,70 @@
+% =====================================================================
+% ส่วนที่ 2: บทนำ (Introduction) — TOR 1.1
+% =====================================================================
+\section{บทนำ (Introduction)}
+
+\subsection{ที่มาและความสำคัญ (Background)}
+
+กรุงเทพมหานครเป็นเมืองหลวงที่มีประชากรมากกว่า 5.5 ล้านคน (ทะเบียนราษฎร์)
+และประชากรแฝงอีกกว่า 4 ล้านคน โรคไม่ติดต่อเรื้อรัง (Non-Communicable Diseases: NCD)
+เป็นสาเหตุการเสียชีวิตอันดับหนึ่งของคนไทย คิดเป็นร้อยละ 74 ของการเสียชีวิตทั้งหมด
+สำนักการแพทย์ กรุงเทพมหานคร (Medical Service Department: MSD) จึงจัดโครงการ
+คัดกรองสุขภาพเชิงรุก ครอบคลุม << data.district_count >> เขต << data.zone_count >> โซนสุขภาพ
+เพื่อค้นหากลุ่มเสี่ยงและวางแผนส่งเสริมสุขภาพ
+
+\subsection{วัตถุประสงค์ (Objectives)}
+
+\begin{enumerate}
+  \item วิเคราะห์ข้อมูลคัดกรองสุขภาพของประชาชนอย่างน้อย 500,000 คน
+    (ผลจริง: \textbf{<< data.total_screened|number_format >>} คน) โดยใช้วิธีการทางสถิติเชิงพรรณนา
+    (Descriptive Statistics) สถิติเชิงอนุมาน (Inferential Statistics)
+    และแบบจำลองการวิเคราะห์แนวโน้ม (Trend Analysis)
+  \item สรุปและนำเสนอข้อมูลในรูปแบบกราฟ แผนภูมิ ตาราง และคำอธิบายที่เข้าใจง่าย
+  \item ใช้สถิติเชิงอนุมานทดสอบสมมติฐานและระบุความสัมพันธ์ระหว่างปัจจัยเสี่ยงกับโรค NCD
+  \item พัฒนาแบบจำลองวิเคราะห์แนวโน้มเพื่อประเมินความแตกต่างตามช่วงเวลาและฤดูกาล
+  \item จัดทำรายงานสรุปผลพร้อมข้อเสนอแนะเชิงนโยบาย
+\end{enumerate}
+
+\subsection{ขอบเขตการวิเคราะห์ (Scope of Analysis)}
+
+\begin{table}[H]
+\centering
+\caption{ขอบเขตการวิเคราะห์ตามข้อกำหนด TOR}
+\begin{tabular}{lp{9cm}}
+\toprule
+\textbf{หมวด (Category)} & \textbf{รายละเอียด (Details)} \\
+\midrule
+\kvrow{โรค NCD 8 โรค}{เบาหวาน (DM), ความดันโลหิตสูง (HT), ไขมันในเลือดผิดปกติ (DLP),
+  โรคหลอดเลือดหัวใจ (CVD), โรคหลอดเลือดสมอง (Stroke), โรคไตเรื้อรัง (CKD),
+  โรคโลหิตจาง (Anemia), โรคทางเดินหายใจเรื้อรัง (CRD)}
+\kvrow{ผลตรวจเพิ่มเติม 4 อย่าง}{คลื่นไฟฟ้าหัวใจ (EKG), เอกซเรย์ปอด (Chest X-ray),
+  ตรวจเลือด (Blood Test: FBS/Cholesterol/Creatinine), ตรวจจอประสาทตา (Fundoscopy)}
+\kvrow{ปัจจัยนำ 5 เรื่อง}{เพศ (Sex), กลุ่มอายุ (Age Group), การสูบบุหรี่ (Smoking),
+  การดื่มสุรา (Alcohol), การออกกำลังกาย (Exercise)}
+\kvrow{พื้นที่}{<< data.district_count >> เขต << data.zone_count >> โซนสุขภาพ กทม.}
+\kvrow{จำนวนข้อมูล}{<< data.total_screened|number_format >> คน (เป้าหมาย 1,000,000 คน)}
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{โครงสร้างโซนสุขภาพ กรุงเทพมหานคร (BMA Health Zone Structure)}
+
+กรุงเทพมหานครแบ่งพื้นที่การดูแลสุขภาพเป็น 8 โซนสุขภาพ (Health Zone)
+แต่ละโซนมีโรงพยาบาลสังกัดสำนักการแพทย์เป็นแม่ข่าย (Health Zone Manager)
+โดยมีศูนย์บริการสาธารณสุข (Area Manager) เป็นหน่วยบริการระดับพื้นที่
+
+\begin{table}[H]
+\centering
+\caption{โครงสร้าง 8 โซนสุขภาพ กรุงเทพมหานคร}
+\begin{tabular}{clcr}
+\toprule
+\textbf{โซน} & \textbf{โรงพยาบาลแม่ข่าย (Health Zone Manager)} & \textbf{เขต} & \textbf{คัดกรอง} \\
+\midrule
+<% for zone in data.zone_summaries %>
+<< zone.zone >> & << zone.facilitator >> & << zone.districts >> & << zone.total_screened|number_format >> \\
+<% endfor %>
+\midrule
+\textbf{รวม} & & \textbf{<< data.district_count >>} & \textbf{<< data.total_screened|number_format >>} \\
+\bottomrule
+\end{tabular}
+\end{table}

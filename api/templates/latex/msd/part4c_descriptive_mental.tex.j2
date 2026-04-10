@@ -1,0 +1,83 @@
+% =====================================================================
+% ส่วนที่ 4ค: การคัดกรองสุขภาพจิต (Mental Health Screening) — TOR 1.1.2
+% =====================================================================
+\section{การคัดกรองสุขภาพจิต (Mental Health Screening)}
+
+การคัดกรองสุขภาพจิตเป็นส่วนหนึ่งของโครงการคัดกรองสุขภาพ กทม.
+ประกอบด้วยแบบคัดกรอง 3 ชุด ตามมาตรฐานกรมสุขภาพจิต
+
+\subsection{แบบคัดกรองซึมเศร้า 2 คำถาม (2-Question Depression Screening: 2Q)}
+
+แบบคัดกรอง 2Q ใช้คำถาม 2 ข้อ (scr2q1, scr2q2) เพื่อคัดกรองเบื้องต้น
+ผู้ที่ตอบ ``ใช่'' อย่างน้อย 1 ข้อจะถูกส่งต่อทำแบบประเมิน 9Q
+
+\begin{table}[H]
+\centering
+\caption{ผลการคัดกรองซึมเศร้า 2Q จากผู้คัดกรอง << data.total_screened|number_format >> คน}
+\begin{tabular}{lr}
+\toprule
+\textbf{ผลคัดกรอง} & \textbf{ร้อยละ (\%)} \\
+\midrule
+ผลบวก (Positive --- เข้าข่ายซึมเศร้า) & \riskcell{<< data.mental_health.depression_2q_positive_pct >>} \\
+ผลลบ (Negative --- ปกติ) & << 100 - data.mental_health.depression_2q_positive_pct >>\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{แบบประเมินโรคซึมเศร้า 9 คำถาม (PHQ-9: Patient Health Questionnaire)}
+
+แบบประเมิน 9Q (scn9q1--scn9q9) ใช้ประเมินระดับความรุนแรงของโรคซึมเศร้า
+คะแนนรวม 0--27 คะแนน แบ่งเป็น 5 ระดับ
+
+\begin{table}[H]
+\centering
+\caption{การกระจายระดับความรุนแรงซึมเศร้าตามแบบประเมิน PHQ-9}
+\label{tab:phq9}
+\begin{tabular}{llr}
+\toprule
+\textbf{ระดับ (Severity)} & \textbf{คะแนน (Score)} & \textbf{ร้อยละ (\%)} \\
+\midrule
+น้อยมาก (Minimal) & 0--4 & << data.mental_health.phq9_distribution.minimal >>\% \\
+เล็กน้อย (Mild) & 5--9 & << data.mental_health.phq9_distribution.mild >>\% \\
+ปานกลาง (Moderate) & 10--14 & << data.mental_health.phq9_distribution.moderate >>\% \\
+ค่อนข้างรุนแรง (Moderately Severe) & 15--19 & << data.mental_health.phq9_distribution.moderately_severe >>\% \\
+รุนแรง (Severe) & 20--27 & \riskcell{<< data.mental_health.phq9_distribution.severe >>} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\IfFileExists{charts/bar_phq9.png}{%
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.7\textwidth]{charts/bar_phq9.png}
+\caption{แผนภูมิแท่ง (Bar Chart) การกระจายระดับความรุนแรงซึมเศร้าตามแบบประเมิน PHQ-9}
+\label{fig:bar_phq9}
+\end{figure}
+}{}
+
+\subsection{แบบประเมินกิจกรรมทางกาย ST5 (Physical Activity: ST5)}
+
+แบบประเมิน ST5 (st501--st505) ประเมินระดับกิจกรรมทางกาย 5 คำถาม
+คำตอบ: 0=น้อยกว่า 1 ครั้ง/สัปดาห์, 1=2-3 ครั้ง/สัปดาห์, 2=4-5 ครั้ง/สัปดาห์, 3=มากกว่า 6 ครั้ง/สัปดาห์
+
+ผู้ที่มีกิจกรรมทางกายเพียงพอ (Active): ร้อยละ \textbf{<< data.mental_health.st5_active_pct >>}
+
+\subsection{การจัดการความเครียด (Stress Management)}
+
+\begin{table}[H]
+\centering
+\caption{วิธีจัดการความเครียดของผู้เข้ารับการคัดกรอง}
+\begin{tabular}{lr}
+\toprule
+\textbf{วิธีจัดการ (Method)} & \textbf{ร้อยละ (\%)} \\
+\midrule
+ปรึกษาเพื่อน/ครอบครัว (Consult Friends/Family) & << data.mental_health.stress_management.consult_friend >>\% \\
+ปรึกษาบุคลากรสาธารณสุข (Consult Health Worker) & << data.mental_health.stress_management.consult_health_worker >>\% \\
+เก็บไว้ในใจ (Keep to Self) & << data.mental_health.stress_management.keep_to_self >>\% \\
+อื่นๆ (Other: ออกกำลังกาย ทำสมาธิ ฯลฯ) & << data.mental_health.stress_management.other >>\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{ข้อสังเกต:} ร้อยละ << data.mental_health.stress_management.keep_to_self >> ของผู้คัดกรอง
+เลือกเก็บความเครียดไว้ในใจ ซึ่งเป็นกลุ่มที่ควรได้รับการสนับสนุนด้านสุขภาพจิตเชิงรุก

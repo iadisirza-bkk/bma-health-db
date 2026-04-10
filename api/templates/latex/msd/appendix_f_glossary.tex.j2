@@ -1,0 +1,155 @@
+% =====================================================================
+% ภาคผนวก ฉ: อภิธานศัพท์ทางสถิติและการแพทย์
+% (Appendix F: Statistical & Medical Glossary)
+% =====================================================================
+\section{อภิธานศัพท์ทางสถิติและการแพทย์ (Statistical \& Medical Glossary)}
+\label{sec:glossary}
+
+รวบรวมคำศัพท์ทางสถิติ การแพทย์ ระบาดวิทยา และระบบสุขภาพ
+ที่ใช้ในรายงานฉบับนี้ เรียงลำดับตามอักษรไทย
+
+% =====================================================================
+\subsection{ศัพท์ทางสถิติ (Statistical Terms)}
+
+\begin{longtable}{p{4cm}p{4.5cm}p{6.5cm}}
+\caption{อภิธานศัพท์ทางสถิติ (Statistical Glossary)}
+\label{tab:glossary_stats} \\
+\toprule
+\textbf{คำไทย} & \textbf{English (Abbr.)} & \textbf{คำอธิบาย} \\
+\midrule
+\endhead
+การถดถอยโลจิสติก & Logistic Regression & แบบจำลองทำนายตัวแปรตาม (outcome) ที่เป็นแบบ 2 ค่า (binary) โดยใช้ตัวแปรอิสระหลายตัว \\
+\midrule
+การวิเคราะห์ความแปรปรวน & Analysis of Variance (ANOVA) & ทดสอบว่าค่าเฉลี่ยของกลุ่มตั้งแต่ 3 กลุ่มขึ้นไปแตกต่างกันอย่างมีนัยสำคัญหรือไม่ \\
+\midrule
+การแยกส่วนประกอบตามฤดูกาล & Seasonal Decomposition & แยกอนุกรมเวลาออกเป็นส่วนประกอบ: แนวโน้ม (Trend), ฤดูกาล (Seasonal), ค่าคงเหลือ (Residual) \\
+\midrule
+ขนาดอิทธิพล & Effect Size & ขนาดของความแตกต่างหรือความสัมพันธ์ ใช้เสริม p-value เพื่อบอกความหมายเชิงปฏิบัติ \\
+\midrule
+ค่า p & p-value & ความน่าจะเป็นที่จะได้ผลลัพธ์รุนแรงเท่าหรือมากกว่าที่สังเกตได้ ภายใต้สมมติฐานว่าง (null hypothesis) \\
+\midrule
+ค่าสัมประสิทธิ์สหสัมพันธ์เพียร์สัน & Pearson Correlation ($r$) & วัดความสัมพันธ์เชิงเส้นตรงระหว่างตัวแปรต่อเนื่อง 2 ตัว ค่าอยู่ระหว่าง $-1$ ถึง $+1$ \\
+\midrule
+ค่าสัมประสิทธิ์สหสัมพันธ์สเปียร์แมน & Spearman Correlation ($\rho$) & วัดความสัมพันธ์แบบอันดับ (monotonic) ระหว่างตัวแปร 2 ตัว ใช้เมื่อข้อมูลไม่เป็นปกติ \\
+\midrule
+ช่วงความเชื่อมั่น & Confidence Interval (CI) & ช่วงค่าที่ประมาณว่าค่าจริงในประชากรจะอยู่ภายในช่วงนี้ด้วยความเชื่อมั่นที่กำหนด (เช่น 95\%) \\
+\midrule
+ทดสอบ Mann-Kendall & Mann-Kendall Trend Test & ทดสอบแนวโน้มเพิ่มขึ้นหรือลดลงในอนุกรมเวลา โดยไม่ต้องสมมติการแจกแจง \\
+\midrule
+ทดสอบไคสแควร์ & Chi-Square Test ($\chi^2$) & ทดสอบความเป็นอิสระ (independence) ระหว่างตัวแปรเชิงกลุ่ม (categorical) 2 ตัว \\
+\midrule
+พื้นที่ใต้เส้นโค้ง ROC & Area Under the ROC Curve (AUC-ROC) & วัดความสามารถในการจำแนกของแบบจำลอง ค่า 0.5 = สุ่ม ค่า 1.0 = สมบูรณ์แบบ \\
+\midrule
+แบบจำลอง ARIMA & Autoregressive Integrated Moving Average (ARIMA) & แบบจำลองอนุกรมเวลาที่ผสม autoregressive, differencing, และ moving average \\
+\midrule
+วัดขนาดอิทธิพล Cram\'{e}r's V & Cram\'{e}r's V & วัดขนาดความสัมพันธ์จาก Chi-Square: เล็ก ($<0.1$), กลาง ($0.1$--$0.3$), ใหญ่ ($>0.3$) \\
+\midrule
+สถิติ Hosmer-Lemeshow & Hosmer-Lemeshow Test & ทดสอบความเหมาะสม (goodness-of-fit) ของแบบจำลองโลจิสติก $p > 0.05$ = เหมาะสม \\
+\midrule
+สถิติ Nagelkerke $R^2$ & Nagelkerke $R^2$ & วัดสัดส่วนความแปรปรวนที่แบบจำลองโลจิสติกอธิบายได้ ค่าอยู่ระหว่าง 0 ถึง 1 \\
+\midrule
+อัตราส่วนออดส์ & Odds Ratio (OR) & อัตราส่วนของออดส์ในกลุ่มเปิดรับต่อกลุ่มอ้างอิง OR $> 1$ = เสี่ยงเพิ่ม OR $< 1$ = ป้องกัน \\
+\bottomrule
+\end{longtable}
+
+% =====================================================================
+\subsection{ศัพท์ทางการแพทย์ (Medical Terms)}
+
+\begin{longtable}{p{4cm}p{4.5cm}p{6.5cm}}
+\caption{อภิธานศัพท์ทางการแพทย์ (Medical Glossary)}
+\label{tab:glossary_medical} \\
+\toprule
+\textbf{คำไทย} & \textbf{English (Abbr.)} & \textbf{คำอธิบาย} \\
+\midrule
+\endhead
+กรดยูริก & Uric Acid & สารเคมีในเลือดที่เกิดจากการสลายพิวรีน ค่าสูงเสี่ยงโรคเก๊าท์ \\
+\midrule
+คลื่นไฟฟ้าหัวใจ & Electrocardiogram (EKG) & บันทึกสัญญาณไฟฟ้าหัวใจ ใช้คัดกรองภาวะหัวใจเต้นผิดจังหวะ \\
+\midrule
+ค่าการกรองของไต & Estimated GFR (eGFR) & ค่าประมาณอัตราการกรองของไต (mL/min/1.73m$^2$) ค่าต่ำหมายถึงไตทำงานบกพร่อง \\
+\midrule
+ค่าครีอะตินีน & Creatinine (Cr) & ของเสียจากกล้ามเนื้อที่ไตกรองออก ค่าสูงบ่งชี้ไตทำงานบกพร่อง \\
+\midrule
+ค่าน้ำตาลในเลือดขณะอดอาหาร & Fasting Blood Sugar (FBS) & ระดับกลูโคสหลังอดอาหาร 8 ชม. ค่า $\geq 126$ mg/dL = เบาหวาน \\
+\midrule
+ค่ายูเรียไนโตรเจน & Blood Urea Nitrogen (BUN) & ของเสียจากโปรตีน ค่าสูงบ่งชี้ไตทำงานบกพร่องหรือขาดน้ำ \\
+\midrule
+ค่าเอนไซม์ตับ & SGOT / SGPT & เอนไซม์ตับ (Serum Glutamic Oxaloacetic/Pyruvic Transaminase) ค่าสูงบ่งชี้ตับอักเสบ \\
+\midrule
+คัดกรองเบาหวานขึ้นจอตา & DR Screening (Diabetic Retinopathy) & ตรวจจอประสาทตาในผู้ป่วยเบาหวานเพื่อหาภาวะจอตาเสื่อม \\
+\midrule
+คัดกรองมะเร็งลำไส้ใหญ่ & FIT Test (Fecal Immunochemical Test) & ตรวจเลือดแฝงในอุจจาระเพื่อคัดกรองมะเร็งลำไส้ใหญ่ \\
+\midrule
+ความดันโลหิต & Blood Pressure (SBP/DBP) & แรงดันเลือดในหลอดเลือด --- Systolic (บน) / Diastolic (ล่าง) mmHg \\
+\midrule
+ความสมบูรณ์ของเม็ดเลือด & Complete Blood Count (CBC) & ตรวจนับเม็ดเลือดแดง ขาว เกล็ดเลือด ฮีโมโกลบิน \\
+\midrule
+ดัชนีมวลกาย & Body Mass Index (BMI) & น้ำหนัก (กก.) $/$ ส่วนสูง (ม.)$^2$ --- ค่า $\geq 25$ = น้ำหนักเกิน $\geq 30$ = อ้วน \\
+\midrule
+เอกซเรย์ปอด & Chest X-ray (CXR) & ถ่ายภาพรังสีทรวงอกเพื่อคัดกรองวัณโรคและโรคปอดอื่น \\
+\midrule
+แบบคัดกรอง 2Q/9Q & 2Q / PHQ-9 & แบบคัดกรองภาวะซึมเศร้า: 2Q (เบื้องต้น) และ PHQ-9 (วัดความรุนแรง 0--27 คะแนน) \\
+\midrule
+โรคไม่ติดต่อเรื้อรัง & Non-Communicable Disease (NCD) & โรคที่ไม่ติดต่อจากคนสู่คน เช่น เบาหวาน ความดันสูง มะเร็ง \\
+\midrule
+โคเลสเตอรอล & Total Cholesterol (TC) & ไขมันรวมในเลือด ค่า $\geq 200$ mg/dL = สูง \\
+\midrule
+ไขมันดี & High-Density Lipoprotein (HDL) & ไลโปโปรตีนความหนาแน่นสูง --- ช่วยขนไขมันออกจากหลอดเลือด ค่าต่ำ = เสี่ยง \\
+\midrule
+ไขมันเลว & Low-Density Lipoprotein (LDL) & ไลโปโปรตีนความหนาแน่นต่ำ --- สะสมในหลอดเลือด ค่าสูง = เสี่ยง \\
+\midrule
+ไตรกลีเซอไรด์ & Triglyceride (TG) & ไขมันในเลือด ค่า $\geq 150$ mg/dL = สูง \\
+\midrule
+ไวรัส HPV & Human Papillomavirus (HPV) & ไวรัสที่เป็นสาเหตุหลักของมะเร็งปากมดลูก ตรวจคัดกรองด้วย HPV DNA test \\
+\bottomrule
+\end{longtable}
+
+% =====================================================================
+\subsection{ศัพท์ทางระบาดวิทยา (Epidemiological Terms)}
+
+\begin{longtable}{p{4cm}p{4.5cm}p{6.5cm}}
+\caption{อภิธานศัพท์ทางระบาดวิทยา (Epidemiological Glossary)}
+\label{tab:glossary_epi} \\
+\toprule
+\textbf{คำไทย} & \textbf{English (Abbr.)} & \textbf{คำอธิบาย} \\
+\midrule
+\endhead
+การเลือกกลุ่มตัวอย่างแบบลำเอียง & Selection Bias & ความคลาดเคลื่อนจากการเลือกกลุ่มตัวอย่างที่ไม่เป็นตัวแทนประชากร \\
+\midrule
+ความชุก & Prevalence & สัดส่วนผู้ป่วย/ผู้มีความเสี่ยงในประชากร ณ จุดเวลาหนึ่ง \\
+\midrule
+ความเสี่ยงสัมพัทธ์ & Relative Risk (RR) & อัตราส่วนของความเสี่ยงในกลุ่มเปิดรับต่อกลุ่มอ้างอิง \\
+\midrule
+ตัวแปรกวน & Confounders & ตัวแปรที่เกี่ยวข้องทั้งกับตัวแปรอิสระและตัวแปรตาม อาจทำให้เกิดความสัมพันธ์เทียม \\
+\midrule
+ปัญหาอนุมานระดับกลุ่ม & Ecological Fallacy & การอนุมานผลจากข้อมูลรวม (aggregate) ไปสู่ระดับบุคคลอย่างไม่ถูกต้อง \\
+\midrule
+อัตราการเกิดโรคใหม่ & Incidence & จำนวนผู้ป่วยรายใหม่ต่อประชากร ณ ช่วงเวลาที่กำหนด \\
+\midrule
+อัตราส่วนออดส์ & Odds Ratio (OR) & อัตราส่วนของออดส์ในกลุ่มเปิดรับต่อกลุ่มอ้างอิง ใช้ในงานวิจัยแบบ case-control \\
+\bottomrule
+\end{longtable}
+
+% =====================================================================
+\subsection{ศัพท์ระบบสุขภาพ กทม. (BMA Health System Terms)}
+
+\begin{longtable}{p{4cm}p{4.5cm}p{6.5cm}}
+\caption{อภิธานศัพท์ระบบสุขภาพ กทม. (BMA Health System Glossary)}
+\label{tab:glossary_health_system} \\
+\toprule
+\textbf{คำไทย} & \textbf{English (Abbr.)} & \textbf{คำอธิบาย} \\
+\midrule
+\endhead
+โซนสุขภาพ & Health Zone & การแบ่งพื้นที่ กทม. 50 เขต ออกเป็น 8 โซนสุขภาพ แต่ละโซนมีโรงพยาบาลแม่ข่าย \\
+\midrule
+ผู้จัดการเขตสุขภาพ & Area Manager (AM) & ผู้รับผิดชอบการดูแลสุขภาพระดับเขต ประสานงานระหว่างศูนย์บริการกับโรงพยาบาล \\
+\midrule
+ผู้จัดการโซนสุขภาพ & Health Zone Manager (HZM) & โรงพยาบาลแม่ข่ายที่กำกับดูแลโซนสุขภาพ รับส่งต่อผู้ป่วยจากเขตในโซน \\
+\midrule
+ศูนย์บริการสาธารณสุข & Health Center (ศบส.) & สถานบริการสุขภาพปฐมภูมิของ กทม. ให้บริการคัดกรองและรักษาเบื้องต้น \\
+\midrule
+ระบบบริการปฐมภูมิ & Primary Care & ระบบบริการสุขภาพด่านแรก เน้นการส่งเสริมสุขภาพ ป้องกันโรค รักษาเบื้องต้น \\
+\midrule
+การส่งต่อ & Referral & การส่งผู้ป่วยจากสถานบริการปฐมภูมิไปยังโรงพยาบาลที่มีศักยภาพสูงกว่า \\
+\bottomrule
+\end{longtable}
