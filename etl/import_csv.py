@@ -19,7 +19,34 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 import psycopg2
-from psycopg2.extras import execute_values
+from psycopg2.extras import execute_values as _pg_execute_values
+
+
+def execute_values(cur, sql, rows, page_size=500):
+    """Wrapper around psycopg2 execute_values that skips bad rows instead of failing.
+
+    On batch error: retries rows one-by-one, skipping those that fail.
+    """
+    try:
+        cur.execute("SAVEPOINT batch_sp")
+        _pg_execute_values(cur, sql, rows, page_size=page_size)
+        cur.execute("RELEASE SAVEPOINT batch_sp")
+    except (psycopg2.errors.NumericValueOutOfRange,
+            psycopg2.errors.StringDataRightTruncation,
+            psycopg2.errors.DataException) as batch_err:
+        # Batch failed — rollback to before the batch, then insert one-by-one
+        cur.execute("ROLLBACK TO SAVEPOINT batch_sp")
+        skipped = 0
+        for row in rows:
+            try:
+                cur.execute("SAVEPOINT row_sp")
+                _pg_execute_values(cur, sql, [row])
+                cur.execute("RELEASE SAVEPOINT row_sp")
+            except Exception:
+                cur.execute("ROLLBACK TO SAVEPOINT row_sp")
+                skipped += 1
+        if skipped:
+            print(f"    Skipped {skipped} bad rows (of {len(rows)})")
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -65,8 +92,11 @@ def parse_date_only(val):
     return dt.date() if dt else None
 
 
-def safe_int(val, lo=-32768, hi=32767):
-    """Parse int; return None if outside [lo, hi]. Default range = SMALLINT."""
+_INT4_MIN, _INT4_MAX = -2147483648, 2147483647
+
+
+def safe_int(val, lo=_INT4_MIN, hi=_INT4_MAX):
+    """Parse int; return None if outside [lo, hi]. Default = INT4 range."""
     if pd.isna(val) or str(val).strip() == "":
         return None
     try:
@@ -157,7 +187,12 @@ def import_patients(cur, df, current_year: int) -> Dict[str, int]:
         # Buddhist calendar: if year > 2400, assume Buddhist era
         if by_year and by_year > 2400:
             by_year -= 543
+        # Sanity check: year must be 1900-2030
+        if by_year is not None and (by_year < 1900 or by_year > 2030):
+            by_year = None
         computed_age = (current_year - by_year) if by_year else None
+        if computed_age is not None and (computed_age < 0 or computed_age > 150):
+            computed_age = None
         rows.append((
             id_hash,
             safe_int(r.get("NOTYPE")),
