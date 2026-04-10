@@ -32,6 +32,40 @@ try:
 except FileNotFoundError:
     SYSTEM_PROMPT = "You are a health data analyst for Bangkok. Respond in Thai. Use tools to query data."
 
+# ---------------------------------------------------------------------------
+# Topic guardrail — reject off-topic before calling LLM
+# ---------------------------------------------------------------------------
+
+_ON_TOPIC_KEYWORDS = {
+    # Thai health terms
+    "สุขภาพ", "คัดกรอง", "เบาหวาน", "ความดัน", "อ้วน", "ไขมัน", "หัวใจ", "หลอดเลือด",
+    "ไต", "โลหิตจาง", "ทางเดินหายใจ", "โรค", "เสี่ยง", "ป่วย", "ตรวจ", "แลป", "ผลเลือด",
+    "BMI", "น้ำหนัก", "ส่วนสูง", "เอว", "ความดันโลหิต", "น้ำตาล", "คอเลสเตอรอล",
+    "เขต", "โซน", "กทม", "กรุงเทพ", "เขตสุขภาพ", "ศูนย์บริการสาธารณสุข",
+    "สถิติ", "เปรียบเทียบ", "แนวโน้ม", "กราฟ", "กลุ่มอายุ", "เพศ", "อาชีพ",
+    "รายงาน", "PDF", "สไลด์", "ภาพรวม", "วิเคราะห์", "สรุป", "ข้อมูล",
+    "PM2.5", "ฝุ่น", "มลพิษ", "อากาศ", "NCD",
+    "สูบบุหรี่", "เหล้า", "แอลกอฮอล์", "ออกกำลังกาย", "พฤติกรรม",
+    "ซึมเศร้า", "สุขภาพจิต", "PHQ", "ความเครียด",
+    "รพ.", "โรงพยาบาล", "1555", "คำแนะนำ",
+    # English health terms
+    "health", "screening", "diabetes", "hypertension", "obesity", "disease",
+    "risk", "district", "zone", "bangkok", "report", "chart", "compare",
+    "prevalence", "lab", "cholesterol", "bmi", "blood",
+}
+
+_REFUSAL_RESPONSE = (
+    "ขออภัยค่ะ ฉันตอบได้เฉพาะเรื่องข้อมูล**โครงการคัดกรองสุขภาพกรุงเทพมหานคร**เท่านั้น "
+    "เช่น สถิติโรค สุขภาพรายเขต/โซน กลุ่มเสี่ยง ผลแลป แนวโน้ม หรือขอรายงาน\n\n"
+    "หากมีคำถามเกี่ยวกับสุขภาพส่วนบุคคล โปรดโทรสายด่วนสุขภาพ **1555**"
+)
+
+
+def _is_on_topic(message: str) -> bool:
+    """Quick keyword check — returns True if message likely relates to BMA health screening."""
+    lower = message.lower()
+    return any(kw.lower() in lower for kw in _ON_TOPIC_KEYWORDS)
+
 
 class OpenMultiAgent:
     """Top-level orchestrator — factory for teams, entry point for requests.
@@ -65,6 +99,10 @@ class OpenMultiAgent:
 
     async def process(self, user_message: str, context: dict | None = None) -> dict:
         """Non-streaming: returns {content, visualizations}."""
+        # Guardrail: reject off-topic
+        if not _is_on_topic(user_message):
+            return {"content": _REFUSAL_RESPONSE, "visualizations": []}
+
         if not self.cb.can_execute() or not await self.adapter.health_check():
             self.cb.record_failure()
             from agents.fallback import handle_fallback
@@ -112,6 +150,12 @@ class OpenMultiAgent:
     async def process_stream(self, user_message: str,
                              conv_history: list[dict] | None = None) -> AsyncGenerator[str, None]:
         """Streaming: yields SSE events with agent status animation."""
+
+        # Guardrail: reject off-topic
+        if not _is_on_topic(user_message):
+            yield format_sse({"type": "content", "text": _REFUSAL_RESPONSE})
+            yield format_sse({"type": "done"})
+            return
 
         # Circuit breaker / health check
         if not self.cb.can_execute() or not await self.adapter.health_check():
