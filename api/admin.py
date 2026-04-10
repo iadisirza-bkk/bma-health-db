@@ -291,8 +291,18 @@ def _run_import(upload_id: str, history_id: int):
 
         file_type = data["file_type"]
         df = data["df"]
+        table_name = FILE_TYPE_MAP[file_type]["table"]
 
         etl = _load_etl()
+
+        # Truncate existing data before import (replace, not append)
+        if file_type == "pt":
+            # CASCADE because other tables reference raw_patients.id
+            cur.execute("TRUNCATE raw_patients CASCADE")
+            logger.info("Truncated raw_patients CASCADE before import")
+        else:
+            cur.execute(f'TRUNCATE "{table_name}"')
+            logger.info("Truncated %s before import", table_name)
 
         if file_type == "pt":
             patient_map = etl.import_patients(cur, df, CURRENT_YEAR)
@@ -320,6 +330,15 @@ def _run_import(upload_id: str, history_id: int):
         # Refresh materialized views after import
         etl.refresh_all_summaries(cur)
         conn.commit()
+
+        # Flush Redis cache + in-memory data_adapter cache
+        try:
+            from cache import cache_flush_all
+            from services.data_adapter import invalidate_cache as invalidate_data_cache
+            cache_flush_all()
+            invalidate_data_cache()
+        except Exception:
+            logger.warning("Cache flush after import failed (non-fatal)")
 
         duration = time.time() - start
         _update_history(history_id, "success", rows_imported, 0, None, duration)

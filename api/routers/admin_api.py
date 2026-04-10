@@ -428,7 +428,7 @@ def upload_excel(
     # Invalidate caches
     invalidate_data_cache()
     deleted = 0
-    for pattern in ["health:*", "api:*", "stats:*"]:
+    for pattern in ["health:*", "api:*", "stats:*", "dashboard:*"]:
         deleted += cache_delete_pattern(pattern)
 
     _last_data_update = datetime.now(timezone.utc).isoformat()
