@@ -1,6 +1,6 @@
 # BMA Health -- One-Stop Backend System Spec & Frontend Integration Guide
 
-> **Version:** 4.3.0 | **Last Updated:** 2026-04-10
+> **Version:** 4.4.0 | **Last Updated:** 2026-04-10
 > **Live API Docs:** `http://localhost:9002/docs` (Swagger) | `http://localhost:9002/redoc` (ReDoc)
 > **OpenAPI JSON:** `http://localhost:9002/openapi.json`
 
@@ -85,6 +85,7 @@ The BMA Health One-Stop Backend serves **all** backend functionality for the Ban
 | 22 | **Factors** | `/api/factors/` | **8** | **Sex, age, occupation, behavior analysis** |
 | 23 | **Screening Tests** | `/api/screening-tests/` | **6** | **EKG, X-ray, blood, retinal** |
 | 24 | **Admin API** | `/api/admin/` | **6** | **Excel upload, audit, cache** |
+| 25 | **Admin Panel** | `/admin/` | **12** | **Dashboard, CSV upload, bundle upload, import history, data quality, logs** |
 
 ---
 
@@ -482,6 +483,30 @@ The LLM agent has 7 tools that give it access to all backend data:
 | `GET` | `/api/admin/data-status` | Check data completeness |
 | `POST` | `/api/admin/invalidate-cache` | Clear all Redis caches |
 | `GET` | `/api/admin/audit-log` | PDPA audit trail |
+
+### Admin Panel (12 endpoints)
+
+**Auth:** Session-based (password login at `/admin/login`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/admin/dashboard` | Dashboard: raw table counts + materialized view status |
+| `GET/POST` | `/admin/upload` | Single CSV upload with preview + auto-detect |
+| `GET/POST` | `/admin/upload-bundle` | **Bundle upload: all 7 CSV files at once (replaces all data)** |
+| `POST` | `/admin/import` | Run ETL import (background thread) |
+| `POST` | `/admin/refresh` | Refresh materialized views + flush cache |
+| `GET` | `/admin/history` | Import history log |
+| `GET` | `/admin/data-quality` | Field completeness report |
+| `GET` | `/admin/logs` | Structured import logs |
+| `POST` | `/admin/erasure` | PDPA erasure request |
+
+**Bundle Upload Behavior:**
+1. Accepts multiple `.csv` files, auto-detects type from column headers
+2. `TRUNCATE raw_patients CASCADE` — replaces **all** existing data
+3. Imports in order: pt → pthistory → vitalsignslf → homevisit → homehealth → labhealth → labhealthext
+4. Backfills missing `district_code` from `ref_facility_districts` mapping
+5. Refreshes all 13 materialized views
+6. Flushes Redis cache + in-memory data_adapter cache
 
 ---
 
@@ -1057,7 +1082,7 @@ These come directly from the screening portal as binary flags -- **not** recompu
 | Table | Source CSV | Key Columns | Records |
 |-------|-----------|-------------|---------|
 | `raw_patients` | pt.csv | idcard_hash, sex, birth_year, **age**, age_group | ~1M |
-| `raw_vitalsigns` | vitalsignslf.csv | SBP, DBP, height, weight, **BMI**, waist, risk flags, disease flags, mental health scores | ~1M |
+| `raw_vitalsigns` | vitalsignslf.csv | SBP, DBP, height, weight, **BMI**, waist, risk flags, disease flags, mental health scores, **district_code** (backfilled from facility mapping) | ~1M |
 | `raw_visits` | pthistory.csv | visit_date, facility_code | ~1M |
 | `raw_homevisit` | homevisit.csv | education, occupation, health_privilege, home_type | ~800K |
 | `raw_homehealth` | homehealth.csv | chronic disease history, treatment, exercise, vaccination, family history | ~800K |
@@ -1081,6 +1106,14 @@ These come directly from the screening portal as binary flags -- **not** recompu
 | **`summary_screening_tests`** | district | **EKG, X-ray, vision, DR screening rates** |
 | **`summary_chronic_history`** | district | **Known conditions, treatment adherence, vaccination** |
 | **`summary_family_history`** | district | **Family DM, parent disease history** |
+
+### Reference Tables
+
+| Table | Description |
+|-------|-------------|
+| `ref_districts` | 50 BKK districts (dcode, name_th, name_en, zone_code) |
+| `ref_facilities` | 14K+ health facilities (code, name, lat/lng) |
+| **`ref_facility_districts`** | **Facility code → district mapping (e.g. `cnt` → `1030` จตุจักร). Used by ETL backfill when `DISTRICTBKK` is empty in vitalsignslf.csv** |
 
 ### Migrations
 
@@ -1120,6 +1153,12 @@ These come directly from the screening portal as binary flags -- **not** recompu
 | T4 | 24 hours | Static/reference (`/search/districts`, `/research/data-dictionary`) |
 
 Reports are cached as PDF files on disk until explicitly invalidated.
+
+**Auto-invalidation:** After CSV import (single or bundle), the system automatically:
+1. Refreshes all materialized views
+2. Backfills missing `district_code` via `ref_facility_districts`
+3. Flushes all Redis cache keys (`bma:*`)
+4. Invalidates in-memory data_adapter cache
 
 ---
 

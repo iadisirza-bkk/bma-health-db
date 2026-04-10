@@ -417,11 +417,14 @@ async def login_submit(request: Request, password: str = Form(...), csrf_token: 
     """Validate password and set session cookie."""
     # Validate CSRF
     if not _validate_csrf(request, csrf_token):
-        return templates.TemplateResponse(
+        new_token = secrets.token_hex(32)
+        response = templates.TemplateResponse(
             "admin/login.html",
-            {"request": request, "error": "Invalid request. Please try again.", "csrf_token": ""},
+            {"request": request, "error": "Invalid request. Please try again.", "csrf_token": new_token},
             status_code=403,
         )
+        response.set_cookie("csrf_token", new_token, httponly=True, samesite="strict", max_age=86400)
+        return response
 
     client_ip = request.client.host if request.client else "unknown"
     if not _check_login_rate(client_ip):
@@ -474,29 +477,28 @@ async def dashboard(request: Request):
 
     db_available = True
     raw_tables = []
-    table_counts = {"patients": 0, "vitalsigns": 0, "lab": 0, "visits": 0}
+    table_counts = {
+        "patients": 0, "vitalsigns": 0, "visits": 0, "lab": 0,
+        "homevisit": 0, "homehealth": 0, "lab_extended": 0,
+    }
     view_info = []
 
     try:
-        # Raw table row counts
-        raw_tables = execute_query("""
-            SELECT relname AS name, n_live_tup AS count
-            FROM pg_stat_user_tables
-            WHERE schemaname = 'public' AND relname LIKE 'raw_%%'
-            ORDER BY relname
-        """)
-
-        # Summary card counts
-        for t in raw_tables:
-            name = t["name"]
-            if "patient" in name:
-                table_counts["patients"] = t["count"]
-            elif "vitalsign" in name:
-                table_counts["vitalsigns"] = t["count"]
-            elif "lab_result" in name:
-                table_counts["lab"] = t["count"]
-            elif "visit" in name:
-                table_counts["visits"] = t["count"]
+        # Raw table row counts — use exact COUNT(*) instead of pg_stat estimate
+        _table_map = {
+            "raw_patients": "patients",
+            "raw_vitalsigns": "vitalsigns",
+            "raw_visits": "visits",
+            "raw_lab_results": "lab",
+            "raw_homevisit": "homevisit",
+            "raw_homehealth": "homehealth",
+            "raw_lab_extended": "lab_extended",
+        }
+        raw_tables = []
+        for tbl, key in _table_map.items():
+            cnt = execute_scalar(f'SELECT COUNT(*) FROM "{tbl}"') or 0
+            table_counts[key] = cnt
+            raw_tables.append({"name": tbl, "count": cnt})
 
         # Materialized view info
         mat_views = execute_query("""
@@ -1033,3 +1035,226 @@ async def api_import_status(request: Request, history_id: int):
     if not rows:
         raise HTTPException(status_code=404, detail="Import job not found")
     return JSONResponse({k: str(v) if v is not None else None for k, v in rows[0].items()})
+
+
+# =========================================================================== #
+# BUNDLE UPLOAD (all 7 CSV files at once)
+# =========================================================================== #
+
+# Import order matters: pt must come first (other tables reference patient_id)
+BUNDLE_IMPORT_ORDER = [
+    "pt", "pthistory", "vitalsignslf",
+    "homevisit", "homehealth", "labhealth", "labhealthext",
+]
+
+
+def _run_bundle_import(files_data: dict, history_id: int):
+    """Import all CSV files in correct order. Runs in background thread."""
+    start = time.time()
+    conn = None
+    total_imported = 0
+    steps_done = []
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        conn.autocommit = False
+        cur = conn.cursor()
+        etl = _load_etl()
+
+        # Truncate everything first
+        cur.execute("TRUNCATE raw_patients CASCADE")
+        logger.info("Bundle import: truncated all raw tables")
+
+        patient_map: dict = {}
+
+        for file_type in BUNDLE_IMPORT_ORDER:
+            if file_type not in files_data:
+                continue
+
+            df = files_data[file_type]["df"]
+            fname = files_data[file_type]["filename"]
+
+            if file_type == "pt":
+                patient_map = etl.import_patients(cur, df, CURRENT_YEAR)
+                total_imported += len(patient_map)
+            else:
+                # Ensure patient_map is populated
+                if not patient_map:
+                    cur.execute("SELECT idcard_hash, id FROM raw_patients")
+                    patient_map = {row[0]: row[1] for row in cur.fetchall()}
+
+                etl._batch_ensure_patients(df, patient_map, cur)
+
+                importers = {
+                    "pthistory": etl.import_visits,
+                    "vitalsignslf": etl.import_vitalsigns,
+                    "homevisit": etl.import_homevisit,
+                    "homehealth": etl.import_homehealth,
+                    "labhealth": etl.import_lab_results,
+                    "labhealthext": etl.import_lab_extended,
+                }
+                importers[file_type](cur, df, patient_map)
+                total_imported += len(df)
+
+            steps_done.append(f"{fname}({file_type})")
+
+        # Refresh materialized views
+        etl.refresh_all_summaries(cur)
+        conn.commit()
+
+        # Flush caches
+        try:
+            from cache import cache_flush_all
+            from services.data_adapter import invalidate_cache as invalidate_data_cache
+            cache_flush_all()
+            invalidate_data_cache()
+        except Exception:
+            logger.warning("Cache flush after bundle import failed (non-fatal)")
+
+        duration = time.time() - start
+        _update_history(
+            history_id, "success", total_imported, 0, None, duration,
+        )
+        logger.info(
+            "Bundle import complete: %d files, %d rows, %.2fs — %s",
+            len(steps_done), total_imported, duration, ", ".join(steps_done),
+        )
+
+    except Exception as exc:
+        if conn:
+            conn.rollback()
+        duration = time.time() - start
+        error_msg = _sanitize_error(exc)
+        _update_history(history_id, "error", total_imported, 0, error_msg, duration)
+        logger.exception("Bundle import failed")
+    finally:
+        if conn:
+            conn.close()
+
+
+@router.get("/upload-bundle", response_class=HTMLResponse)
+async def upload_bundle_page(request: Request):
+    """Render the bundle upload form (multiple CSV files at once)."""
+    _require_auth(request)
+    csrf_token = _generate_csrf_token(request)
+    response = templates.TemplateResponse(
+        "admin/upload_bundle.html",
+        {
+            "request": request,
+            "file_types": FILE_TYPE_MAP,
+            "messages": _get_flash(request),
+            "csrf_token": csrf_token,
+        },
+    )
+    response.set_cookie("csrf_token", csrf_token, httponly=True, samesite="strict", max_age=86400)
+    return response
+
+
+@router.post("/upload-bundle", response_class=HTMLResponse)
+async def upload_bundle_submit(request: Request):
+    """Accept multiple CSV files, auto-detect types, and run bundle import."""
+    _require_auth(request)
+
+    form = await request.form()
+    csrf_token_val = form.get("csrf_token", "")
+    if not _validate_csrf(request, csrf_token_val):
+        raise HTTPException(status_code=403, detail="CSRF validation failed")
+
+    # Collect uploaded files
+    files = form.getlist("files")
+    if not files:
+        response = RedirectResponse(url="/admin/upload-bundle", status_code=303)
+        _set_flash(response, "error", "No files uploaded.")
+        return response
+
+    files_data: dict = {}
+    errors: list = []
+
+    for upload_file in files:
+        if not hasattr(upload_file, "filename") or not upload_file.filename:
+            continue
+        if not upload_file.filename.lower().endswith(".csv"):
+            errors.append(f"{upload_file.filename}: ไม่ใช่ไฟล์ .csv")
+            continue
+
+        # Read content
+        MAX_UPLOAD_SIZE = 50 * 1024 * 1024
+        raw_bytes = await upload_file.read()
+        if len(raw_bytes) > MAX_UPLOAD_SIZE:
+            errors.append(f"{upload_file.filename}: ไฟล์ใหญ่เกิน 50 MB")
+            continue
+
+        for encoding in ("utf-8", "tis-620", "cp874", "latin-1"):
+            try:
+                content = raw_bytes.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        else:
+            content = raw_bytes.decode("utf-8", errors="replace")
+
+        try:
+            df = pd.read_csv(StringIO(content), dtype=str, low_memory=False)
+        except Exception as exc:
+            errors.append(f"{upload_file.filename}: อ่านไฟล์ไม่ได้ — {exc}")
+            continue
+
+        # Auto-detect file type
+        detected = _detect_file_type(df.columns.tolist())
+        if detected is None:
+            errors.append(f"{upload_file.filename}: ตรวจจับประเภทไฟล์ไม่ได้")
+            continue
+
+        if detected in files_data:
+            errors.append(f"{upload_file.filename}: ซ้ำกับ {files_data[detected]['filename']} (ทั้งคู่เป็น {detected})")
+            continue
+
+        files_data[detected] = {"filename": upload_file.filename, "df": df}
+
+    if errors:
+        response = RedirectResponse(url="/admin/upload-bundle", status_code=303)
+        _set_flash(response, "error", " | ".join(errors))
+        return response
+
+    if not files_data:
+        response = RedirectResponse(url="/admin/upload-bundle", status_code=303)
+        _set_flash(response, "error", "ไม่พบไฟล์ CSV ที่ตรวจจับประเภทได้")
+        return response
+
+    # Create import_history record
+    file_list = ", ".join(f"{v['filename']}({k})" for k, v in sorted(files_data.items()))
+    total_rows = sum(len(v["df"]) for v in files_data.values())
+    try:
+        with get_conn() as conn_hist:
+            with conn_hist.cursor() as cur_hist:
+                cur_hist.execute(
+                    """
+                    INSERT INTO import_history
+                        (filename, table_name, file_type, status, started_at)
+                    VALUES (%s, %s, %s, 'running', NOW())
+                    RETURNING id
+                    """,
+                    (f"[Bundle] {len(files_data)} files", "ALL", "bundle"),
+                )
+                history_id = cur_hist.fetchone()[0]
+            conn_hist.commit()
+    except Exception as exc:
+        logger.exception("Failed to create bundle import_history")
+        response = RedirectResponse(url="/admin/upload-bundle", status_code=303)
+        _set_flash(response, "error", f"Failed to start import: {_sanitize_error(exc)}")
+        return response
+
+    # Launch background thread
+    thread = threading.Thread(
+        target=_run_bundle_import,
+        args=(files_data, history_id),
+        daemon=True,
+        name=f"bundle-import-{history_id}",
+    )
+    thread.start()
+
+    response = RedirectResponse(url="/admin/history", status_code=303)
+    _set_flash(
+        response, "success",
+        f"Bundle import started (job #{history_id}): {len(files_data)} files, {total_rows:,} rows — {file_list}",
+    )
+    return response

@@ -648,8 +648,59 @@ def import_lab_extended(cur, df, patient_map: Dict[str, int]):
 # Materialized view refresh
 # ---------------------------------------------------------------------------
 
+def backfill_district_codes(cur):
+    """Fill missing district_code in raw_vitalsigns from multiple sources."""
+    total = 0
+
+    # 1. From facility_code → district mapping (ref_facility_districts)
+    cur.execute("""
+        SELECT EXISTS(SELECT 1 FROM information_schema.tables
+                      WHERE table_name = 'ref_facility_districts')
+    """)
+    if cur.fetchone()[0]:
+        cur.execute("""
+            UPDATE raw_vitalsigns v
+            SET district_code = fd.district_code
+            FROM ref_facility_districts fd
+            WHERE v.facility_code = fd.facility_code
+              AND v.district_code IS NULL
+        """)
+        filled_fc = cur.rowcount
+        if filled_fc:
+            print(f"  Backfilled {filled_fc} district_code from facility mapping")
+            total += filled_fc
+
+    # 2. From homevisit: patient's home_district (4-digit BKK district code)
+    cur.execute("""
+        UPDATE raw_vitalsigns v
+        SET district_code = hv.home_district::text
+        FROM (
+            SELECT DISTINCT ON (patient_id) patient_id, home_district
+            FROM raw_homevisit
+            WHERE home_district IS NOT NULL AND home_district >= 1001 AND home_district <= 1050
+            ORDER BY patient_id, visit_date DESC
+        ) hv
+        WHERE v.patient_id = hv.patient_id
+          AND v.district_code IS NULL
+    """)
+    filled_hv = cur.rowcount
+    if filled_hv:
+        print(f"  Backfilled {filled_hv} district_code from homevisit")
+        total += filled_hv
+
+    # Report remaining
+    cur.execute("SELECT count(*) FROM raw_vitalsigns WHERE district_code IS NULL")
+    still_null = cur.fetchone()[0]
+    if still_null:
+        print(f"  Warning: {still_null} vitalsign records still have no district_code")
+    else:
+        print(f"  All vitalsign records have district_code")
+    return total
+
+
 def refresh_all_summaries(cur):
     """Refresh all materialized views if they exist."""
+    backfill_district_codes(cur)
     print("\nRefreshing materialized views ...")
     cur.execute("""
         SELECT matviewname FROM pg_matviews

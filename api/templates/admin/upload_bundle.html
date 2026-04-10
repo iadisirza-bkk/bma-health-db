@@ -1,0 +1,192 @@
+{% extends "base.html" %}
+{% set active_page = "bundle" %}
+
+{% block title %}Bundle Upload - BMA Health Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+    <!-- Page Header -->
+    <div>
+        <h1 class="text-lg font-bold text-gray-900">Bundle Upload</h1>
+        <p class="text-xs text-gray-500 mt-1">อัปโหลดทุกไฟล์ CSV พร้อมกัน — ข้อมูลเดิมจะถูกลบและแทนที่ทั้งหมด</p>
+    </div>
+
+    <!-- Warning Banner -->
+    <div class="flex items-start gap-3 px-4 py-3 rounded-xl text-sm font-medium bg-amber-50 text-amber-800 border border-amber-200">
+        <svg class="w-5 h-5 flex-shrink-0 mt-0.5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+        </svg>
+        <div>
+            <span class="font-bold">ข้อมูลเดิมจะถูกลบทั้งหมด</span> —
+            เมื่อกดนำเข้า ระบบจะลบข้อมูลในฐานข้อมูลทั้งหมดแล้วแทนที่ด้วยไฟล์ที่อัปโหลด
+        </div>
+    </div>
+
+    <!-- Upload Form -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        <form method="POST" action="/admin/upload-bundle" enctype="multipart/form-data" id="bundleForm">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+            <!-- File Type Reference -->
+            <div class="mb-5 text-xs text-gray-500">
+                <span class="font-semibold uppercase tracking-wider">ไฟล์ที่รองรับ:</span>
+                pt.csv, pthistory.csv, vitalsignslf.csv, homevisit.csv, homehealth.csv, labhealth.csv, labhealthext.csv
+            </div>
+
+            <!-- Drag & Drop Zone -->
+            <div id="dropZone"
+                 class="border-2 border-dashed border-gray-300 rounded-xl p-10 text-center cursor-pointer transition-colors hover:border-[#00744B] hover:bg-[#e6f5ef]">
+                <svg class="w-12 h-12 mx-auto text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                </svg>
+                <p class="text-gray-700 font-medium">ลากไฟล์ CSV ทั้งหมดมาวางที่นี่</p>
+                <p class="text-gray-400 text-sm mt-1">หรือคลิกเพื่อเลือกไฟล์ (เลือกได้หลายไฟล์)</p>
+                <input type="file" name="files" id="fileInput" accept=".csv" multiple class="hidden">
+            </div>
+
+            <!-- File List (hidden by default) -->
+            <div id="fileList" class="hidden mt-4 space-y-2"></div>
+
+            <!-- Summary (hidden by default) -->
+            <div id="fileSummary" class="hidden mt-4 p-4 bg-[#e6f5ef] rounded-lg border border-green-200">
+                <div class="flex items-center justify-between">
+                    <span class="text-sm font-medium text-[#00744B]" id="summaryText"></span>
+                    <button type="button" id="clearAll" class="text-xs text-gray-500 hover:text-red-500 transition-colors underline">ล้างทั้งหมด</button>
+                </div>
+            </div>
+
+            <!-- Submit Button -->
+            <div class="mt-5">
+                <button type="submit" id="uploadBtn" disabled
+                        class="inline-flex items-center gap-2 px-5 py-2.5 bg-[#00744B] text-white rounded-lg font-medium hover:bg-[#005C3B] transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                    </svg>
+                    นำเข้าทั้งหมด
+                </button>
+            </div>
+        </form>
+    </div>
+
+</div>
+
+<script>
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const fileList = document.getElementById('fileList');
+    const fileSummary = document.getElementById('fileSummary');
+    const summaryText = document.getElementById('summaryText');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const clearAll = document.getElementById('clearAll');
+
+    const TYPE_LABELS = {
+        'pt': 'ข้อมูลผู้ป่วย',
+        'pthistory': 'ประวัติผู้ป่วย',
+        'vitalsignslf': 'สัญญาณชีพ',
+        'homevisit': 'การเยี่ยมบ้าน',
+        'homehealth': 'สุขภาพที่บ้าน',
+        'labhealth': 'ผลแลป',
+        'labhealthext': 'ผลแลปเพิ่มเติม',
+    };
+
+    // Auto-detect file type from filename
+    function guessType(name) {
+        const n = name.toLowerCase();
+        if (n.includes('labhealthext')) return 'labhealthext';
+        if (n.includes('labhealth')) return 'labhealth';
+        if (n.includes('vitalsign')) return 'vitalsignslf';
+        if (n.includes('homehealth')) return 'homehealth';
+        if (n.includes('homevisit')) return 'homevisit';
+        if (n.includes('pthistory')) return 'pthistory';
+        if (/\bpt\b/.test(n) || n === 'pt.csv') return 'pt';
+        return null;
+    }
+
+    function formatBytes(bytes) {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    function updateUI() {
+        const files = fileInput.files;
+        if (!files || files.length === 0) {
+            fileList.classList.add('hidden');
+            fileSummary.classList.add('hidden');
+            uploadBtn.disabled = true;
+            return;
+        }
+
+        fileList.innerHTML = '';
+        fileList.classList.remove('hidden');
+        fileSummary.classList.remove('hidden');
+
+        let totalSize = 0;
+        for (const file of files) {
+            totalSize += file.size;
+            const type = guessType(file.name);
+            const label = type ? TYPE_LABELS[type] || type : '?';
+            const badgeColor = type ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700';
+
+            const row = document.createElement('div');
+            row.className = 'flex items-center gap-3 px-4 py-2.5 bg-gray-50 rounded-lg border border-gray-200';
+            row.innerHTML = `
+                <svg class="w-5 h-5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                </svg>
+                <span class="text-sm font-medium text-gray-900 flex-1">${file.name}</span>
+                <span class="text-xs text-gray-400">${formatBytes(file.size)}</span>
+                <span class="inline-flex items-center text-xs font-semibold rounded-full px-2.5 py-0.5 ${badgeColor}">${label}</span>
+            `;
+            fileList.appendChild(row);
+        }
+
+        summaryText.textContent = `${files.length} ไฟล์ (${formatBytes(totalSize)})`;
+        uploadBtn.disabled = false;
+    }
+
+    dropZone.addEventListener('click', () => fileInput.click());
+
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('border-[#00744B]', 'bg-[#e6f5ef]');
+    });
+
+    dropZone.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('border-[#00744B]', 'bg-[#e6f5ef]');
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('border-[#00744B]', 'bg-[#e6f5ef]');
+        const dt = e.dataTransfer;
+        if (dt.files.length > 0) {
+            fileInput.files = dt.files;
+            updateUI();
+        }
+    });
+
+    fileInput.addEventListener('change', updateUI);
+
+    clearAll.addEventListener('click', () => {
+        fileInput.value = '';
+        updateUI();
+    });
+
+    // Disable button on submit to prevent double-click
+    document.getElementById('bundleForm').addEventListener('submit', function() {
+        uploadBtn.disabled = true;
+        uploadBtn.innerHTML = `
+            <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            กำลังนำเข้า...
+        `;
+    });
+</script>
+{% endblock %}

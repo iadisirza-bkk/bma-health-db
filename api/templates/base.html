@@ -67,6 +67,14 @@
                         </svg>
                         Upload
                     </a>
+                    <a href="/admin/upload-bundle"
+                       class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors
+                              {% if active_page == 'bundle' %}bg-white/20{% else %}hover:bg-white/10{% endif %}">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+                        </svg>
+                        Bundle
+                    </a>
                     <a href="/admin/history"
                        class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors
                               {% if active_page == 'history' %}bg-white/20{% else %}hover:bg-white/10{% endif %}">
@@ -128,6 +136,14 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
                     </svg>
                     Upload CSV
+                </a>
+                <a href="/admin/upload-bundle"
+                   class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors
+                          {% if active_page == 'bundle' %}bg-white/20{% else %}hover:bg-white/10{% endif %}">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+                    </svg>
+                    Bundle Upload
                 </a>
                 <a href="/admin/history"
                    class="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors
