@@ -316,15 +316,22 @@ def _build_district_readings(pm25_data: dict) -> dict[str, dict]:
     """Map ArcGIS readings to district name_th.
 
     Returns {name_th: {pm25, aqi}} keyed by Thai district name (no เขต prefix).
+    Multiple stations per district are averaged; null readings are skipped.
     """
-    readings: dict[str, dict] = {}
+    from collections import defaultdict
+    buckets: dict[str, list[float]] = defaultdict(list)
     for s in pm25_data.get("data", []):
         name = extract_district_name(s.get("station_name"))
         if not name:
             continue
         pm25_val = s.get("pm25_value")
-        aqi_val = pm25_to_aqi(pm25_val) if pm25_val is not None else None
-        readings[name] = {"pm25": pm25_val, "aqi": aqi_val}
+        if pm25_val is not None:
+            buckets[name].append(pm25_val)
+
+    readings: dict[str, dict] = {}
+    for name, vals in buckets.items():
+        avg = round(sum(vals) / len(vals), 1)
+        readings[name] = {"pm25": avg, "aqi": pm25_to_aqi(avg)}
     return readings
 
 

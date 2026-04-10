@@ -48,10 +48,16 @@ def pm25_to_aqi(pm25: float | None) -> int | None:
 # against ref_districts.name_th which stores just "XXX".
 
 def extract_district_name(arcgis_district: str | None) -> str | None:
-    """Strip 'เขต' prefix from ArcGIS district field to match ref_districts.name_th."""
+    """Extract district name from ArcGIS station field to match ref_districts.name_th.
+
+    Handles formats: "เขตXXX", "สถานีYYY เขตXXX", "XXX"
+    """
     if not arcgis_district:
         return None
     name = arcgis_district.strip()
-    if name.startswith("เขต"):
-        name = name[len("เขต"):]
+    # If "เขต" appears anywhere, extract the part after the LAST "เขต"
+    # e.g. "สวนทวีวนารมย์ เขตทวีวัฒนา" → "ทวีวัฒนา"
+    idx = name.rfind("เขต")
+    if idx >= 0:
+        name = name[idx + len("เขต"):]
     return name.strip() or None
