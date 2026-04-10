@@ -74,11 +74,17 @@ def safe_int(val):
         return None
 
 
-def safe_float(val):
+def safe_float(val, lo=None, hi=None):
+    """Parse float; return None if empty, unparseable, or outside [lo, hi] range."""
     if pd.isna(val) or str(val).strip() == "":
         return None
     try:
-        return float(val)
+        v = float(val)
+        if lo is not None and v < lo:
+            return None
+        if hi is not None and v > hi:
+            return None
+        return v
     except (ValueError, TypeError):
         return None
 
@@ -277,11 +283,13 @@ def import_vitalsigns(cur, df, patient_map: Dict[str, int]):
 
         stress = collect_array(r, ["STMNG1", "STMNG2", "STMNG3", "STMNG4"])
 
-        height = safe_float(r.get("HEIGHT"))
-        weight = safe_float(r.get("WEIGHT"))
+        height = safe_float(r.get("HEIGHT"), 50, 250)
+        weight = safe_float(r.get("WEIGHT"), 10, 300)
         computed_bmi = None
-        if height and height > 0 and height < 250 and weight and weight > 0 and weight < 300:
+        if height and weight:
             computed_bmi = round(weight / (height / 100.0) ** 2, 2)
+            if computed_bmi > 80:
+                computed_bmi = None
 
         rows.append((
             pid,
@@ -289,11 +297,11 @@ def import_vitalsigns(cur, df, patient_map: Dict[str, int]):
             safe_str(r.get("HPTCODE")),
             safe_int(r.get("HBPN")),
             safe_int(r.get("LBPN")),
-            safe_float(r.get("PREFPG")),
-            safe_float(r.get("POSTFPG")),
+            safe_float(r.get("PREFPG"), 0, 999),
+            safe_float(r.get("POSTFPG"), 0, 999),
             height,
             weight,
-            safe_float(r.get("WSTL")),
+            safe_float(r.get("WSTL"), 30, 200),
             safe_int(r.get("PR")),
             safe_int(r.get("SMOKE")),
             safe_int(r.get("ALCOHAL")),
@@ -524,38 +532,38 @@ def import_lab_results(cur, df, patient_map: Dict[str, int]):
             safe_int(r.get("CBCRS")),
             safe_int(r.get("WBC")),
             safe_int(r.get("RBC")),
-            safe_float(r.get("HMGB")),
-            safe_float(r.get("HMTC")),
-            safe_float(r.get("MCV")),
+            safe_float(r.get("HMGB"), 0, 30),         # hemoglobin g/dL
+            safe_float(r.get("HMTC"), 0, 80),          # hematocrit %
+            safe_float(r.get("MCV"), 0, 200),           # MCV fL
             safe_int(r.get("PITCNT")),
             safe_int(r.get("BLDSGTYPE")),
             safe_int(r.get("BLDSGRS")),
-            safe_float(r.get("DTX")),
-            safe_float(r.get("BLDSUGAR")),
-            safe_float(r.get("FBS")),
+            safe_float(r.get("DTX"), 0, 999),
+            safe_float(r.get("BLDSUGAR"), 0, 999),
+            safe_float(r.get("FBS"), 0, 999),           # fasting blood sugar mg/dL
             safe_int(r.get("UARS")),
             safe_str(r.get("UAWBC")),
             safe_str(r.get("UARBC")),
             safe_str(r.get("PROTEIN")),
             safe_int(r.get("CHLTRTYPE")),
             safe_int(r.get("CHLTRRS")),
-            safe_float(r.get("CHOLEST")),
-            safe_float(r.get("TRIGLY")),
-            safe_float(r.get("HDL")),
-            safe_float(r.get("LDL")),
+            safe_float(r.get("CHOLEST"), 0, 999),       # cholesterol mg/dL
+            safe_float(r.get("TRIGLY"), 0, 999),
+            safe_float(r.get("HDL"), 0, 500),
+            safe_float(r.get("LDL"), 0, 500),
             safe_int(r.get("LIVERRS")),
-            safe_float(r.get("SGOT")),
-            safe_float(r.get("SGPT")),
-            safe_float(r.get("ALKPPT")),
+            safe_float(r.get("SGOT"), 0, 999),
+            safe_float(r.get("SGPT"), 0, 999),
+            safe_float(r.get("ALKPPT"), 0, 999),        # alk phosphatase
             safe_int(r.get("URICRS")),
-            safe_float(r.get("URICACID")),
+            safe_float(r.get("URICACID"), 0, 50),       # uric acid mg/dL
             safe_int(r.get("CVCRS")),
             safe_str(r.get("HPV")),
             safe_int(r.get("CLCRS")),
             safe_str(r.get("FITTEST")),
-            safe_float(r.get("CRTININE")),
-            safe_float(r.get("EGFRRS")),
-            safe_float(r.get("BUNRS")),
+            safe_float(r.get("CRTININE"), 0, 50),       # creatinine mg/dL
+            safe_float(r.get("EGFRRS"), 0, 200),        # eGFR mL/min
+            safe_float(r.get("BUNRS"), 0, 200),          # BUN mg/dL
             safe_int(r.get("CANCELST")),
         ))
 
