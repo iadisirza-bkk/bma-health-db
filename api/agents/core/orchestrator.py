@@ -253,14 +253,21 @@ class OpenMultiAgent:
                 return
             yield format_sse({"type": "agent_done", "agent": "analyst"})
 
-            # No tools -> FORCE a default tool call instead of letting LLM hallucinate
+            # No tools -> FORCE the top-priority tool from router
             if not response.tool_calls:
-                logger.warning("LLM skipped tools — forcing query_health_data")
+                forced = selected_tools[0] if selected_tools else "query_health_data"
+                logger.warning("LLM skipped tools — forcing %s", forced)
+                # Build sensible default args per tool
+                _default_args = {
+                    "query_health_data": {"group_by": "disease", "chart_type": "donut"},
+                    "query_statistical_test": {"test_type": "cross_tabulation"},
+                    "query_api": {"endpoint": "headline_kpi"},
+                }
                 response.tool_calls = [{
                     "id": "forced_tool",
                     "function": {
-                        "name": "query_health_data",
-                        "arguments": json.dumps({"group_by": "disease", "chart_type": "donut"}),
+                        "name": forced,
+                        "arguments": json.dumps(_default_args.get(forced, {})),
                     },
                 }]
 
