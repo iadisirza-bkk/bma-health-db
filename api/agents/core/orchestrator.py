@@ -92,10 +92,12 @@ class OpenMultiAgent:
             tools=self.registry,
         )
         _synth_prompt = (
-            "ตอบภาษาไทย Markdown กระชับ <=200 คำ "
-            "ห้ามแต่งตัวเลขเอง — ใช้เฉพาะตัวเลขที่อยู่ในข้อมูลที่ให้มาเท่านั้น "
-            "ถ้าข้อมูลมีแค่ % ห้ามคำนวณจำนวนคนเอง "
-            "ถ้าไม่มีข้อมูล ให้บอกว่าไม่มี อย่าเดา"
+            "ตอบภาษาไทย Markdown กระชับ <=200 คำ\n"
+            "กฎเด็ดขาด:\n"
+            "1. คัดลอกตัวเลขจากข้อมูลที่ให้มาตรงๆ ห้ามปัดเศษ ห้ามประมาณ ห้ามคำนวณเอง\n"
+            "2. ถ้าข้อมูลบอก 333,841 ต้องเขียน 333,841 ไม่ใช่ 333,900\n"
+            "3. ถ้าข้อมูลไม่มีตัวเลขนั้น ห้ามใส่ ให้ข้ามไป\n"
+            "4. ห้ามคำนวณจำนวนคนจาก % เด็ดขาด"
         )
         synthesizer = Agent(
             config=AgentConfig(name="synthesizer", role="สรุปคำตอบ", system_prompt=_synth_prompt, icon="sparkle"),
@@ -129,7 +131,7 @@ class OpenMultiAgent:
                 tool_context = "\n".join(r.text[:1500] for r in results if r.text)
                 if tool_context:
                     synth_msgs = [
-                        {"role": "system", "content": "ตอบภาษาไทย Markdown กระชับ <=200 คำ ใช้เฉพาะตัวเลขที่อยู่ในข้อมูลที่ให้มาเท่านั้น ห้ามแต่งตัวเลขหรือคำนวณจำนวนคนเอง"},
+                        {"role": "system", "content": "ตอบภาษาไทย Markdown กระชับ <=200 คำ คัดลอกตัวเลขจากข้อมูลตรงๆ ห้ามปัดเศษ ห้ามประมาณ ห้ามคำนวณเอง"},
                         {"role": "user", "content": f"ข้อมูล:\n{tool_context}\n\nสรุปข้อมูลนี้ตอบคำถาม: {user_message}"},
                     ]
                     synth_resp = await self.adapter.chat(synth_msgs)
