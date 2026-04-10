@@ -237,17 +237,37 @@ def _lab_city_average() -> dict:
 
 
 def _bmi_distribution() -> dict:
-    rows = _query("""
-        SELECT district_code, sex, total_measured,
-               bmi_underweight, bmi_normal, bmi_overweight, bmi_obese, bmi_severely_obese,
-               ROUND(avg_bmi::numeric, 1) AS avg_bmi,
-               ROUND(avg_waist::numeric, 1) AS avg_waist,
-               male_waist_risk, female_waist_risk
+    row = _query("""
+        SELECT SUM(total_measured) AS total,
+               SUM(bmi_underweight) AS underweight,
+               SUM(bmi_normal) AS normal,
+               SUM(bmi_overweight) AS overweight,
+               SUM(bmi_obese) AS obese,
+               SUM(bmi_severely_obese) AS severely_obese,
+               ROUND(AVG(avg_bmi)::numeric, 1) AS avg_bmi,
+               ROUND(AVG(avg_waist)::numeric, 1) AS avg_waist
         FROM summary_bmi_waist
-        WHERE sex = -1
-        ORDER BY district_code
+        WHERE district_code ~ '^[0-9]' AND sex = -1
     """)
-    return {"districts": rows}
+    if not row:
+        return {}
+    r = row[0]
+    total = int(r.get("total") or 1)
+    def _p(k):
+        v = int(r.get(k) or 0)
+        return f"{v:,} คน ({round(100*v/total,1)}%)"
+    return {
+        "summary": (
+            f"การกระจายตัว BMI ของผู้คัดกรอง ({total:,} คน):\n"
+            f"- น้ำหนักต่ำกว่าเกณฑ์ (Underweight): {_p('underweight')}\n"
+            f"- ปกติ (Normal): {_p('normal')}\n"
+            f"- น้ำหนักเกิน (Overweight): {_p('overweight')}\n"
+            f"- อ้วน (Obese): {_p('obese')}\n"
+            f"- อ้วนมาก (Severely Obese): {_p('severely_obese')}\n"
+            f"- BMI เฉลี่ย: {r.get('avg_bmi')} kg/m²\n"
+            f"- รอบเอวเฉลี่ย: {r.get('avg_waist')} cm"
+        ),
+    }
 
 
 def _cost_per_screening() -> dict:
