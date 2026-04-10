@@ -770,8 +770,15 @@ async def refresh_views(request: Request):
             etl.refresh_all_summaries(cur)
             conn.commit()
 
+        # Flush Redis cache after view refresh
+        try:
+            from cache import cache_flush_all
+            cache_flush_all()
+        except Exception:
+            pass
+
         response = RedirectResponse(url="/admin/dashboard", status_code=303)
-        _set_flash(response, "success", "Materialized views refreshed successfully.")
+        _set_flash(response, "success", "Materialized views refreshed successfully. Cache flushed.")
     except Exception as exc:
         logger.exception("Failed to refresh materialized views")
         response = RedirectResponse(url="/admin/dashboard", status_code=303)

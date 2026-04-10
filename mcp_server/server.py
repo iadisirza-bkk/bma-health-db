@@ -3,7 +3,9 @@ BMA Health Summary MCP Server
 ==============================
 MCP server providing aggregate health data for Bangkok Metropolitan Administration.
 This is the ONLY gateway for LLM agents to access BMA health data.
-All queries target materialized summary views -- raw tables are never exposed.
+
+Uses the shared HealthDataService for all business logic — same service layer
+as the REST API. No duplicated SQL.
 
 เซิร์ฟเวอร์ MCP สำหรับข้อมูลสรุปสุขภาพ กทม.
 เข้าถึงได้เฉพาะข้อมูล aggregate จาก materialized views เท่านั้น
@@ -25,6 +27,10 @@ from psycopg2.pool import ThreadedConnectionPool
 from contextlib import contextmanager
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+
+# Add parent directory to path so we can import the shared service
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "api"))
+from services.health_data_service import HealthDataService
 
 load_dotenv()
 
@@ -49,63 +55,16 @@ K_ANONYMITY_THRESHOLD = int(os.getenv("K_ANONYMITY_THRESHOLD", "5"))
 # ---------------------------------------------------------------------------
 
 BLOCKED_TABLES = frozenset([
-    "raw_patients",
-    "raw_visits",
-    "raw_vitalsigns",
-    "raw_homevisit",
-    "raw_homehealth",
-    "raw_lab_results",
-    "raw_lab_extended",
+    "raw_patients", "raw_visits", "raw_vitalsigns",
+    "raw_homevisit", "raw_homehealth", "raw_lab_results", "raw_lab_extended",
 ])
 
 BLOCKED_COLUMNS = frozenset([
-    "idcard_hash",
-    "patient_id",
-    "staff_code",
-    "firststf",
-    "laststf",
-    "cancelstf",
+    "idcard_hash", "patient_id", "staff_code", "firststf", "laststf", "cancelstf",
 ])
 
 # ---------------------------------------------------------------------------
-# Disease key mapping
-# ---------------------------------------------------------------------------
-
-DISEASE_KEY_MAP: Dict[str, Dict[str, str]] = {
-    "diabetes": {
-        "pct_at_risk": "pct_risk_dm",
-        "pct_found": "pct_found_dm",
-        "risk_count": "risk_dm_count",
-        "found_count": "found_dm_count",
-    },
-    "hypertension": {
-        "pct_at_risk": "pct_risk_hpt",
-        "pct_found": "pct_found_hpt",
-        "risk_count": "risk_hpt_count",
-        "found_count": "found_hpt_count",
-    },
-    "cardiovascular": {
-        "pct_at_risk": "pct_risk_cvd",
-        "pct_found": "pct_found_cvd",
-        "risk_count": "risk_cvd_count",
-        "found_count": "found_cvd_count",
-    },
-    "obesity": {
-        "pct_at_risk": "pct_risk_bmi",
-        "pct_found": "found_obesity_count",  # no pct column, compute from count
-    },
-    "dyslipidemia": {
-        "pct_found": "found_dyslipidemia_count",
-    },
-    "stroke": {
-        "pct_found": "found_stroke_count",
-    },
-}
-
-VALID_DISEASE_KEYS = set(DISEASE_KEY_MAP.keys())
-
-# ---------------------------------------------------------------------------
-# Logging setup
+# Logging
 # ---------------------------------------------------------------------------
 
 logger = logging.getLogger("bma-health-mcp")
@@ -118,7 +77,7 @@ logger.addHandler(_stderr_handler)
 # Audit log with SHA-256 chain
 # ---------------------------------------------------------------------------
 
-_last_audit_hash: str = "0" * 64  # genesis hash
+_last_audit_hash: str = "0" * 64
 
 
 def _write_audit_entry(tool: str, params: dict, result_row_count: int, client: str = "unknown") -> None:
@@ -146,14 +105,12 @@ def _write_audit_entry(tool: str, params: dict, result_row_count: int, client: s
         with open(AUDIT_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(line + "\n")
     except OSError:
-        # Fall back to stderr if the log path is not writable
         logger.warning("Audit log file not writable, logging to stderr: %s", line)
 
 
 # ---------------------------------------------------------------------------
-# Database helpers
+# Database helpers (MCP's own pool with security validation)
 # ---------------------------------------------------------------------------
-
 
 _pool = None
 
@@ -161,11 +118,7 @@ _pool = None
 def _get_pool():
     global _pool
     if _pool is None or _pool.closed:
-        _pool = ThreadedConnectionPool(
-            minconn=2,
-            maxconn=10,
-            dsn=DATABASE_URL,
-        )
+        _pool = ThreadedConnectionPool(minconn=2, maxconn=10, dsn=DATABASE_URL)
     return _pool
 
 
@@ -192,24 +145,22 @@ def _validate_query_safety(sql: str):
     for col in BLOCKED_COLUMNS:
         if col in sql_lower:
             raise SecurityError(f"Access denied: column '{col}' is restricted")
-    # Must be SELECT only
     stripped = sql_lower.strip()
     if not stripped.startswith("select"):
         raise SecurityError("Only SELECT queries are allowed")
 
 
-def _query(sql: str, params: Union[tuple, list, None] = None) -> List[Dict]:
-    """Execute a read-only query and return rows as dicts."""
+def _query(sql: str, params=None) -> List[Dict]:
+    """Execute a read-only query with security validation."""
     _validate_query_safety(sql)
     with _get_connection() as conn:
         conn.set_session(readonly=True, autocommit=True)
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(sql, params)
-            rows = cur.fetchall()
-            return [dict(r) for r in rows]
+            return [dict(r) for r in cur.fetchall()]
 
 
-def _scalar(sql: str, params: Union[tuple, list, None] = None) -> Any:
+def _scalar(sql: str, params=None) -> Any:
     """Execute a query and return a single scalar value."""
     rows = _query(sql, params)
     if rows:
@@ -217,31 +168,14 @@ def _scalar(sql: str, params: Union[tuple, list, None] = None) -> Any:
     return None
 
 
-def _enforce_k_anonymity(rows: List[Dict], count_col: str = "patient_count") -> List[Dict]:
-    """Suppress rows where the count column is below the k-anonymity threshold."""
-    return [r for r in rows if r.get(count_col, 0) >= K_ANONYMITY_THRESHOLD]
-
-
-def _round_floats(obj: Any, decimals: int = 2) -> Any:
-    """Recursively round float values for clean JSON output."""
-    if isinstance(obj, float):
-        return round(obj, decimals)
-    if isinstance(obj, dict):
-        return {k: _round_floats(v, decimals) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_round_floats(item, decimals) for item in obj]
-    return obj
-
-
 def _query_trend(sql: str, params=None):
-    """Special query path for trend aggregates that need raw tables but must still block PII columns."""
+    """Special query path for trend aggregates that need raw tables but block PII."""
     sql_lower = sql.lower()
     for col in BLOCKED_COLUMNS:
         if col in sql_lower:
             raise SecurityError(f"Access denied: column '{col}' is restricted")
     if not sql_lower.strip().startswith("select"):
         raise SecurityError("Only SELECT queries are allowed")
-    # Must have GROUP BY (aggregate only)
     if "group by" not in sql_lower:
         raise SecurityError("Trend queries must use GROUP BY aggregation")
     with _get_connection() as conn:
@@ -250,6 +184,16 @@ def _query_trend(sql: str, params=None):
             cur.execute(sql, params)
             return [dict(r) for r in cur.fetchall()]
 
+
+# ---------------------------------------------------------------------------
+# Shared Service Instance
+# ---------------------------------------------------------------------------
+
+_service = HealthDataService(
+    query=_query,
+    scalar=_scalar,
+    query_trend=_query_trend,
+)
 
 # ---------------------------------------------------------------------------
 # MCP Server
@@ -264,8 +208,6 @@ mcp = FastMCP(
 )
 
 
-# ===== Tool 1: get_overview =====
-
 @mcp.tool()
 def get_overview() -> dict:
     """
@@ -273,22 +215,10 @@ def get_overview() -> dict:
     ดึงภาพรวมโครงการตรวจคัดกรองสุขภาพ กทม. ทั้งหมด
     Returns total screened, target, number of zones and districts, and last updated time.
     """
-    rows = _query("""
-        SELECT
-            SUM(total_screened)       AS total_screened,
-            COUNT(DISTINCT zone_code) AS zones,
-            COUNT(*)                  AS districts
-        FROM summary_district_disease
-    """)
-    result = rows[0] if rows else {}
-    result["target"] = 1_600_000
-    result["last_updated"] = datetime.now(timezone.utc).isoformat()
-
+    result = _service.get_overview()
     _write_audit_entry("get_overview", {}, 1)
-    return _round_floats(result)
+    return result
 
-
-# ===== Tool 2: get_zone_summary =====
 
 @mcp.tool()
 def get_zone_summary(zone_code: str) -> dict:
@@ -297,53 +227,10 @@ def get_zone_summary(zone_code: str) -> dict:
     ดึงข้อมูลสรุปสุขภาพตามโซนสุขภาพ กทม. (zone_code เช่น '1', '2', ...)
     Returns zone totals, list of districts, and disease prevalence percentages.
     """
-    zone_code = str(zone_code).strip()
+    result = _service.get_zone_summary(zone_code)
+    _write_audit_entry("get_zone_summary", {"zone_code": zone_code}, len(result.get("districts", [])))
+    return result
 
-    rows = _query("""
-        SELECT
-            district_code, district_name, zone_code, total_screened,
-            pct_risk_dm, pct_found_dm,
-            pct_risk_hpt, pct_found_hpt,
-            pct_risk_cvd, pct_found_cvd,
-            risk_bmi_count, found_obesity_count, found_dyslipidemia_count, found_stroke_count
-        FROM summary_district_disease
-        WHERE zone_code = %s
-        ORDER BY district_code
-    """, (zone_code,))
-
-    if not rows:
-        _write_audit_entry("get_zone_summary", {"zone_code": zone_code}, 0)
-        return {"error": f"No data found for zone_code='{zone_code}'"}
-
-    total_screened = sum(r["total_screened"] or 0 for r in rows)
-    districts = [
-        {"dcode": r["district_code"], "name_th": r["district_name"], "total_screened": r["total_screened"]}
-        for r in rows
-    ]
-
-    # Aggregate disease percentages weighted by screened counts
-    def _weighted_pct(col: str) -> Optional[float]:
-        total = sum((r[col] or 0) * (r["total_screened"] or 0) for r in rows)
-        return round(total / total_screened, 2) if total_screened else None
-
-    diseases = {
-        "diabetes": {"pct_risk": _weighted_pct("pct_risk_dm"), "pct_found": _weighted_pct("pct_found_dm")},
-        "hypertension": {"pct_risk": _weighted_pct("pct_risk_hpt"), "pct_found": _weighted_pct("pct_found_hpt")},
-        "cardiovascular": {"pct_risk": _weighted_pct("pct_risk_cvd"), "pct_found": _weighted_pct("pct_found_cvd")},
-    }
-
-    result = {
-        "zone_code": zone_code,
-        "total_screened": total_screened,
-        "districts": districts,
-        "diseases": diseases,
-    }
-
-    _write_audit_entry("get_zone_summary", {"zone_code": zone_code}, len(rows))
-    return _round_floats(result)
-
-
-# ===== Tool 3: get_district_summary =====
 
 @mcp.tool()
 def get_district_summary(dcode: str) -> dict:
@@ -352,86 +239,10 @@ def get_district_summary(dcode: str) -> dict:
     ดึงข้อมูลสรุปสุขภาพรายเขต (district) รวมโรค, ผลแลป, สุขภาพจิต
     dcode = district code เช่น '1001', '1002', ...
     """
-    dcode = str(dcode).strip()
+    result = _service.get_district_summary(dcode)
+    _write_audit_entry("get_district_summary", {"dcode": dcode}, 0 if "error" in result else 1)
+    return result
 
-    # Disease data
-    disease_rows = _query("""
-        SELECT district_code, district_name, zone_code, total_screened,
-               risk_dm_count, risk_hpt_count, risk_cvd_count, risk_bmi_count,
-               found_dm_count, found_hpt_count, found_cvd_count, found_stroke_count,
-               found_obesity_count, found_dyslipidemia_count,
-               pct_risk_dm, pct_risk_hpt, pct_risk_cvd,
-               pct_found_dm, pct_found_hpt, pct_found_cvd
-        FROM summary_district_disease WHERE district_code = %s
-    """, (dcode,))
-
-    if not disease_rows:
-        _write_audit_entry("get_district_summary", {"dcode": dcode}, 0)
-        return {"error": f"No data found for district code='{dcode}'"}
-    if (disease_rows[0].get("total_screened") or 0) < K_ANONYMITY_THRESHOLD:
-        _write_audit_entry("get_district_summary", {"dcode": dcode}, 0)
-        return {"error": "Data suppressed for privacy (k-anonymity threshold)"}
-
-    d = disease_rows[0]
-
-    # Lab data
-    lab_rows = _query("""
-        SELECT district_code, total_lab_patients,
-               avg_hemoglobin, avg_hematocrit, avg_fbs, avg_cholesterol,
-               avg_triglyceride, avg_hdl, avg_ldl, avg_creatinine, avg_egfr,
-               avg_uric_acid, avg_sgot, avg_sgpt,
-               pct_anemia, pct_ckd, pct_cbc_abnormal, pct_liver_abnormal
-        FROM summary_district_lab WHERE district_code = %s
-    """, (dcode,))
-    lab = lab_rows[0] if lab_rows else {}
-
-    # Mental health data
-    mental_rows = _query("""
-        SELECT district_code, total_screened,
-               pct_depression_risk, pct_phq9_moderate, pct_high_stress
-        FROM summary_district_mental WHERE district_code = %s
-    """, (dcode,))
-    mental = mental_rows[0] if mental_rows else {}
-
-    result = {
-        "dcode": dcode,
-        "name_th": d.get("district_name"),
-        "zone_code": d.get("zone_code"),
-        "total_screened": d.get("total_screened"),
-        "diseases": {
-            "diabetes": {"pct_risk": d.get("pct_risk_dm"), "pct_found": d.get("pct_found_dm")},
-            "hypertension": {"pct_risk": d.get("pct_risk_hpt"), "pct_found": d.get("pct_found_hpt")},
-            "cardiovascular": {"pct_risk": d.get("pct_risk_cvd"), "pct_found": d.get("pct_found_cvd")},
-            "obesity": {"found_count": d.get("found_obesity_count")},
-            "dyslipidemia": {"found_count": d.get("found_dyslipidemia_count")},
-            "stroke": {"found_count": d.get("found_stroke_count")},
-        },
-        "lab_summary": {
-            "total_lab_patients": lab.get("total_lab_patients"),
-            "avg_hemoglobin": lab.get("avg_hemoglobin"),
-            "avg_fbs": lab.get("avg_fbs"),
-            "avg_cholesterol": lab.get("avg_cholesterol"),
-            "avg_triglyceride": lab.get("avg_triglyceride"),
-            "avg_hdl": lab.get("avg_hdl"),
-            "avg_ldl": lab.get("avg_ldl"),
-            "avg_creatinine": lab.get("avg_creatinine"),
-            "avg_egfr": lab.get("avg_egfr"),
-            "pct_anemia": lab.get("pct_anemia"),
-            "pct_ckd": lab.get("pct_ckd"),
-        },
-        "mental_health": {
-            "total_screened": mental.get("total_screened"),
-            "pct_depression_risk": mental.get("pct_depression_risk"),
-            "pct_phq9_moderate": mental.get("pct_phq9_moderate"),
-            "pct_high_stress": mental.get("pct_high_stress"),
-        },
-    }
-
-    _write_audit_entry("get_district_summary", {"dcode": dcode}, 1)
-    return _round_floats(result)
-
-
-# ===== Tool 4: compare_disease =====
 
 @mcp.tool()
 def compare_disease(
@@ -446,88 +257,14 @@ def compare_disease(
     level: 'zone' or 'district'
     codes: optional list of zone_codes or dcodes to filter
     """
-    disease_key = disease_key.strip().lower()
-    level = level.strip().lower()
+    try:
+        result = _service.compare_disease(disease_key, level, codes)
+    except ValueError as e:
+        result = {"error": str(e)}
+    row_count = len(result) if isinstance(result, list) else 0
+    _write_audit_entry("compare_disease", {"disease_key": disease_key, "level": level, "codes": codes}, row_count)
+    return result
 
-    if disease_key not in VALID_DISEASE_KEYS:
-        return {"error": f"Invalid disease_key. Choose from: {sorted(VALID_DISEASE_KEYS)}"}
-    if level not in ("zone", "district"):
-        return {"error": "level must be 'zone' or 'district'"}
-
-    mapping = DISEASE_KEY_MAP[disease_key]
-
-    if level == "zone":
-        # Aggregate by zone
-        sql = """
-            SELECT
-                zone_code AS code,
-                zone_code AS name_th,
-                SUM(total_screened) AS total_screened
-        """
-        # Add disease columns
-        if "pct_at_risk" in mapping:
-            risk_count_col = mapping.get("risk_count", mapping["pct_at_risk"].replace("pct_", "").replace("risk_", "risk_") + "_count")
-            # Use weighted average
-            sql += f""",
-                ROUND(100.0 * SUM({risk_count_col}) / NULLIF(SUM(total_screened), 0), 2) AS pct_at_risk
-            """
-        else:
-            sql += ", NULL AS pct_at_risk"
-
-        sql += """
-            FROM summary_district_disease
-        """
-        params: list = []
-        if codes:
-            placeholders = ",".join(["%s"] * len(codes))
-            sql += f" WHERE zone_code IN ({placeholders})"
-            params.extend(codes)
-
-        sql += " GROUP BY zone_code ORDER BY zone_code"
-
-    else:
-        # District level
-        pct_col = mapping.get("pct_at_risk")
-        if pct_col and pct_col.startswith("pct_"):
-            select_pct = f"{pct_col} AS pct_at_risk"
-        else:
-            select_pct = "NULL AS pct_at_risk"
-
-        sql = f"""
-            SELECT
-                district_code AS code,
-                district_name AS name_th,
-                total_screened,
-                {select_pct}
-            FROM summary_district_disease
-        """
-        params = []
-        if codes:
-            placeholders = ",".join(["%s"] * len(codes))
-            sql += f" WHERE district_code IN ({placeholders})"
-            params.extend(codes)
-
-        sql += " ORDER BY district_code"
-
-    rows = _query(sql, params or None)
-
-    # Enforce k-anonymity: suppress districts/zones with too few screened
-    rows = [r for r in rows if (r.get("total_screened") or 0) >= K_ANONYMITY_THRESHOLD]
-
-    # Add ranking by pct_at_risk descending
-    sorted_rows = sorted(rows, key=lambda r: r.get("pct_at_risk") or 0, reverse=True)
-    for rank, row in enumerate(sorted_rows, 1):
-        row["rank"] = rank
-
-    _write_audit_entry(
-        "compare_disease",
-        {"disease_key": disease_key, "level": level, "codes": codes},
-        len(sorted_rows),
-    )
-    return _round_floats(sorted_rows)
-
-
-# ===== Tool 5: get_filtered_summary =====
 
 @mcp.tool()
 def get_filtered_summary(filters: Dict) -> Union[List[Dict], Dict]:
@@ -537,72 +274,11 @@ def get_filtered_summary(filters: Dict) -> Union[List[Dict], Dict]:
     filters: { dcode, sex, age_group, smoking, exercise }
     Groups with fewer than 5 people are suppressed for privacy.
     """
-    allowed_filters = {"dcode", "sex", "age_group", "smoking", "exercise"}
-    conditions = []
-    params: list = []
-
-    col_map = {
-        "dcode": "district_code",
-        "sex": "sex",
-        "age_group": "age_group",
-        "smoking": "smoking",
-        "exercise": "exercise",
-    }
-
-    for key, value in (filters or {}).items():
-        key = key.strip().lower()
-        if key not in allowed_filters:
-            continue
-        col = col_map[key]
-        conditions.append(f"{col} = %s")
-        params.append(str(value))
-
-    where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
-
-    sql = f"""
-        SELECT
-            district_code,
-            sex,
-            age_group,
-            smoking,
-            exercise,
-            SUM(patient_count) AS patient_count,
-            ROUND(AVG(avg_sbp)::numeric, 2) AS avg_sbp,
-            ROUND(AVG(avg_dbp)::numeric, 2) AS avg_dbp,
-            ROUND(AVG(avg_weight_kg)::numeric, 2) AS avg_weight_kg,
-            ROUND(AVG(avg_waist_cm)::numeric, 2) AS avg_waist_cm,
-            ROUND(AVG(avg_bmi)::numeric, 2) AS avg_bmi
-        FROM summary_district_risk_factors
-        {where_clause}
-        GROUP BY district_code, sex, age_group, smoking, exercise
-        ORDER BY district_code, sex, age_group
-    """
-
-    rows = _query(sql, params or None)
-
-    # Enforce k-anonymity
-    safe_rows = _enforce_k_anonymity(rows, count_col="patient_count")
-    suppressed = len(rows) - len(safe_rows)
-
-    if not safe_rows:
-        _write_audit_entry("get_filtered_summary", filters or {}, 0)
-        return {
-            "error": "All result groups have fewer than 5 people. Cannot return data to protect privacy.",
-            "k_anonymity_threshold": K_ANONYMITY_THRESHOLD,
-        }
-
-    result = {
-        "rows": _round_floats(safe_rows),
-        "total_rows": len(safe_rows),
-        "has_suppressed_data": suppressed > 0,
-        "k_anonymity_threshold": K_ANONYMITY_THRESHOLD,
-    }
-
-    _write_audit_entry("get_filtered_summary", filters or {}, len(safe_rows))
+    result = _service.get_filtered_summary(filters)
+    row_count = result.get("total_rows", 0) if isinstance(result, dict) else 0
+    _write_audit_entry("get_filtered_summary", filters or {}, row_count)
     return result
 
-
-# ===== Tool 6: get_trend =====
 
 @mcp.tool()
 def get_trend(
@@ -616,75 +292,15 @@ def get_trend(
     disease_key: diabetes, hypertension, cardiovascular, obesity
     dcode: optional district code filter
     granularity: 'monthly' or 'quarterly'
-    NOTE: This queries raw_vitalsigns only in aggregated form (GROUP BY date period).
     """
-    disease_key = disease_key.strip().lower()
-    granularity = granularity.strip().lower()
+    try:
+        result = _service.get_trend(disease_key, dcode, granularity)
+    except ValueError as e:
+        result = {"error": str(e)}
+    row_count = len(result) if isinstance(result, list) else 0
+    _write_audit_entry("get_trend", {"disease_key": disease_key, "dcode": dcode, "granularity": granularity}, row_count)
+    return result
 
-    if disease_key not in VALID_DISEASE_KEYS:
-        return {"error": f"Invalid disease_key. Choose from: {sorted(VALID_DISEASE_KEYS)}"}
-    if granularity not in ("monthly", "quarterly"):
-        return {"error": "granularity must be 'monthly' or 'quarterly'"}
-
-    # Map disease_key to a boolean column in raw_vitalsigns
-    risk_col_map = {
-        "diabetes": "risk_dm",
-        "hypertension": "risk_hpt",
-        "cardiovascular": "risk_cvd",
-        "obesity": "risk_bmi",
-        "dyslipidemia": "found_dyslipidemia",
-        "stroke": "found_stroke",
-    }
-    risk_col = risk_col_map.get(disease_key)
-    if not risk_col:
-        return {"error": f"Trend data not available for '{disease_key}'"}
-
-    trunc = "month" if granularity == "monthly" else "quarter"
-
-    conditions = ["v.cancel_status IS DISTINCT FROM 1"]
-    params: list = []
-
-    if dcode:
-        dcode = str(dcode).strip()
-        conditions.append("v.district_code = %s")
-        params.append(dcode)
-
-    where_clause = " AND ".join(conditions)
-
-    # IMPORTANT: This query only returns aggregated counts, never individual records
-    sql = f"""
-        SELECT
-            DATE_TRUNC('{trunc}', v.visit_date) AS period,
-            COUNT(DISTINCT v.patient_id) AS total_screened,
-            ROUND(
-                100.0 * COUNT(DISTINCT v.patient_id) FILTER (WHERE v.{risk_col})
-                / NULLIF(COUNT(DISTINCT v.patient_id), 0),
-                2
-            ) AS pct_at_risk
-        FROM raw_vitalsigns v
-        WHERE {where_clause}
-        GROUP BY DATE_TRUNC('{trunc}', v.visit_date)
-        HAVING COUNT(DISTINCT v.patient_id) >= %s
-        ORDER BY period
-    """
-    params.append(K_ANONYMITY_THRESHOLD)
-
-    rows = _query_trend(sql, params)
-
-    # Convert period to ISO string
-    for row in rows:
-        if row.get("period"):
-            row["period"] = row["period"].isoformat()
-
-    _write_audit_entry(
-        "get_trend",
-        {"disease_key": disease_key, "dcode": dcode, "granularity": granularity},
-        len(rows),
-    )
-    return _round_floats(rows)
-
-
-# ===== Tool 7: get_lab_summary =====
 
 @mcp.tool()
 def get_lab_summary(
@@ -694,63 +310,11 @@ def get_lab_summary(
     """
     Get lab result summary (averages and clinical thresholds) by district or zone.
     ดึงข้อมูลสรุปผลแลป เช่น ค่าเฉลี่ย hemoglobin, FBS, cholesterol, สัดส่วนโลหิตจาง, CKD
-    dcode: optional district code
-    zone_code: optional zone code (ignored if dcode provided)
     """
-    conditions: list[str] = []
-    params: list = []
+    result = _service.get_lab_summary(dcode, zone_code)
+    _write_audit_entry("get_lab_summary", {"dcode": dcode, "zone_code": zone_code}, 0 if "error" in result else 1)
+    return result
 
-    if dcode:
-        conditions.append("l.district_code = %s")
-        params.append(str(dcode).strip())
-    elif zone_code:
-        conditions.append("""
-            l.district_code IN (
-                SELECT district_code FROM summary_district_disease WHERE zone_code = %s
-            )
-        """)
-        params.append(str(zone_code).strip())
-
-    where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
-
-    sql = f"""
-        SELECT
-            SUM(total_lab_patients)                                        AS total_lab_patients,
-            ROUND((SUM(avg_hemoglobin * total_lab_patients) / NULLIF(SUM(total_lab_patients), 0))::numeric, 2)  AS avg_hemoglobin,
-            ROUND((SUM(avg_hematocrit * total_lab_patients) / NULLIF(SUM(total_lab_patients), 0))::numeric, 2)  AS avg_hematocrit,
-            ROUND((SUM(avg_fbs * total_lab_patients) / NULLIF(SUM(total_lab_patients), 0))::numeric, 2)         AS avg_fbs,
-            ROUND((SUM(avg_cholesterol * total_lab_patients) / NULLIF(SUM(total_lab_patients), 0))::numeric, 2) AS avg_cholesterol,
-            ROUND((SUM(avg_triglyceride * total_lab_patients) / NULLIF(SUM(total_lab_patients), 0))::numeric, 2) AS avg_triglyceride,
-            ROUND((SUM(avg_hdl * total_lab_patients) / NULLIF(SUM(total_lab_patients), 0))::numeric, 2)         AS avg_hdl,
-            ROUND((SUM(avg_ldl * total_lab_patients) / NULLIF(SUM(total_lab_patients), 0))::numeric, 2)         AS avg_ldl,
-            ROUND((SUM(avg_creatinine * total_lab_patients) / NULLIF(SUM(total_lab_patients), 0))::numeric, 2)  AS avg_creatinine,
-            ROUND((SUM(avg_egfr * total_lab_patients) / NULLIF(SUM(total_lab_patients), 0))::numeric, 2)        AS avg_egfr,
-            ROUND((SUM(avg_uric_acid * total_lab_patients) / NULLIF(SUM(total_lab_patients), 0))::numeric, 2)   AS avg_uric_acid,
-            ROUND((SUM(avg_sgot * total_lab_patients) / NULLIF(SUM(total_lab_patients), 0))::numeric, 2)        AS avg_sgot,
-            ROUND((SUM(avg_sgpt * total_lab_patients) / NULLIF(SUM(total_lab_patients), 0))::numeric, 2)        AS avg_sgpt,
-            ROUND((SUM(pct_anemia * total_lab_patients) / NULLIF(SUM(total_lab_patients), 0))::numeric, 2)      AS pct_anemia,
-            ROUND((SUM(pct_ckd * total_lab_patients) / NULLIF(SUM(total_lab_patients), 0))::numeric, 2)         AS pct_ckd
-        FROM summary_district_lab l
-        {where_clause}
-    """
-
-    rows = _query(sql, params or None)
-    result = rows[0] if rows else {}
-
-    # Enforce k-anonymity on lab data
-    if (result.get("total_lab_patients") or 0) < K_ANONYMITY_THRESHOLD:
-        _write_audit_entry("get_lab_summary", {"dcode": dcode, "zone_code": zone_code}, 0)
-        return {"error": "Data suppressed for privacy (k-anonymity threshold)"}
-
-    _write_audit_entry(
-        "get_lab_summary",
-        {"dcode": dcode, "zone_code": zone_code},
-        1 if result else 0,
-    )
-    return _round_floats(result)
-
-
-# ===== Tool 8: get_mental_health_summary =====
 
 @mcp.tool()
 def get_mental_health_summary(
@@ -760,52 +324,11 @@ def get_mental_health_summary(
     """
     Get mental health screening summary (depression, PHQ-9, stress).
     ดึงข้อมูลสรุปสุขภาพจิต: ความเสี่ยงซึมเศร้า, PHQ-9 ระดับปานกลางขึ้นไป, ความเครียดสูง
-    dcode: optional district code
-    zone_code: optional zone code (ignored if dcode provided)
     """
-    conditions: list[str] = []
-    params: list = []
+    result = _service.get_mental_health_summary(dcode, zone_code)
+    _write_audit_entry("get_mental_health_summary", {"dcode": dcode, "zone_code": zone_code}, 0 if "error" in result else 1)
+    return result
 
-    if dcode:
-        conditions.append("m.district_code = %s")
-        params.append(str(dcode).strip())
-    elif zone_code:
-        conditions.append("""
-            m.district_code IN (
-                SELECT district_code FROM summary_district_disease WHERE zone_code = %s
-            )
-        """)
-        params.append(str(zone_code).strip())
-
-    where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
-
-    sql = f"""
-        SELECT
-            SUM(total_screened) AS total_screened,
-            ROUND((SUM(pct_depression_risk * total_screened) / NULLIF(SUM(total_screened), 0))::numeric, 2) AS pct_depression_risk,
-            ROUND((SUM(pct_phq9_moderate * total_screened) / NULLIF(SUM(total_screened), 0))::numeric, 2)   AS pct_phq9_moderate,
-            ROUND((SUM(pct_high_stress * total_screened) / NULLIF(SUM(total_screened), 0))::numeric, 2)     AS pct_high_stress
-        FROM summary_district_mental m
-        {where_clause}
-    """
-
-    rows = _query(sql, params or None)
-    result = rows[0] if rows else {}
-
-    # Enforce k-anonymity on mental health data
-    if (result.get("total_screened") or 0) < K_ANONYMITY_THRESHOLD:
-        _write_audit_entry("get_mental_health_summary", {"dcode": dcode, "zone_code": zone_code}, 0)
-        return {"error": "Data suppressed for privacy (k-anonymity threshold)"}
-
-    _write_audit_entry(
-        "get_mental_health_summary",
-        {"dcode": dcode, "zone_code": zone_code},
-        1 if result else 0,
-    )
-    return _round_floats(result)
-
-
-# ===== Tool 9: get_demographics =====
 
 @mcp.tool()
 def get_demographics(
@@ -815,112 +338,11 @@ def get_demographics(
     """
     Get demographic breakdown: education, occupation, health privilege, housing type.
     ดึงข้อมูลประชากรศาสตร์: การศึกษา, อาชีพ, สิทธิ์สุขภาพ, ประเภทที่อยู่อาศัย
-    dcode: optional district code
-    zone_code: optional zone code (ignored if dcode provided)
     """
-    conditions: list[str] = []
-    params: list = []
+    result = _service.get_demographics(dcode, zone_code)
+    _write_audit_entry("get_demographics", {"dcode": dcode, "zone_code": zone_code}, 0 if "error" in result else 1)
+    return result
 
-    if dcode:
-        conditions.append("d.district_code = %s")
-        params.append(str(dcode).strip())
-    elif zone_code:
-        conditions.append("""
-            d.district_code IN (
-                SELECT district_code FROM summary_district_disease WHERE zone_code = %s
-            )
-        """)
-        params.append(str(zone_code).strip())
-
-    where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
-
-    sql = f"""
-        SELECT
-            SUM(total_respondents) AS total_respondents,
-            SUM(edu_none) AS edu_none,
-            SUM(edu_primary) AS edu_primary,
-            SUM(edu_secondary) AS edu_secondary,
-            SUM(edu_high_school) AS edu_high_school,
-            SUM(edu_vocational) AS edu_vocational,
-            SUM(edu_bachelor) AS edu_bachelor,
-            SUM(edu_postgrad) AS edu_postgrad,
-            SUM(occ_government) AS occ_government,
-            SUM(occ_private) AS occ_private,
-            SUM(occ_self_employed) AS occ_self_employed,
-            SUM(occ_agriculture) AS occ_agriculture,
-            SUM(occ_unemployed) AS occ_unemployed,
-            SUM(occ_student) AS occ_student,
-            SUM(occ_retired) AS occ_retired,
-            SUM(priv_ucs) AS priv_ucs,
-            SUM(priv_sso) AS priv_sso,
-            SUM(priv_csmbs) AS priv_csmbs,
-            SUM(priv_other) AS priv_other,
-            SUM(house_owned) AS house_owned,
-            SUM(house_rented) AS house_rented,
-            SUM(house_condo) AS house_condo,
-            SUM(house_other) AS house_other
-        FROM summary_district_demographics d
-        {where_clause}
-    """
-
-    rows = _query(sql, params or None)
-    r = rows[0] if rows else {}
-
-    total = r.get("total_respondents") or 0
-
-    # Enforce k-anonymity on demographics data
-    if total < K_ANONYMITY_THRESHOLD:
-        _write_audit_entry("get_demographics", {"dcode": dcode, "zone_code": zone_code}, 0)
-        return {"error": "Data suppressed for privacy (k-anonymity threshold)"}
-
-    def _pct(val: Any) -> Optional[float]:
-        if val is None or not total:
-            return None
-        return round(100.0 * val / total, 2)
-
-    result = {
-        "total_respondents": total,
-        "education_breakdown": {
-            "none": {"count": r.get("edu_none"), "pct": _pct(r.get("edu_none"))},
-            "primary": {"count": r.get("edu_primary"), "pct": _pct(r.get("edu_primary"))},
-            "secondary": {"count": r.get("edu_secondary"), "pct": _pct(r.get("edu_secondary"))},
-            "high_school": {"count": r.get("edu_high_school"), "pct": _pct(r.get("edu_high_school"))},
-            "vocational": {"count": r.get("edu_vocational"), "pct": _pct(r.get("edu_vocational"))},
-            "bachelor": {"count": r.get("edu_bachelor"), "pct": _pct(r.get("edu_bachelor"))},
-            "postgrad": {"count": r.get("edu_postgrad"), "pct": _pct(r.get("edu_postgrad"))},
-        },
-        "occupation_breakdown": {
-            "government": {"count": r.get("occ_government"), "pct": _pct(r.get("occ_government"))},
-            "private": {"count": r.get("occ_private"), "pct": _pct(r.get("occ_private"))},
-            "self_employed": {"count": r.get("occ_self_employed"), "pct": _pct(r.get("occ_self_employed"))},
-            "agriculture": {"count": r.get("occ_agriculture"), "pct": _pct(r.get("occ_agriculture"))},
-            "unemployed": {"count": r.get("occ_unemployed"), "pct": _pct(r.get("occ_unemployed"))},
-            "student": {"count": r.get("occ_student"), "pct": _pct(r.get("occ_student"))},
-            "retired": {"count": r.get("occ_retired"), "pct": _pct(r.get("occ_retired"))},
-        },
-        "privilege_breakdown": {
-            "ucs": {"count": r.get("priv_ucs"), "pct": _pct(r.get("priv_ucs"))},
-            "sso": {"count": r.get("priv_sso"), "pct": _pct(r.get("priv_sso"))},
-            "csmbs": {"count": r.get("priv_csmbs"), "pct": _pct(r.get("priv_csmbs"))},
-            "other": {"count": r.get("priv_other"), "pct": _pct(r.get("priv_other"))},
-        },
-        "housing_breakdown": {
-            "owned": {"count": r.get("house_owned"), "pct": _pct(r.get("house_owned"))},
-            "rented": {"count": r.get("house_rented"), "pct": _pct(r.get("house_rented"))},
-            "condo": {"count": r.get("house_condo"), "pct": _pct(r.get("house_condo"))},
-            "other": {"count": r.get("house_other"), "pct": _pct(r.get("house_other"))},
-        },
-    }
-
-    _write_audit_entry(
-        "get_demographics",
-        {"dcode": dcode, "zone_code": zone_code},
-        1 if total else 0,
-    )
-    return _round_floats(result)
-
-
-# ===== Tool 10: search_districts =====
 
 @mcp.tool()
 def search_districts(query: Dict) -> Union[List[Dict], Dict]:
@@ -928,84 +350,166 @@ def search_districts(query: Dict) -> Union[List[Dict], Dict]:
     Search districts by disease prevalence criteria.
     ค้นหาเขตตามเกณฑ์ความชุกของโรค เช่น เขตที่มีเบาหวานสูงสุด
     query: { disease (str), min_pct (float), max_pct (float), sort_by (str), limit (int) }
-    disease: diabetes, hypertension, cardiovascular, obesity, dyslipidemia, stroke
-    sort_by: 'asc' or 'desc' (default 'desc')
-    limit: max rows to return (default 10)
     """
-    if not query:
-        return {"error": "query parameter is required"}
+    try:
+        result = _service.search_districts(query)
+    except ValueError as e:
+        result = {"error": str(e)}
+    row_count = len(result) if isinstance(result, list) else 0
+    _write_audit_entry("search_districts", query or {}, row_count)
+    return result
 
-    disease = str(query.get("disease", "")).strip().lower()
-    min_pct = query.get("min_pct")
-    max_pct = query.get("max_pct")
-    sort_by = str(query.get("sort_by", "desc")).strip().lower()
-    limit = int(query.get("limit", 10))
 
-    if disease not in VALID_DISEASE_KEYS:
-        return {"error": f"Invalid disease. Choose from: {sorted(VALID_DISEASE_KEYS)}"}
-    if sort_by not in ("asc", "desc"):
-        return {"error": "sort_by must be 'asc' or 'desc'"}
-    if limit < 1 or limit > 100:
-        limit = min(max(limit, 1), 100)
+# ===== Tool 11: get_facility_locations (NEW — GIS) =====
 
-    mapping = DISEASE_KEY_MAP[disease]
-    # Prefer pct_at_risk column if available, else compute from found_count
-    value_col = mapping.get("pct_at_risk")
-    if value_col:
-        select_expr = f"{value_col} AS matching_value"
-    else:
-        # For diseases without a pct column, compute from counts
-        found_col = mapping.get("pct_found", mapping.get("found_count"))
-        select_expr = f"ROUND(100.0 * {found_col} / NULLIF(total_screened, 0), 2) AS matching_value"
-
-    conditions = []
+@mcp.tool()
+def get_facility_locations(
+    zone_code: Optional[str] = None,
+    district_code: Optional[str] = None,
+    limit: int = 100,
+) -> Dict:
+    """
+    Get health facility locations with lat/lng for map display.
+    ดึงตำแหน่งสถานบริการ พร้อมพิกัด สำหรับแสดงบนแผนที่
+    zone_code: optional filter by health zone
+    district_code: optional filter by district
+    limit: max facilities to return (default 100)
+    """
+    conditions = ["latitude IS NOT NULL"]
     params: list = []
 
-    if min_pct is not None:
-        conditions.append("matching_value >= %s")
-        params.append(float(min_pct))
-    if max_pct is not None:
-        conditions.append("matching_value <= %s")
-        params.append(float(max_pct))
+    if zone_code:
+        conditions.append("zone_code = %s")
+        params.append(str(zone_code).strip())
+    if district_code:
+        conditions.append("district_code = %s")
+        params.append(str(district_code).strip())
 
-    # Use a CTE so we can filter on the computed column
-    having_clause = ""
-    if conditions:
-        having_clause = " HAVING " + " AND ".join(conditions)
+    where = " AND ".join(conditions)
+    params.append(min(limit, 500))
 
-    order = "DESC" if sort_by == "desc" else "ASC"
+    rows = _query(f"""
+        SELECT code, name_th, facility_type, district_code, zone_code,
+               latitude, longitude, address, telephone
+        FROM ref_facilities
+        WHERE {where}
+        ORDER BY code
+        LIMIT %s
+    """, params)
 
-    sql = f"""
-        WITH ranked AS (
-            SELECT
-                district_code AS dcode,
-                district_name AS name_th,
-                zone_code,
-                total_screened,
-                {select_expr}
-            FROM summary_district_disease
-        )
-        SELECT * FROM ranked
-        WHERE matching_value IS NOT NULL
+    _write_audit_entry("get_facility_locations", {"zone_code": zone_code, "district_code": district_code}, len(rows))
+    return {"total": len(rows), "facilities": _service._round_floats(rows)}
+
+
+# ===== Tool 12: get_disease_heatmap (NEW — GIS) =====
+
+@mcp.tool()
+def get_disease_heatmap(disease_key: str) -> Union[Dict, List]:
     """
+    Get disease prevalence per district with centroid coordinates for heatmap.
+    ดึงความชุกโรคต่อเขต พร้อมพิกัดกลางเขต สำหรับแสดง heatmap บนแผนที่
+    disease_key: diabetes, hypertension, cardiovascular
+    """
+    valid_cols = {
+        "diabetes": "pct_risk_dm",
+        "hypertension": "pct_risk_hpt",
+        "cardiovascular": "pct_risk_cvd",
+    }
+    disease_key = disease_key.strip().lower()
+    if disease_key not in valid_cols:
+        return {"error": f"Valid disease_keys: {sorted(valid_cols)}"}
 
-    if min_pct is not None:
-        sql += " AND matching_value >= %s"
-        params.append(float(min_pct))
-    if max_pct is not None:
-        sql += " AND matching_value <= %s"
-        params.append(float(max_pct))
+    pct_col = valid_cols[disease_key]
 
-    sql += f" ORDER BY matching_value {order} LIMIT %s"
-    params.append(limit)
+    rows = _query(f"""
+        SELECT d.district_code, d.district_name, d.total_screened,
+               d.{pct_col} AS disease_pct,
+               AVG(f.latitude) AS centroid_lat,
+               AVG(f.longitude) AS centroid_lng
+        FROM summary_district_disease d
+        LEFT JOIN ref_facilities f ON f.district_code = d.district_code AND f.latitude IS NOT NULL
+        WHERE d.total_screened >= %s
+        GROUP BY d.district_code, d.district_name, d.total_screened, d.{pct_col}
+        ORDER BY d.{pct_col} DESC NULLS LAST
+    """, (K_ANONYMITY_THRESHOLD,))
 
-    rows = _query(sql, params)
+    _write_audit_entry("get_disease_heatmap", {"disease_key": disease_key}, len(rows))
+    return _service._round_floats({"disease_key": disease_key, "data": rows})
 
-    # Enforce k-anonymity
-    rows = [r for r in rows if (r.get("total_screened") or 0) >= K_ANONYMITY_THRESHOLD]
 
-    _write_audit_entry("search_districts", query, len(rows))
-    return _round_floats(rows)
+# ===== Tool 13: get_diet_disease_summary (NEW — Doc 01 Governor) =====
+
+@mcp.tool()
+def get_diet_disease_summary(
+    diet: str = "sweet",
+    disease: str = "diabetes",
+) -> Dict:
+    """
+    Get diet-disease correlation: does eating sweet/salty/fatty increase disease risk?
+    ความสัมพันธ์ระหว่างพฤติกรรมอาหารกับโรค เช่น กินเค็มแล้วเป็นความดันจริงไหม?
+    diet: sweet, salty, fatty, fried, sugary_drinks, instant_noodle
+    disease: diabetes, hypertension, cardiovascular, obesity, dyslipidemia, stroke
+    NOTE: Diet data may be unavailable (100% NULL) depending on HDC data import status.
+    """
+    diet_cols = {
+        "sweet": "food_preference_sweet", "salty": "food_preference_salty",
+        "fatty": "food_preference_fatty", "fried": "food_fried_freq",
+        "sugary_drinks": "drink_sugar_freq", "instant_noodle": "instant_noodle_freq",
+    }
+    disease_cols = {
+        "diabetes": "found_dm", "hypertension": "found_hpt",
+        "cardiovascular": "found_cvd", "obesity": "found_obesity",
+        "dyslipidemia": "found_dyslipidemia", "stroke": "found_stroke",
+    }
+
+    diet = diet.strip().lower()
+    disease = disease.strip().lower()
+    if diet not in diet_cols:
+        return {"error": f"Valid diets: {sorted(diet_cols)}"}
+    if disease not in disease_cols:
+        return {"error": f"Valid diseases: {sorted(disease_cols)}"}
+
+    diet_col = diet_cols[diet]
+    disease_col = disease_cols[disease]
+
+    # Check data availability (this uses _query_trend to access raw tables)
+    try:
+        filled = _query_trend(f"""
+            SELECT COUNT(*) AS n FROM raw_homehealth
+            WHERE {diet_col} IS NOT NULL
+            GROUP BY 1=1
+        """)
+        count = filled[0]["n"] if filled else 0
+    except Exception:
+        count = 0
+
+    if count == 0:
+        result = {
+            "data_available": False,
+            "diet": diet, "disease": disease,
+            "message": f"ไม่มีข้อมูล {diet} (NULL ทั้งหมด) — ต้องรอข้อมูลจาก HDC",
+        }
+        _write_audit_entry("get_diet_disease_summary", {"diet": diet, "disease": disease}, 0)
+        return result
+
+    rows = _query_trend(f"""
+        SELECT h.{diet_col} AS diet_value,
+               COUNT(DISTINCT v.patient_id) AS total_patients,
+               COUNT(DISTINCT v.patient_id) FILTER (WHERE v.{disease_col}) AS disease_count,
+               ROUND(100.0 * COUNT(DISTINCT v.patient_id) FILTER (WHERE v.{disease_col})
+                   / NULLIF(COUNT(DISTINCT v.patient_id), 0), 2) AS disease_pct
+        FROM raw_homehealth h
+        JOIN raw_vitalsigns v ON h.patient_id = v.patient_id
+        WHERE h.cancel_status IS DISTINCT FROM 1 AND v.cancel_status IS DISTINCT FROM 1
+          AND h.{diet_col} IS NOT NULL
+        GROUP BY h.{diet_col}
+        HAVING COUNT(DISTINCT v.patient_id) >= {K_ANONYMITY_THRESHOLD}
+        ORDER BY h.{diet_col}
+    """)
+
+    result = {"data_available": True, "diet": diet, "disease": disease, "data": _service._round_floats(rows)}
+    _write_audit_entry("get_diet_disease_summary", {"diet": diet, "disease": disease}, len(rows))
+    return result
 
 
 # ---------------------------------------------------------------------------
