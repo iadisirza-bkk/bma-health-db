@@ -91,8 +91,14 @@ class OpenMultiAgent:
             adapter=self.adapter,
             tools=self.registry,
         )
+        _synth_prompt = (
+            "ตอบภาษาไทย Markdown กระชับ <=200 คำ "
+            "ห้ามแต่งตัวเลขเอง — ใช้เฉพาะตัวเลขที่อยู่ในข้อมูลที่ให้มาเท่านั้น "
+            "ถ้าข้อมูลมีแค่ % ห้ามคำนวณจำนวนคนเอง "
+            "ถ้าไม่มีข้อมูล ให้บอกว่าไม่มี อย่าเดา"
+        )
         synthesizer = Agent(
-            config=AgentConfig(name="synthesizer", role="สรุปคำตอบ", system_prompt="ตอบภาษาไทย Markdown กระชับ <=200 คำ", icon="sparkle"),
+            config=AgentConfig(name="synthesizer", role="สรุปคำตอบ", system_prompt=_synth_prompt, icon="sparkle"),
             adapter=self.adapter,
         )
         return Team(agents={"analyst": analyst, "synthesizer": synthesizer})
@@ -123,7 +129,7 @@ class OpenMultiAgent:
                 tool_context = "\n".join(r.text[:1500] for r in results if r.text)
                 if tool_context:
                     synth_msgs = [
-                        {"role": "system", "content": "ตอบภาษาไทย Markdown กระชับ <=200 คำ ใช้ข้อมูลที่ให้มาเท่านั้น"},
+                        {"role": "system", "content": "ตอบภาษาไทย Markdown กระชับ <=200 คำ ใช้เฉพาะตัวเลขที่อยู่ในข้อมูลที่ให้มาเท่านั้น ห้ามแต่งตัวเลขหรือคำนวณจำนวนคนเอง"},
                         {"role": "user", "content": f"ข้อมูล:\n{tool_context}\n\nสรุปข้อมูลนี้ตอบคำถาม: {user_message}"},
                     ]
                     synth_resp = await self.adapter.chat(synth_msgs)
