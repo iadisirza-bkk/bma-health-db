@@ -51,6 +51,8 @@ TOOL_KEYWORDS: dict[str, list[str]] = {
         "ทดสอบ", "สถิติ", "chi", "odds", "anova", "logistic", "correlation",
         "mann", "comorbidity", "p-value", "ความสัมพันธ์", "significance",
         "นัยสำคัญ", "forest", "trend", "แนวโน้ม",
+        "สัมพันธ์", "เกี่ยวข้อง", "ปัจจัย", "สาเหตุ",
+        "สูบบุหรี่", "ดื่มเหล้า", "ไม่ออกกำลังกาย",
     ],
     "generate_adaptive_report": [
         "รายงาน", "report", "pdf", "slide", "สไลด์", "เอกสาร", "document",
