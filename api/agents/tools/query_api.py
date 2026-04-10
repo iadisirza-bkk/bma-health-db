@@ -93,8 +93,16 @@ def _overview() -> dict:
     return {"total_screened": total, "target": 1_600_000, "zones": rows}
 
 
+_DISEASE_TH = {
+    "diabetes": "เบาหวาน", "hypertension": "ความดันโลหิตสูง",
+    "cardiovascular": "หลอดเลือดหัวใจ", "obesity": "อ้วน",
+    "dyslipidemia": "ไขมันในเลือดสูง", "stroke": "หลอดเลือดสมอง",
+    "ckd": "ไตเรื้อรัง", "anemia": "โลหิตจาง",
+}
+
+
 def _headline_kpi() -> dict:
-    total = _scalar("SELECT SUM(total_screened) FROM summary_district_disease") or 0
+    total = int(_scalar("SELECT SUM(total_screened) FROM summary_district_disease") or 0)
     diseases = _query("""
         SELECT 'diabetes' AS disease, SUM(risk_dm_count) AS at_risk FROM summary_district_disease
         UNION ALL SELECT 'hypertension', SUM(risk_hpt_count) FROM summary_district_disease
@@ -104,11 +112,15 @@ def _headline_kpi() -> dict:
         UNION ALL SELECT 'stroke', SUM(found_stroke_count) FROM summary_district_disease
         ORDER BY at_risk DESC
     """)
+    # Clean: int values + Thai names
+    for d in diseases:
+        d["at_risk"] = int(d.get("at_risk") or 0)
+        d["name_th"] = _DISEASE_TH.get(d["disease"], d["disease"])
     top = diseases[0] if diseases else {}
     return {
         "total_screened": total,
         "coverage_pct": round(100.0 * total / 1_600_000, 2),
-        "top_disease": top.get("disease"),
+        "top_disease": top.get("name_th", top.get("disease")),
         "top_disease_count": top.get("at_risk"),
         "diseases": diseases,
     }
@@ -122,11 +134,13 @@ def _yoy_comparison() -> dict:
                COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_hpt) AS risk_hpt,
                COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_obesity) AS found_obesity
         FROM raw_vitalsigns v
-        WHERE v.cancel_status IS DISTINCT FROM 1 AND v.visit_date IS NOT NULL
+        WHERE v.cancel_status IS DISTINCT FROM 1
+          AND v.visit_date IS NOT NULL
+          AND v.visit_date >= '2024-01-01'
         GROUP BY DATE_TRUNC('quarter', v.visit_date)
         ORDER BY quarter
     """)
-    return {"quarters": rows, "note": "Quarterly aggregation of screening data"}
+    return {"quarters": rows, "note": "Quarterly aggregation from 2024 onwards"}
 
 
 def _moph_targets() -> dict:
