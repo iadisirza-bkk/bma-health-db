@@ -69,23 +69,28 @@ def safe_int(val):
     if pd.isna(val) or str(val).strip() == "":
         return None
     try:
-        return int(float(val))
-    except (ValueError, TypeError):
+        v = int(float(val))
+        if v < -2147483648 or v > 2147483647:
+            return None
+        return v
+    except (ValueError, TypeError, OverflowError):
         return None
 
 
 def safe_float(val, lo=None, hi=None):
-    """Parse float; return None if empty, unparseable, or outside [lo, hi] range."""
+    """Parse float; return None if empty, unparseable, inf, nan, or outside [lo, hi]."""
     if pd.isna(val) or str(val).strip() == "":
         return None
     try:
         v = float(val)
+        if v != v or v == float('inf') or v == float('-inf'):  # nan/inf
+            return None
         if lo is not None and v < lo:
             return None
         if hi is not None and v > hi:
             return None
         return v
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return None
 
 
@@ -101,8 +106,8 @@ def to_bool(val) -> Optional[bool]:
         return None
     try:
         return float(val) != 0
-    except (ValueError, TypeError):
-        return bool(val)
+    except (ValueError, TypeError, OverflowError):
+        return None
 
 
 def collect_array(row, prefixes: List[str]) -> Optional[list]:
