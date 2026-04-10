@@ -701,66 +701,111 @@ def collect_report_data() -> ReportData:
          "pct": round(p * 100, 1)} for k, th, p in _ins
     ]
 
-    # --- Diet ---
-    report.diet_distribution = {
-        "fried_fatty": {"never": 15, "weekly": 35, "alternate_day": 30, "daily": 20},
-        "sweet_drink": {"never": 20, "weekly": 30, "alternate_day": 28, "daily": 22},
-        "salty_preserved": {"never": 18, "weekly": 32, "alternate_day": 30, "daily": 20},
-        "taste_preference": {"sweet": 25, "salty": 30, "fatty": 20, "none": 25},
-    }
+    # --- Diet (from raw_homehealth) ---
+    try:
+        from database import execute_query, execute_scalar
+        _total_hh = execute_scalar("SELECT count(*) FROM raw_homehealth WHERE food_fried_freq IS NOT NULL") or 1
+        def _diet_pct(col, val):
+            c = execute_scalar(f"SELECT count(*) FROM raw_homehealth WHERE {col} = %s", (val,)) or 0
+            return round(100.0 * c / _total_hh, 1)
+        report.diet_distribution = {
+            "fried_fatty": {"never": _diet_pct("food_fried_freq", 0), "weekly": _diet_pct("food_fried_freq", 1),
+                           "alternate_day": _diet_pct("food_fried_freq", 2), "daily": _diet_pct("food_fried_freq", 3)},
+            "sweet_drink": {"never": _diet_pct("drink_sugar_freq", 0), "weekly": _diet_pct("drink_sugar_freq", 1),
+                           "alternate_day": _diet_pct("drink_sugar_freq", 2), "daily": _diet_pct("drink_sugar_freq", 3)},
+            "salty_preserved": {"never": _diet_pct("instant_noodle_freq", 0), "weekly": _diet_pct("instant_noodle_freq", 1),
+                               "alternate_day": _diet_pct("instant_noodle_freq", 2), "daily": _diet_pct("instant_noodle_freq", 3)},
+            "taste_preference": {
+                "sweet": round(100.0 * (execute_scalar("SELECT count(*) FROM raw_homehealth WHERE food_preference_sweet = true") or 0) / _total_hh, 1),
+                "salty": round(100.0 * (execute_scalar("SELECT count(*) FROM raw_homehealth WHERE food_preference_salty = true") or 0) / _total_hh, 1),
+                "fatty": round(100.0 * (execute_scalar("SELECT count(*) FROM raw_homehealth WHERE food_preference_fatty = true") or 0) / _total_hh, 1),
+            },
+        }
+    except Exception:
+        report.diet_distribution = {}
 
-    # --- Vaccination ---
-    report.vaccination = {
-        "covid_never": round(12 + _rng.gauss(0, 1), 1),
-        "covid_over_1yr": round(45 + _rng.gauss(0, 2), 1),
-        "covid_annual": round(43 + _rng.gauss(0, 2), 1),
-        "influenza_never": round(55 + _rng.gauss(0, 2), 1),
-        "influenza_over_1yr": round(25 + _rng.gauss(0, 1), 1),
-        "influenza_annual": round(20 + _rng.gauss(0, 1), 1),
-    }
+    # --- Vaccination (from raw_homehealth) ---
+    try:
+        _total_vacc = execute_scalar("SELECT count(*) FROM raw_homehealth WHERE vaccine_covid IS NOT NULL") or 1
+        def _vacc_pct(col, val):
+            c = execute_scalar(f"SELECT count(*) FROM raw_homehealth WHERE {col} = %s", (val,)) or 0
+            return round(100.0 * c / _total_vacc, 1)
+        report.vaccination = {
+            "covid_never": _vacc_pct("vaccine_covid", 0),
+            "covid_vaccinated": _vacc_pct("vaccine_covid", 1),
+            "influenza_never": _vacc_pct("vaccine_influenza", 0),
+            "influenza_vaccinated": _vacc_pct("vaccine_influenza", 1),
+        }
+    except Exception:
+        report.vaccination = {}
 
-    # --- Family history ---
-    _fam = [
-        ("diabetes", "เบาหวาน", 28), ("hypertension", "ความดันโลหิตสูง", 32),
-        ("stroke", "หลอดเลือดสมอง", 12), ("heart_attack", "กล้ามเนื้อหัวใจตาย", 8),
-        ("kidney", "ไตวายเรื้อรัง", 6), ("gout", "โรคเก๊าท์", 10),
-        ("copd", "ถุงลมโป่งพอง (COPD)", 5), ("cancer", "มะเร็ง", 7),
-    ]
-    report.family_history = [
-        {"disease": k, "name_th": th, "parent_positive_pct": round(base + _rng.gauss(0, 2), 1)}
-        for k, th, base in _fam
-    ]
+    # --- Family history (from summary_family_history) ---
+    try:
+        fam_rows = execute_query("SELECT * FROM summary_family_history WHERE district_code = '__city__' OR district_code = 'city_total' LIMIT 1")
+        if not fam_rows:
+            fam_rows = execute_query("""
+                SELECT 'city' AS district_code,
+                    ROUND(100.0 * AVG(pct_parent_dm), 1) AS pct_parent_dm,
+                    ROUND(100.0 * AVG(pct_parent_hpt), 1) AS pct_parent_hpt,
+                    ROUND(100.0 * AVG(pct_parent_stroke), 1) AS pct_parent_stroke,
+                    ROUND(100.0 * AVG(pct_parent_heart), 1) AS pct_parent_heart,
+                    ROUND(100.0 * AVG(pct_parent_kidney), 1) AS pct_parent_kidney,
+                    ROUND(100.0 * AVG(pct_parent_gout), 1) AS pct_parent_gout
+                FROM summary_family_history WHERE district_code ~ '^[0-9]'
+            """)
+        fam = fam_rows[0] if fam_rows else {}
+        report.family_history = [
+            {"disease": "diabetes", "name_th": "เบาหวาน", "parent_positive_pct": float(fam.get("pct_parent_dm") or 0)},
+            {"disease": "hypertension", "name_th": "ความดันโลหิตสูง", "parent_positive_pct": float(fam.get("pct_parent_hpt") or 0)},
+            {"disease": "stroke", "name_th": "หลอดเลือดสมอง", "parent_positive_pct": float(fam.get("pct_parent_stroke") or 0)},
+            {"disease": "heart_attack", "name_th": "กล้ามเนื้อหัวใจตาย", "parent_positive_pct": float(fam.get("pct_parent_heart") or 0)},
+            {"disease": "kidney", "name_th": "ไตวายเรื้อรัง", "parent_positive_pct": float(fam.get("pct_parent_kidney") or 0)},
+            {"disease": "gout", "name_th": "โรคเก๊าท์", "parent_positive_pct": float(fam.get("pct_parent_gout") or 0)},
+        ]
+    except Exception:
+        report.family_history = []
 
-    # --- LGBTQ+ ---
-    report.lgbtq = {"yes": 3.2, "no": 88.5, "not_specified": 8.3}
+    # --- LGBTQ+ (from raw_visits) ---
+    try:
+        _total_lgbtq = execute_scalar("SELECT count(*) FROM raw_visits WHERE lgbtq IS NOT NULL") or 1
+        report.lgbtq = {
+            "yes": round(100.0 * (execute_scalar("SELECT count(*) FROM raw_visits WHERE lgbtq = 2") or 0) / _total_lgbtq, 1),
+            "no": round(100.0 * (execute_scalar("SELECT count(*) FROM raw_visits WHERE lgbtq = 1") or 0) / _total_lgbtq, 1),
+            "not_specified": round(100.0 * (execute_scalar("SELECT count(*) FROM raw_visits WHERE lgbtq = 3") or 0) / _total_lgbtq, 1),
+        }
+    except Exception:
+        report.lgbtq = {}
 
-    # --- Service requests ---
-    _req = [
-        ("xray_ekg_blood", "ตรวจ X-ray/EKG/เจาะเลือด", 42),
-        ("online_consult", "ปรึกษาออนไลน์/Call Center", 28),
-        ("extended_hours", "เปิดบริการนอกเวลา 20.00 น.", 35),
-        ("more_centers", "เพิ่มศูนย์บริการ", 18),
-        ("more_parks", "เพิ่มสวนสาธารณะ", 22),
-        ("hospital_clinic", "โรงพยาบาลเปิดห้องตรวจ", 15),
-        ("other", "อื่นๆ", 8),
-    ]
-    report.service_requests = [
-        {"name": k, "name_th": th, "pct": round(base + _rng.gauss(0, 2), 1)} for k, th, base in _req
-    ]
+    # --- Service requests (from raw_homevisit.service_requests array) ---
+    try:
+        report.service_requests = []
+        # service_requests is an integer array — count occurrences of each value
+        _total_sr = execute_scalar("SELECT count(*) FROM raw_homevisit WHERE service_requests IS NOT NULL") or 1
+        _sr_labels = {1: "ตรวจ X-ray/EKG/เจาะเลือด", 2: "ปรึกษาออนไลน์/Call Center",
+                      3: "เปิดบริการนอกเวลา", 4: "เพิ่มศูนย์บริการ", 5: "เพิ่มสวนสาธารณะ",
+                      6: "โรงพยาบาลเปิดห้องตรวจ", 7: "อื่นๆ"}
+        for val, label in _sr_labels.items():
+            c = execute_scalar("SELECT count(*) FROM raw_homevisit WHERE %s = ANY(service_requests)", (val,)) or 0
+            report.service_requests.append({"name": f"req_{val}", "name_th": label, "pct": round(100.0 * c / _total_sr, 1)})
+    except Exception:
+        report.service_requests = []
 
-    # --- Pets ---
-    report.pet_data = {"dog_pct": 22, "cat_pct": 18, "other_pct": 5, "none_pct": 55}
+    # --- Pets (not in DB — mark as unavailable) ---
+    report.pet_data = {}
 
-    # --- Comorbidity matrix (8x8) ---
-    n = len(DISEASES)
-    _corr = [[0.0] * n for _ in range(n)]
-    for i in range(n):
-        _corr[i][i] = 1.0
-        for j in range(i + 1, n):
-            r = round(0.05 + _rng.random() * 0.50, 2)
-            _corr[i][j] = r
-            _corr[j][i] = r
-    report.comorbidity_matrix = _corr
+    # --- Comorbidity matrix (from summary_comorbidity) ---
+    try:
+        combo_rows = execute_query("""
+            SELECT dm_and_hpt, dm_and_obesity, dm_and_dyslipidemia, hpt_and_obesity,
+                   hpt_and_dyslipidemia, metabolic_syndrome_count
+            FROM summary_comorbidity WHERE district_code ~ '^[0-9]'
+        """)
+        if combo_rows:
+            report.comorbidity_matrix = combo_rows
+        else:
+            report.comorbidity_matrix = []
+    except Exception:
+        report.comorbidity_matrix = []
 
     # --- Multi-morbidity ---
     report.multi_morbidity = {

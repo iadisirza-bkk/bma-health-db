@@ -478,22 +478,37 @@ class ReportGenerator:
             },
         ]
 
-        # --- screening tests ---
-        indicators = data.screening_tests.get("indicators", [])
+        # --- screening tests (from summary_screening_tests) ---
         screening_tests = []
-        for ind in indicators[:4]:
-            results = [
-                {"category": "Normal" if lang != "th" else "ปกติ",
-                 "count": round(data.total_screened * 0.7),
-                 "pct": "70.0", "interpretation": "Within normal range" if lang != "th" else "อยู่ในเกณฑ์ปกติ"},
-                {"category": "Abnormal" if lang != "th" else "ผิดปกติ",
-                 "count": round(data.total_screened * 0.2),
-                 "pct": "20.0", "interpretation": "Requires follow-up" if lang != "th" else "ต้องติดตาม"},
-                {"category": "Critical" if lang != "th" else "วิกฤต",
-                 "count": round(data.total_screened * 0.1),
-                 "pct": "10.0", "interpretation": "Immediate referral" if lang != "th" else "ส่งต่อทันที"},
-            ]
-            screening_tests.append({"name": ind["label"], "results": results, "total": data.total_screened, "chart_path": None})
+        try:
+            from database import execute_query as _rq
+            _st_rows = _rq("""
+                SELECT SUM(total_screened) AS total,
+                       SUM(ekg_normal) AS ekg_normal, SUM(ekg_abnormal) AS ekg_abnormal, SUM(ekg_done) AS ekg_done,
+                       SUM(xray_normal) AS xray_normal, SUM(xray_abnormal) AS xray_abnormal, SUM(xray_done) AS xray_done,
+                       SUM(vision_normal) AS vision_normal, SUM(vision_abnormal) AS vision_abnormal, SUM(vision_done) AS vision_done,
+                       SUM(dr_normal) AS dr_normal, SUM(dr_abnormal) AS dr_abnormal, SUM(dr_done) AS dr_done
+                FROM summary_screening_tests WHERE district_code ~ '^[0-9]'
+            """)
+            if _st_rows:
+                _st = _st_rows[0]
+                _st_total = int(_st.get("total") or 1)
+                for test_name, norm_key, abn_key, done_key in [
+                    ("EKG", "ekg_normal", "ekg_abnormal", "ekg_done"),
+                    ("Chest X-ray" if lang != "th" else "เอกซเรย์ปอด", "xray_normal", "xray_abnormal", "xray_done"),
+                    ("Vision" if lang != "th" else "สายตา", "vision_normal", "vision_abnormal", "vision_done"),
+                    ("DR Screening" if lang != "th" else "จอประสาทตา", "dr_normal", "dr_abnormal", "dr_done"),
+                ]:
+                    norm = int(_st.get(norm_key) or 0)
+                    abn = int(_st.get(abn_key) or 0)
+                    done = int(_st.get(done_key) or 0)
+                    if done > 0:
+                        screening_tests.append({"name": test_name, "total": done, "results": [
+                            {"category": "ปกติ" if lang == "th" else "Normal", "count": norm, "pct": str(round(100.0 * norm / done, 1))},
+                            {"category": "ผิดปกติ" if lang == "th" else "Abnormal", "count": abn, "pct": str(round(100.0 * abn / done, 1))},
+                        ], "chart_path": None})
+        except Exception:
+            pass
 
         # --- trends ---
         trend_results = []
@@ -524,20 +539,28 @@ class ReportGenerator:
             disease_pcts = [zs["disease_avgs"].get(d, 0) for d in DISEASES]
             zones.append({"name": zs["name"], "disease_pcts": disease_pcts})
 
-        # --- PM2.5 ---
-        pm25 = {
-            "dry_avg": "48.3", "rainy_avg": "22.1", "pm25_p_value": "<0.001",
-            "dry_resp_pct": "12.8", "rainy_resp_pct": "7.2", "resp_p_value": "0.003",
-            "dry_cvd_pct": "15.4", "rainy_cvd_pct": "11.1", "cvd_p_value": "0.018",
-            "chart_path": None,
-            "top_districts": [
-                {"district": "Din Daeng" if lang != "th" else "ดินแดง", "pm25_avg": "55.2", "resp_pct": "15.3"},
-                {"district": "Huai Khwang" if lang != "th" else "ห้วยขวาง", "pm25_avg": "52.8", "resp_pct": "14.1"},
-                {"district": "Ratchathewi" if lang != "th" else "ราชเทวี", "pm25_avg": "51.4", "resp_pct": "13.7"},
-                {"district": "Phaya Thai" if lang != "th" else "พญาไท", "pm25_avg": "50.9", "resp_pct": "13.2"},
-                {"district": "Chatuchak" if lang != "th" else "จตุจักร", "pm25_avg": "49.6", "resp_pct": "12.8"},
-            ],
-        }
+        # --- PM2.5 (from live ArcGIS via API) ---
+        pm25 = {"data_available": False, "chart_path": None, "top_districts": []}
+        try:
+            import httpx
+            _pm_resp = httpx.get(f"http://localhost:{os.environ.get('API_PORT', '9002')}/api/v2/gis/pm25/districts",
+                                 headers={"X-API-Key": os.environ.get("API_KEY", "dev-api-key")}, timeout=10)
+            if _pm_resp.status_code == 200:
+                _pm_data = _pm_resp.json().get("data", [])
+                _pm_with_data = [d for d in _pm_data if d.get("avg_pm25") is not None]
+                if _pm_with_data:
+                    _pm_sorted = sorted(_pm_with_data, key=lambda x: x["avg_pm25"], reverse=True)
+                    pm25 = {
+                        "data_available": True,
+                        "city_avg": str(round(sum(d["avg_pm25"] for d in _pm_with_data) / len(_pm_with_data), 1)),
+                        "chart_path": None,
+                        "top_districts": [
+                            {"district": d["district_name"], "pm25_avg": str(d["avg_pm25"])}
+                            for d in _pm_sorted[:5]
+                        ],
+                    }
+        except Exception:
+            pass
 
         # --- recommendations ---
         recommendations = []
