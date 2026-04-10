@@ -31,8 +31,9 @@ TOOL_KEYWORDS: dict[str, list[str]] = {
         "โรคเรื้อรัง", "chronic", "ประวัติ",
         # Family history
         "ครอบครัว", "พ่อแม่", "พันธุกรรม", "family",
-        # Comorbidity counts
+        # Comorbidity / cross-tab
         "ร่วมกับ", "ร่วมกัน", "comorbid", "ร่วม.*กี่คน", "metabolic",
+        "cross-tab", "cross tab", "crosstab", "แยกตาม", "เทียบกับ",
         # Facilities / locations
         "สถานพยาบาล", "facility", "จุดคัดกรอง", "ที่ไหน.*ตรวจ", "ตรวจ.*ที่ไหน",
         # YoY / comparison

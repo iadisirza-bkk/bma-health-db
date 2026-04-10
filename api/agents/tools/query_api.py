@@ -36,6 +36,7 @@ ENDPOINT_CATALOG = {
     # Lab
     "lab_summary": "Average lab values by district (FBS, cholesterol, hemoglobin, etc.)",
     "lab_city_average": "City-wide average lab values",
+    "disease_lab_crosstab": "Cross-tab: lab values (FBS, SBP, cholesterol) by disease status (DM+/DM-, HPT+/HPT-)",
     # Promotion
     "bmi_distribution": "BMI category distribution (underweight/normal/overweight/obese)",
     "exercise_frequency": "Exercise frequency distribution",
@@ -376,6 +377,42 @@ def _executive_alert() -> dict:
     return {"alerts": rows, "total_alerts": len(rows)}
 
 
+def _disease_lab_crosstab() -> dict:
+    """FBS/SBP/cholesterol averages stratified by disease status."""
+    rows = _query("""
+        SELECT district_code,
+               ROUND(avg_fbs_dm_positive::numeric, 1) AS avg_fbs_dm_positive,
+               ROUND(avg_fbs_dm_negative::numeric, 1) AS avg_fbs_dm_negative,
+               n_fbs_dm_positive, n_fbs_dm_negative,
+               ROUND(avg_sbp_hpt_positive::numeric, 1) AS avg_sbp_hpt_positive,
+               ROUND(avg_sbp_hpt_negative::numeric, 1) AS avg_sbp_hpt_negative,
+               ROUND(avg_chol_dyslip_positive::numeric, 1) AS avg_chol_dyslip_positive,
+               ROUND(avg_chol_dyslip_negative::numeric, 1) AS avg_chol_dyslip_negative
+        FROM summary_lab_disease_cross
+        WHERE district_code = 'city_total' OR district_code = '__city__'
+        LIMIT 1
+    """)
+    if not rows:
+        # Fallback: compute city-wide
+        rows = _query("""
+            SELECT 'city' AS district_code,
+                   ROUND(AVG(avg_fbs_dm_positive)::numeric, 1) AS avg_fbs_dm_positive,
+                   ROUND(AVG(avg_fbs_dm_negative)::numeric, 1) AS avg_fbs_dm_negative,
+                   SUM(n_fbs_dm_positive) AS n_fbs_dm_positive,
+                   SUM(n_fbs_dm_negative) AS n_fbs_dm_negative,
+                   ROUND(AVG(avg_sbp_hpt_positive)::numeric, 1) AS avg_sbp_hpt_positive,
+                   ROUND(AVG(avg_sbp_hpt_negative)::numeric, 1) AS avg_sbp_hpt_negative,
+                   ROUND(AVG(avg_chol_dyslip_positive)::numeric, 1) AS avg_chol_dyslip_positive,
+                   ROUND(AVG(avg_chol_dyslip_negative)::numeric, 1) AS avg_chol_dyslip_negative
+            FROM summary_lab_disease_cross
+            WHERE district_code ~ '^[0-9]'
+        """)
+    return {
+        "cross_tab": rows[0] if rows else {},
+        "note": "ค่าเฉลี่ย FBS/SBP/cholesterol แยกตามสถานะโรค (positive=พบโรค, negative=ไม่พบ)",
+    }
+
+
 # Dispatch table
 _DISPATCH = {
     "overview": _overview,
@@ -387,6 +424,7 @@ _DISPATCH = {
     "repeat_screening": _repeat_screening,
     "lab_summary": _lab_summary,
     "lab_city_average": _lab_city_average,
+    "disease_lab_crosstab": _disease_lab_crosstab,
     "bmi_distribution": _bmi_distribution,
     "cost_per_screening": _cost_per_screening,
     "budget_allocation": _budget_allocation,
