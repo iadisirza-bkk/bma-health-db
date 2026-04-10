@@ -1,6 +1,6 @@
 # BMA Health -- One-Stop Backend System Spec & Frontend Integration Guide
 
-> **Version:** 4.4.0 | **Last Updated:** 2026-04-10
+> **Version:** 4.5.0 | **Last Updated:** 2026-04-10
 > **Live API Docs:** `http://localhost:9002/docs` (Swagger) | `http://localhost:9002/redoc` (ReDoc)
 > **OpenAPI JSON:** `http://localhost:9002/openapi.json`
 
@@ -361,10 +361,21 @@ The LLM agent has 7 tools that give it access to all backend data:
 | **ประชาชนการศึกษาสูง** | ชาย 40-49 เสี่ยงเบาหวาน%, BMI เฉลี่ย, ประวัติครอบครัว |
 | **ประชาชนจบ ป.6** | ตรวจฟรีที่ไหน, เบาหวานอันตรายไหม, ผลเลือดปกติเท่าไหร่ |
 
+#### Topic Guardrails (2-layer)
+
+| Layer | Where | How |
+|-------|-------|-----|
+| **Input filter** | `orchestrator.py` | Keyword check — rejects off-topic before calling LLM (zero tokens) |
+| **System prompt** | `health_assistant_skill.md` | Explicit scope + refusal instructions + prompt injection defense |
+
+**Allowed topics:** BMA health screening data, NCD 9 diseases, districts/zones, lab results, trends, reports, PM2.5  
+**Blocked topics:** Politics, sports, coding, finance, other provinces, personal medical advice, role-override attempts  
+**Refusal:** Polite Thai message + hotline 1555 referral
+
 #### Data Quality Safeguards
 
-- **Sample size warning**: When data < 1,000 records, responses include: *"ข้อมูลจ���กกลุ่มต��วอย่าง N คน ส���ดส่วนอาจเปลี่ยนแปลงเมื่อม���ข้อมูลเพิ่ม"*
-- **Modeled data disclaimer**: When using demographic modifiers: *"ค่าประมาณจากแบบจำลอง อิงข้อมูลจริง กทม. ปรับด้วยค่���สัดส่วนจากสำรวจระดับชาติ"*
+- **Sample size warning**: When data < 1,000 records, responses include disclaimer
+- **Modeled data disclaimer**: When using demographic modifiers, notes the estimation method
 - **Fallback responses**: When LLM is unavailable, rule-based fallback handles: overview, prevalence, risk factors, lab values, health advice, trend data, sex comparison
 
 #### SSE Event Types
@@ -1252,6 +1263,9 @@ Auto-generated from FastAPI source. Always reflects the current state of all 150
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 4.5.0 | 2026-04-10 | LLM guardrails (2-layer topic filter), bundle upload, auto-refresh cache, district backfill, PM2.5 station fix |
+| 4.4.0 | 2026-04-10 | Admin panel: bundle upload, TRUNCATE-on-import, facility→district mapping, dashboard fix |
+| 4.3.0 | 2026-04-10 | PM2.5 fix: multi-station averaging, extract_district_name for sub-station names |
 | 4.2.0 | 2026-04-10 | Agent: 7 tools (added `query_api` with 25 endpoints), Gap #1-5 fixes, data quality safeguards |
 | 4.1.0 | 2026-04-10 | ETL: age + BMI preprocessing, 3 new materialized views (screening_tests, chronic_history, family_history) |
 | 4.0.0 | 2026-04-10 | One-stop backend: consolidated LLM chat, LaTeX reports, export, stats from 2 servers to 1 |
