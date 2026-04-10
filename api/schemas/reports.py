@@ -1,6 +1,8 @@
 """Pydantic schemas for report generation API."""
 from __future__ import annotations
 
+from typing import Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -28,3 +30,59 @@ class ReportGenerateResponse(BaseModel):
     lang: str
     report_type: str
     url: str = Field(default="", description="Download URL (populated if completed)")
+
+
+# --- Dashboard models ---
+
+
+class ReportDashboardItem(BaseModel):
+    """A single report in the dashboard catalog."""
+    label: str = Field(description="Display name of the report")
+    url: str = Field(description="Download URL path")
+    cached: bool = Field(description="Whether a cached PDF exists on disk")
+    size: int = Field(default=0, description="File size in bytes (0 if not cached)")
+    updated_at: Optional[str] = Field(default=None, description="ISO 8601 UTC timestamp of file mtime, null if not cached")
+
+
+class ReportCategory(BaseModel):
+    """A category grouping related reports."""
+    id: str = Field(description="Category identifier (e.g. 'executive', 'zones')")
+    label: str = Field(description="Thai display label")
+    icon: str = Field(description="Icon key for frontend")
+    reports: list[ReportDashboardItem] = Field(default_factory=list)
+
+
+class GenerationProgress(BaseModel):
+    """Real-time progress of background report generation."""
+    running: bool = Field(default=False)
+    percent: float = Field(default=0.0, description="Completion percentage 0-100")
+    completed: int = Field(default=0)
+    total: int = Field(default=0)
+    current: str = Field(default="", description="Label of report currently being generated")
+    started_at: Optional[str] = Field(default=None, description="ISO 8601 UTC")
+    finished_at: Optional[str] = Field(default=None, description="ISO 8601 UTC")
+    errors: list[str] = Field(default_factory=list)
+
+
+class SchedulerInfo(BaseModel):
+    """Nightly scheduler state."""
+    enabled: bool = Field(default=True)
+    cron: str = Field(default="00:30")
+    last_run: Optional[str] = Field(default=None, description="ISO 8601 UTC")
+    next_run: Optional[str] = Field(default=None, description="ISO 8601 UTC")
+    running: bool = Field(default=False)
+
+
+class DashboardSummary(BaseModel):
+    """Aggregate counts for quick display."""
+    total_reports: int = Field(default=0, description="Total number of reports in catalog")
+    cached_reports: int = Field(default=0, description="Number of reports with cached PDFs")
+    percent_ready: float = Field(default=0.0, description="Percentage of reports ready (0-100)")
+
+
+class ReportDashboardResponse(BaseModel):
+    """Unified dashboard: generation progress + scheduler + catalog + summary."""
+    generation: GenerationProgress
+    scheduler: SchedulerInfo
+    categories: list[ReportCategory]
+    summary: DashboardSummary

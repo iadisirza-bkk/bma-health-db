@@ -92,7 +92,11 @@ class ArcGISClient:
     # ------------------------------------------------------------------
 
     async def get_pm25(self, limit: int = 200) -> Dict:
-        """Get current PM2.5 readings from Bangkok air quality stations."""
+        """Get current PM2.5 readings from Bangkok air quality stations.
+
+        ArcGIS returns one record per district with fields:
+          district (Thai name), pm2_5, pm10, date_time, latitude, longitude
+        """
         raw = await self._query_layer("pm25", limit=limit)
 
         features = raw.get("features", [])
@@ -100,13 +104,31 @@ class ArcGISClient:
         for feat in features:
             attrs = feat.get("attributes", {})
             geom = feat.get("geometry", {})
+
+            # district field: "เขตดินแดง", pm2_5 field (actual ArcGIS schema)
+            station_name = (
+                attrs.get("district")
+                or attrs.get("station_name") or attrs.get("STATION_NAME")
+                or attrs.get("name")
+            )
+            pm25_val = attrs.get("pm2_5") or attrs.get("pm25") or attrs.get("PM25") or attrs.get("value")
+
+            # Filter invalid readings (negative values, extreme outliers)
+            if pm25_val is not None:
+                try:
+                    pm25_val = float(pm25_val)
+                    if pm25_val < 0 or pm25_val > 1000:
+                        pm25_val = None
+                except (ValueError, TypeError):
+                    pm25_val = None
+
             stations.append({
-                "station_name": attrs.get("station_name") or attrs.get("STATION_NAME") or attrs.get("name"),
-                "pm25_value": attrs.get("pm25") or attrs.get("PM25") or attrs.get("value"),
+                "station_name": station_name,
+                "pm25_value": pm25_val,
                 "aqi": attrs.get("aqi") or attrs.get("AQI"),
-                "measured_at": attrs.get("timestamp") or attrs.get("TIMESTAMP"),
-                "latitude": geom.get("y") or geom.get("lat"),
-                "longitude": geom.get("x") or geom.get("lon"),
+                "measured_at": attrs.get("date_time") or attrs.get("timestamp") or attrs.get("TIMESTAMP"),
+                "latitude": attrs.get("latitude") or geom.get("y") or geom.get("lat"),
+                "longitude": attrs.get("longitude") or geom.get("x") or geom.get("lon"),
             })
 
         return {

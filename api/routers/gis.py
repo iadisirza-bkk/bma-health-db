@@ -4,11 +4,18 @@ New endpoints for map dashboard (Docs 01-08).
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
 from database import execute_query, execute_scalar
+from cache import cache_get, cache_set, TTL_T1_EXTERNAL, TTL_T2_AGGREGATE, TTL_T4_STATIC
+from data.pm25_stations import (
+    STANDARD_TH, STANDARD_WHO, pm25_to_aqi, extract_district_name,
+)
+
+logger = logging.getLogger("bma.gis")
 
 router = APIRouter(prefix="/api/v2/gis", tags=["GIS"])
 
@@ -278,3 +285,311 @@ async def disease_environment_overlay(
         "pm25_data": pm25_data.get("data", []) if pm25_data else [],
         "note": "Overlay disease prevalence per district with PM2.5 station readings on the map",
     }
+
+
+# =========================================================================== #
+# PM2.5 aggregated endpoints (zones / districts / monthly)
+# =========================================================================== #
+# ArcGIS returns one reading per Bangkok district (~50 records) with field
+# `district` containing "เขตXXX".  We match to ref_districts.name_th,
+# aggregate by zone, and compute AQI from raw PM2.5.
+
+
+async def _get_pm25_cached() -> dict:
+    """Fetch PM2.5 from ArcGIS with T1 (5 min) cache."""
+    hit = cache_get("pm25:current_readings")
+    if hit is not None:
+        return hit
+    try:
+        from external.arcgis_client import ArcGISClient
+        client = ArcGISClient()
+        data = await client.get_pm25()
+        if data.get("data_available"):
+            cache_set("pm25:current_readings", data, TTL_T1_EXTERNAL)
+        return data
+    except Exception as e:
+        logger.warning("ArcGIS PM2.5 fetch failed: %s", e)
+        return {"data_available": False, "data": []}
+
+
+def _build_district_readings(pm25_data: dict) -> dict[str, dict]:
+    """Map ArcGIS readings to district name_th.
+
+    Returns {name_th: {pm25, aqi}} keyed by Thai district name (no เขต prefix).
+    """
+    readings: dict[str, dict] = {}
+    for s in pm25_data.get("data", []):
+        name = extract_district_name(s.get("station_name"))
+        if not name:
+            continue
+        pm25_val = s.get("pm25_value")
+        aqi_val = pm25_to_aqi(pm25_val) if pm25_val is not None else None
+        readings[name] = {"pm25": pm25_val, "aqi": aqi_val}
+    return readings
+
+
+def _get_zone_meta() -> list[dict]:
+    """Zone metadata from ref_health_zones (cached T4)."""
+    hit = cache_get("pm25:zone_meta")
+    if hit is not None:
+        return hit
+    rows = execute_query("""
+        SELECT z.zone_code, z.name_th, z.name_en,
+               COUNT(d.dcode) AS district_count
+        FROM ref_health_zones z
+        LEFT JOIN ref_districts d ON d.zone_code = z.zone_code
+        GROUP BY z.zone_code, z.name_th, z.name_en
+        ORDER BY z.zone_code
+    """)
+    cache_set("pm25:zone_meta", rows, TTL_T4_STATIC)
+    return rows
+
+
+def _get_district_list() -> list[dict]:
+    """All 50 districts (cached T4)."""
+    hit = cache_get("pm25:district_list")
+    if hit is not None:
+        return hit
+    rows = execute_query("""
+        SELECT dcode, zone_code, name_th, name_en, population
+        FROM ref_districts
+        ORDER BY dcode
+    """)
+    cache_set("pm25:district_list", rows, TTL_T4_STATIC)
+    return rows
+
+
+def _get_historical_stats(dcodes: list[str]) -> dict | None:
+    """Query pm25_daily for historical aggregates. Returns None if no data."""
+    try:
+        count = execute_scalar(
+            "SELECT COUNT(*) FROM pm25_daily WHERE dcode = ANY(%s)",
+            (dcodes,),
+        )
+        if not count:
+            return None
+        row = execute_query("""
+            SELECT
+                COUNT(DISTINCT reading_date) FILTER (
+                    WHERE avg_pm25 > %s
+                ) AS days_exceeded,
+                AVG(avg_pm25) FILTER (
+                    WHERE reading_date >= '2025-01-01' AND reading_date < '2026-01-01'
+                ) AS avg_2025,
+                AVG(avg_pm25) FILTER (
+                    WHERE reading_date >= '2026-01-01' AND reading_date < '2026-04-01'
+                ) AS avg_2026_q1
+            FROM pm25_daily
+            WHERE dcode = ANY(%s)
+        """, (STANDARD_TH, dcodes))
+        if row:
+            return row[0]
+        return None
+    except Exception:
+        return None
+
+
+def _compute_trend(avg_2025: float | None, avg_2026_q1: float | None) -> str | None:
+    """Simple trend: compare 2025 annual avg to 2026 Q1."""
+    if avg_2025 is None or avg_2026_q1 is None:
+        return None
+    if avg_2026_q1 > avg_2025 * 1.05:
+        return "increasing"
+    if avg_2026_q1 < avg_2025 * 0.95:
+        return "decreasing"
+    return "stable"
+
+
+@router.get("/pm25/zones")
+async def pm25_zones():
+    """PM2.5 averages aggregated per health zone (8 zones).
+    ค่าเฉลี่ย PM2.5 ต่อโซนสุขภาพ (8 โซน)"""
+
+    hit = cache_get("pm25:zones")
+    if hit is not None:
+        return hit
+
+    pm25_data = await _get_pm25_cached()
+    readings = _build_district_readings(pm25_data)
+    zones_meta = _get_zone_meta()
+    districts = _get_district_list()
+
+    # Group districts by zone, collect PM2.5 values
+    zone_data: dict[str, list[dict]] = {}
+    for d in districts:
+        zone_data.setdefault(d["zone_code"], []).append(d)
+
+    result = []
+    for z in zones_meta:
+        zc = z["zone_code"]
+        zone_districts = zone_data.get(zc, [])
+        zone_dcodes = [d["dcode"] for d in zone_districts]
+
+        pm25_vals = []
+        aqi_vals = []
+        for d in zone_districts:
+            r = readings.get(d["name_th"])
+            if r and r["pm25"] is not None:
+                pm25_vals.append(r["pm25"])
+            if r and r["aqi"] is not None:
+                aqi_vals.append(r["aqi"])
+
+        avg_pm25 = round(sum(pm25_vals) / len(pm25_vals), 1) if pm25_vals else None
+        avg_aqi = round(sum(aqi_vals) / len(aqi_vals)) if aqi_vals else None
+        max_pm25 = round(max(pm25_vals), 1) if pm25_vals else None
+
+        hist = _get_historical_stats(zone_dcodes)
+
+        row = {
+            "zone_code": zc,
+            "zone_name_th": z["name_th"],
+            "zone_name_en": z["name_en"],
+            "district_count": z["district_count"],
+            "avg_pm25": avg_pm25,
+            "avg_aqi": avg_aqi,
+            "max_pm25": max_pm25,
+            "station_count": len(pm25_vals),
+            "days_exceeded": hist["days_exceeded"] if hist else None,
+            "trend": _compute_trend(
+                hist.get("avg_2025") if hist else None,
+                hist.get("avg_2026_q1") if hist else None,
+            ),
+            "standard_th_exceeded": avg_pm25 > STANDARD_TH if avg_pm25 is not None else None,
+            "standard_who_exceeded": avg_pm25 > STANDARD_WHO if avg_pm25 is not None else None,
+        }
+        result.append(row)
+
+    resp = {
+        "data_available": pm25_data.get("data_available", False),
+        "total_zones": len(result),
+        "standards": {"th": STANDARD_TH, "who": STANDARD_WHO},
+        "data": result,
+    }
+    cache_set("pm25:zones", resp, TTL_T2_AGGREGATE)
+    return resp
+
+
+@router.get("/pm25/districts")
+async def pm25_districts():
+    """PM2.5 values per district (50 districts) from ArcGIS per-district readings.
+    ค่า PM2.5 ต่อเขต (50 เขต)"""
+
+    hit = cache_get("pm25:districts")
+    if hit is not None:
+        return hit
+
+    pm25_data = await _get_pm25_cached()
+    readings = _build_district_readings(pm25_data)
+    districts = _get_district_list()
+
+    result = []
+    for d in districts:
+        r = readings.get(d["name_th"], {})
+        hist = _get_historical_stats([d["dcode"]])
+
+        row = {
+            "dcode": d["dcode"],
+            "district_name": d["name_th"],
+            "district_name_en": d["name_en"],
+            "zone_code": d["zone_code"],
+            "avg_pm25": r.get("pm25"),
+            "avg_aqi": r.get("aqi"),
+            "nearest_station": d["name_th"],
+            "station_name_th": d["name_th"],
+            "days_exceeded": hist["days_exceeded"] if hist else None,
+            "avg_2025": round(hist["avg_2025"], 1) if hist and hist.get("avg_2025") else None,
+            "avg_2026_q1": round(hist["avg_2026_q1"], 1) if hist and hist.get("avg_2026_q1") else None,
+            "trend": _compute_trend(
+                hist.get("avg_2025") if hist else None,
+                hist.get("avg_2026_q1") if hist else None,
+            ),
+        }
+        result.append(row)
+
+    resp = {
+        "data_available": pm25_data.get("data_available", False),
+        "total_districts": len(result),
+        "standards": {"th": STANDARD_TH, "who": STANDARD_WHO},
+        "data": result,
+    }
+    cache_set("pm25:districts", resp, TTL_T2_AGGREGATE)
+    return resp
+
+
+@router.get("/pm25/monthly")
+async def pm25_monthly(
+    zone_code: Optional[str] = Query(None, description="Filter by zone (1-8)"),
+):
+    """Monthly PM2.5 trend data for charts.
+    ข้อมูล PM2.5 รายเดือน สำหรับแสดงกราฟ"""
+
+    # Validate zone_code if provided
+    if zone_code is not None:
+        valid = execute_scalar(
+            "SELECT COUNT(*) FROM ref_health_zones WHERE zone_code = %s",
+            (zone_code,),
+        )
+        if not valid:
+            raise HTTPException(status_code=400, detail=f"Invalid zone_code: {zone_code}")
+
+    cache_key = f"pm25:monthly:{zone_code or 'all'}"
+    hit = cache_get(cache_key)
+    if hit is not None:
+        return hit
+
+    # Determine which dcodes to query
+    all_districts = _get_district_list()
+    if zone_code:
+        dcodes = [d["dcode"] for d in all_districts if d["zone_code"] == zone_code]
+    else:
+        dcodes = [d["dcode"] for d in all_districts]
+
+    # Query monthly aggregates from pm25_daily
+    period = []
+    historical_available = False
+    try:
+        count = execute_scalar(
+            "SELECT COUNT(*) FROM pm25_daily WHERE dcode = ANY(%s)",
+            (dcodes,),
+        )
+        if count and count > 0:
+            historical_available = True
+            period = execute_query("""
+                SELECT
+                    EXTRACT(YEAR FROM reading_date)::INTEGER AS year,
+                    LPAD(EXTRACT(MONTH FROM reading_date)::TEXT, 2, '0') AS month,
+                    ROUND(AVG(avg_pm25)::NUMERIC, 1) AS avg_pm25,
+                    ROUND(AVG(avg_aqi)::NUMERIC) AS avg_aqi
+                FROM pm25_daily
+                WHERE dcode = ANY(%s)
+                GROUP BY year, month
+                ORDER BY year, month
+            """, (dcodes,))
+            for row in period:
+                row["year"] = str(row["year"])
+    except Exception:
+        pass
+
+    # Current snapshot from ArcGIS
+    pm25_data = await _get_pm25_cached()
+    readings = _build_district_readings(pm25_data)
+
+    target_names = {d["name_th"] for d in all_districts if d["dcode"] in set(dcodes)}
+    current_vals = [readings[n]["pm25"] for n in target_names
+                    if n in readings and readings[n]["pm25"] is not None]
+    current_aqi = [readings[n]["aqi"] for n in target_names
+                   if n in readings and readings[n]["aqi"] is not None]
+
+    resp = {
+        "zone_code": zone_code,
+        "period": period,
+        "current_snapshot": {
+            "avg_pm25": round(sum(current_vals) / len(current_vals), 1) if current_vals else None,
+            "avg_aqi": round(sum(current_aqi) / len(current_aqi)) if current_aqi else None,
+            "station_count": len(current_vals),
+        },
+        "standards": {"th": STANDARD_TH, "who": STANDARD_WHO},
+        "historical_data_available": historical_available,
+    }
+    cache_set(cache_key, resp, TTL_T2_AGGREGATE)
+    return resp

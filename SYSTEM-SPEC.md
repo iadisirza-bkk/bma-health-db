@@ -1,6 +1,6 @@
 # BMA Health -- One-Stop Backend System Spec & Frontend Integration Guide
 
-> **Version:** 4.2.0 | **Last Updated:** 2026-04-10
+> **Version:** 4.3.0 | **Last Updated:** 2026-04-10
 > **Live API Docs:** `http://localhost:9002/docs` (Swagger) | `http://localhost:9002/redoc` (ReDoc)
 > **OpenAPI JSON:** `http://localhost:9002/openapi.json`
 
@@ -49,7 +49,7 @@
 
 The BMA Health One-Stop Backend serves **all** backend functionality for the Bangkok Metropolitan Administration health screening system from a **single server**. It consolidates the V2 data API, LLM-powered chat, LaTeX/PDF report generation, Excel export, statistics, and admin endpoints.
 
-**150 endpoints** across **24 domain groups**.
+**153 endpoints** across **24 domain groups**.
 
 ### Key Constraints
 - **No individual records** -- all data is aggregate/summary level
@@ -75,7 +75,7 @@ The BMA Health One-Stop Backend serves **all** backend functionality for the Ban
 | 12 | Strategy | `/api/v2/strategy/` | 5 | Cost, budget allocation, ROI |
 | 13 | Research | `/api/v2/research/` | 6 | Data dictionary, correlation, export |
 | 14 | Public | `/api/v2/public/` | 7 | Thai summaries, locations, health tips |
-| 15 | GIS | `/api/v2/gis/` | 9 | Facility coords, heatmaps, PM2.5 |
+| 15 | GIS | `/api/v2/gis/` | 12 | Facility coords, heatmaps, PM2.5 zones/districts/monthly |
 | 16 | Monitoring | `/api/v2/monitoring/` | 7 | Data quality, ETL status, cache |
 | 17 | **Chat** | `/api/health/` | **2** | **LLM chat (sync + SSE streaming)** |
 | 18 | **Reports** | `/api/reports/` | **15** | **PDF generation, download, catalog** |
@@ -306,7 +306,22 @@ All under `/api/v2/`. Full reference at **`/docs`** or **`/redoc`**.
 
 #### Epidemiology, Trends, Search, KPI, Executive, Promotion, Disease Control, Facility, Strategy, Research, Public, GIS, Monitoring
 
-See **Swagger UI** at `/docs` for the complete 84-endpoint V2 reference with request/response schemas.
+#### GIS — PM2.5 Aggregated Endpoints (NEW)
+
+| Method | Path | Params | Description |
+|--------|------|--------|-------------|
+| `GET` | `/api/v2/gis/pm25/zones` | — | PM2.5 averages per health zone (8 zones). Includes AQI, max, standard exceeded flags |
+| `GET` | `/api/v2/gis/pm25/districts` | — | PM2.5 per district (50 districts). Each district has its own ArcGIS reading |
+| `GET` | `/api/v2/gis/pm25/monthly` | `?zone_code=01` (optional) | Monthly PM2.5 trend data for charts. Returns current snapshot + historical periods |
+
+**Data source:** BMA ArcGIS REST API (`bmagis.bangkok.go.th`) — returns one reading per district (~50 records).
+**Caching:** T1 (5 min) for ArcGIS data, T2 (15 min) for assembled responses.
+**AQI:** Computed from PM2.5 using US EPA breakpoints (ArcGIS does not return AQI).
+**Standards:** Thai NAAQS = 37.5 µg/m³, WHO 2021 = 15.0 µg/m³.
+
+> Historical fields (`days_exceeded`, `avg_2025`, `avg_2026_q1`, `trend`) return `null` until `pm25_daily` table is populated. No API contract change needed — values appear automatically once data accumulates.
+
+See **Swagger UI** at `/docs` for the complete V2 reference with request/response schemas.
 
 ---
 
@@ -555,7 +570,10 @@ District Detail Page:
 Map Page:
   GET /api/v2/gis/facilities             -> All facility markers
   GET /api/v2/gis/heatmap/disease/{key}  -> Heatmap layer
-  GET /api/v2/gis/pm25/current           -> PM2.5 overlay
+  GET /api/v2/gis/pm25/current           -> PM2.5 raw station overlay
+  GET /api/v2/gis/pm25/zones             -> PM2.5 avg per zone (8 zones)
+  GET /api/v2/gis/pm25/districts         -> PM2.5 per district (50 districts)
+  GET /api/v2/gis/pm25/monthly?zone_code=01 -> Monthly trend for charts
 
 Epidemiology Page:
   GET /api/v2/epidemiology/age-pyramid   -> Population pyramid
@@ -720,6 +738,58 @@ interface GovernorDashboard {
   timestamp: string;
 }
 
+interface PM25ZoneItem {
+  zone_code: string;
+  zone_name_th: string;
+  zone_name_en: string;
+  district_count: number;
+  avg_pm25: number | null;       // null if ArcGIS unavailable
+  avg_aqi: number | null;
+  max_pm25: number | null;
+  station_count: number;
+  days_exceeded: number | null;  // null until pm25_daily populated
+  trend: 'increasing' | 'decreasing' | 'stable' | null;
+  standard_th_exceeded: boolean | null;
+  standard_who_exceeded: boolean | null;
+}
+
+interface PM25ZonesResponse {
+  data_available: boolean;
+  total_zones: number;
+  standards: { th: number; who: number };
+  data: PM25ZoneItem[];
+}
+
+interface PM25DistrictItem {
+  dcode: string;
+  district_name: string;
+  district_name_en: string;
+  zone_code: string;
+  avg_pm25: number | null;
+  avg_aqi: number | null;
+  nearest_station: string;
+  station_name_th: string;
+  days_exceeded: number | null;
+  avg_2025: number | null;
+  avg_2026_q1: number | null;
+  trend: 'increasing' | 'decreasing' | 'stable' | null;
+}
+
+interface PM25DistrictsResponse {
+  data_available: boolean;
+  total_districts: number;
+  standards: { th: number; who: number };
+  data: PM25DistrictItem[];
+}
+
+interface PM25MonthlyResponse {
+  zone_code: string | null;
+  period: { year: string; month: string; avg_pm25: number; avg_aqi: number }[];
+  current_snapshot: { avg_pm25: number | null; avg_aqi: number | null; station_count: number };
+  standards: { th: number; who: number };
+  historical_data_available: boolean;
+}
+
 interface FactorAnalysis {
   factor: string;
   categories: {
@@ -784,6 +854,70 @@ data: {"type":"done"}
   "zone_comparison": [...],
   "top_risk_districts": [...],
   "timestamp": "2026-04-10T16:30:00Z"
+}
+```
+
+### PM2.5 Zones (`GET /api/v2/gis/pm25/zones`)
+
+```json
+{
+  "data_available": true,
+  "total_zones": 8,
+  "standards": { "th": 37.5, "who": 15.0 },
+  "data": [
+    {
+      "zone_code": "01",
+      "zone_name_th": "โซน 1",
+      "zone_name_en": "Zone 1",
+      "district_count": 6,
+      "avg_pm25": 52.3,
+      "avg_aqi": 142,
+      "max_pm25": 68.5,
+      "station_count": 6,
+      "days_exceeded": null,
+      "trend": null,
+      "standard_th_exceeded": true,
+      "standard_who_exceeded": true
+    }
+  ]
+}
+```
+
+### PM2.5 Districts (`GET /api/v2/gis/pm25/districts`)
+
+```json
+{
+  "data_available": true,
+  "total_districts": 50,
+  "standards": { "th": 37.5, "who": 15.0 },
+  "data": [
+    {
+      "dcode": "1026",
+      "district_name": "ดินแดง",
+      "district_name_en": "Din Daeng",
+      "zone_code": "05",
+      "avg_pm25": 62.3,
+      "avg_aqi": 155,
+      "nearest_station": "ดินแดง",
+      "station_name_th": "ดินแดง",
+      "days_exceeded": null,
+      "avg_2025": null,
+      "avg_2026_q1": null,
+      "trend": null
+    }
+  ]
+}
+```
+
+### PM2.5 Monthly (`GET /api/v2/gis/pm25/monthly?zone_code=01`)
+
+```json
+{
+  "zone_code": "01",
+  "period": [],
+  "current_snapshot": { "avg_pm25": 52.3, "avg_aqi": 142, "station_count": 6 },
+  "standards": { "th": 37.5, "who": 15.0 },
+  "historical_data_available": false
 }
 ```
 
@@ -884,6 +1018,7 @@ These come directly from the screening portal as binary flags -- **not** recompu
 | `007_facility_expansion.sql` | Facility reference data |
 | **`008_add_computed_columns.sql`** | **Add age + BMI columns, backfill from existing data** |
 | **`009_new_materialized_views.sql`** | **3 new views: screening_tests, chronic_history, family_history** |
+| **`010_pm25_daily.sql`** | **PM2.5 daily readings table (dcode + date, for historical trends)** |
 
 ---
 
@@ -902,8 +1037,8 @@ These come directly from the screening portal as binary flags -- **not** recompu
 
 | Tier | TTL | Endpoints |
 |------|-----|-----------|
-| T1 | 5 min | External data (PM2.5, ArcGIS) |
-| T2 | 15 min | Aggregate summaries (`/summary/overview`, `/executive/headline-kpi`) |
+| T1 | 5 min | External data (PM2.5 raw from ArcGIS) |
+| T2 | 15 min | Aggregate summaries (`/summary/overview`, `/executive/headline-kpi`, `/gis/pm25/zones`, `/gis/pm25/districts`, `/gis/pm25/monthly`) |
 | T3 | 1 hour | Filtered queries (`/districts/{dcode}`, `/trends/*`) |
 | T4 | 24 hours | Static/reference (`/search/districts`, `/research/data-dictionary`) |
 
@@ -941,9 +1076,9 @@ make dev                    # Start API server (port 9002)
 | `make down` | Stop Docker services |
 | `make infra` | Start only PostgreSQL + Redis |
 | `make install` | Install Python dependencies |
-| `make migrate` | Run all database migrations (001-009) |
+| `make migrate` | Run all database migrations (001-010) |
 | `make seed` | Load reference/seed data |
-| `make test` | Run full test suite (218 tests) |
+| `make test` | Run full test suite (224 tests) |
 | `make health` | Check API health |
 | `make status` | Show all service status + endpoint count |
 | `make endpoints` | List all endpoint groups with counts |

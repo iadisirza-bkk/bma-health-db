@@ -124,12 +124,12 @@ env: ## Copy .env.example to .env (if not exists)
 # ---------------------------------------------------------------------------
 
 .PHONY: migrate
-migrate: ## Run all SQL migrations (001-009) via Docker
+migrate: ## Run all SQL migrations (001-010) via Docker
 	@for f in db/migrations/*.sql; do \
 		echo "Applying $$f ..."; \
 		docker exec -i bma-health-db psql -U postgres -d bma_health < "$$f"; \
 	done
-	@echo "Migrations complete (9 files)."
+	@echo "Migrations complete (10 files)."
 
 .PHONY: seed
 seed: ## Run seed data via Docker
@@ -196,7 +196,7 @@ db-reset: ## Drop and recreate database (DESTRUCTIVE)
 # ---------------------------------------------------------------------------
 
 .PHONY: test
-test: ## Run full test suite (218 tests)
+test: ## Run full test suite (224 tests)
 	cd $(API_DIR) && $(PYTHON) -m pytest -v
 
 .PHONY: test-cov

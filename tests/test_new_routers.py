@@ -131,6 +131,46 @@ class TestReportsAPI:
         resp = await client.get("/api/reports/public/th")
         assert resp.status_code in (200, 404)
 
+    @pytest.mark.anyio
+    async def test_report_dashboard(self, client):
+        """Dashboard endpoint returns unified report state."""
+        resp = await client.get("/api/reports/dashboard")
+        assert resp.status_code == 200
+        data = resp.json()
+        # Top-level keys
+        assert "generation" in data
+        assert "scheduler" in data
+        assert "categories" in data
+        assert "summary" in data
+        # Generation progress shape
+        gen = data["generation"]
+        assert "running" in gen
+        assert "percent" in gen
+        assert isinstance(gen["percent"], (int, float))
+        assert 0 <= gen["percent"] <= 100
+        # Scheduler shape
+        sched = data["scheduler"]
+        assert "enabled" in sched
+        assert "cron" in sched
+        # Categories shape
+        cats = data["categories"]
+        assert len(cats) >= 6
+        for cat in cats:
+            assert "id" in cat
+            assert "label" in cat
+            assert "reports" in cat
+            for report in cat["reports"]:
+                assert "label" in report
+                assert "url" in report
+                assert "cached" in report
+                assert "updated_at" in report
+        # Summary shape
+        summary = data["summary"]
+        assert "total_reports" in summary
+        assert "cached_reports" in summary
+        assert "percent_ready" in summary
+        assert summary["total_reports"] >= 1
+
 
 # ============================================================================
 # EXPORT API  (/api/export/)

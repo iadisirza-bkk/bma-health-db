@@ -11,13 +11,18 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
 
 import config
-from schemas.reports import ReportGenerateResponse, ReportInfo, ReportStatusResponse
+from schemas.reports import (
+    ReportGenerateResponse, ReportInfo, ReportStatusResponse,
+    ReportDashboardResponse, GenerationProgress, SchedulerInfo,
+    ReportCategory, ReportDashboardItem, DashboardSummary,
+)
 from services.report_generator import LANGS, REPORT_TYPES, report_generator
 
 logger = logging.getLogger(__name__)
@@ -247,6 +252,142 @@ async def get_catalog():
     ]
 
     return {"categories": categories}
+
+
+# ------------------------------------------------------------------
+# Dashboard (unified endpoint for frontend)
+# ------------------------------------------------------------------
+
+@router.get("/dashboard", response_model=ReportDashboardResponse)
+async def get_dashboard():
+    """Unified dashboard: generation progress, scheduler, catalog with updated_at, summary.
+
+    Frontend polls this single endpoint to:
+    - Show a progress bar (percent) during nightly generation
+    - Display cached reports immediately with download URLs
+    - Know when generation is complete
+    """
+    from data.facts import HEALTH_ZONES
+    from services.scheduler import get_scheduler_status
+
+    base = REPORTS_DIR
+    diseases = [
+        "diabetes", "hypertension", "obesity", "dyslipidemia",
+        "cardiovascular", "stroke", "ckd", "anemia", "respiratory",
+    ]
+    disease_names = {
+        "diabetes": "เบาหวาน", "hypertension": "ความดันโลหิตสูง",
+        "obesity": "โรคอ้วน", "dyslipidemia": "ไขมันในเลือดผิดปกติ",
+        "cardiovascular": "โรคหลอดเลือดหัวใจ", "stroke": "โรคหลอดเลือดสมอง",
+        "ckd": "โรคไตเรื้อรัง", "anemia": "โรคโลหิตจาง",
+        "respiratory": "โรคระบบทางเดินหายใจ",
+    }
+
+    def _check_with_mtime(path: Path) -> dict:
+        exists = path.exists()
+        if not exists:
+            return {"cached": False, "size": 0, "updated_at": None}
+        stat = path.stat()
+        mtime_utc = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+        return {"cached": True, "size": stat.st_size, "updated_at": mtime_utc}
+
+    # Build categories
+    categories = [
+        ReportCategory(
+            id="executive", label="สำหรับผู้บริหาร", icon="chart",
+            reports=[
+                ReportDashboardItem(label="Executive Slides (TH)", url="/api/reports/executive/th",
+                                    **_check_with_mtime(base / "th" / "slides.pdf")),
+                ReportDashboardItem(label="Executive Slides (EN)", url="/api/reports/executive/en",
+                                    **_check_with_mtime(base / "en" / "slides.pdf")),
+            ],
+        ),
+        ReportCategory(
+            id="zones", label="สำหรับโรงพยาบาล/โซน", icon="hospital",
+            reports=[
+                ReportDashboardItem(
+                    label=f"{z['name_th']} ({z['facilitator'].replace('โรงพยาบาล','รพ.')})",
+                    url=f"/api/reports/zone/{zc}/th",
+                    **_check_with_mtime(base / "zone" / f"zone{zc}_th.pdf"),
+                )
+                for zc, z in HEALTH_ZONES.items()
+            ],
+        ),
+        ReportCategory(
+            id="public", label="สำหรับประชาชน", icon="users",
+            reports=[
+                ReportDashboardItem(label="สรุปสุขภาพ กทม. (TH)", url="/api/reports/public/th",
+                                    **_check_with_mtime(base / "public_th.pdf")),
+            ],
+        ),
+        ReportCategory(
+            id="msd", label="สำหรับสำนักการแพทย์", icon="hospital",
+            reports=[
+                ReportDashboardItem(label="รายงานฉบับเต็ม สนพ. 100+ หน้า (TH)", url="/api/reports/msd/th",
+                                    **_check_with_mtime(base / "th" / "msd_comprehensive.pdf")),
+            ],
+        ),
+        ReportCategory(
+            id="whitepaper", label="รายงานฉบับเต็ม", icon="document",
+            reports=[
+                ReportDashboardItem(label="Comprehensive Report (TH)", url="/api/reports/comprehensive/th",
+                                    **_check_with_mtime(base / "th" / "whitepaper.pdf")),
+                ReportDashboardItem(label="Comprehensive Report (EN)", url="/api/reports/comprehensive/en",
+                                    **_check_with_mtime(base / "en" / "whitepaper.pdf")),
+            ],
+        ),
+        ReportCategory(
+            id="diseases", label="รายโรค", icon="stethoscope",
+            reports=[
+                ReportDashboardItem(label=disease_names.get(dk, dk), url=f"/api/reports/disease/{dk}",
+                                    **_check_with_mtime(base / "disease" / f"{dk}_th.pdf"))
+                for dk in diseases
+            ],
+        ),
+    ]
+
+    # Generation progress with computed percent
+    raw_progress = report_generator.get_generation_progress()
+    total = raw_progress.get("total", 0)
+    completed = raw_progress.get("completed", 0)
+    percent = round((completed / total) * 100, 1) if total > 0 else 0.0
+    generation = GenerationProgress(
+        running=raw_progress.get("running", False),
+        percent=percent,
+        completed=completed,
+        total=total,
+        current=raw_progress.get("current", ""),
+        started_at=raw_progress.get("started_at"),
+        finished_at=raw_progress.get("finished_at"),
+        errors=raw_progress.get("errors", []),
+    )
+
+    # Scheduler info
+    sched = get_scheduler_status()
+    scheduler = SchedulerInfo(
+        enabled=sched.get("enabled", True),
+        cron=sched.get("cron", "00:30"),
+        last_run=sched.get("last_run"),
+        next_run=sched.get("next_run"),
+        running=sched.get("running", False),
+    )
+
+    # Summary
+    all_reports = [r for cat in categories for r in cat.reports]
+    total_reports = len(all_reports)
+    cached_reports = sum(1 for r in all_reports if r.cached)
+    percent_ready = round((cached_reports / total_reports) * 100, 1) if total_reports > 0 else 0.0
+
+    return ReportDashboardResponse(
+        generation=generation,
+        scheduler=scheduler,
+        categories=categories,
+        summary=DashboardSummary(
+            total_reports=total_reports,
+            cached_reports=cached_reports,
+            percent_ready=percent_ready,
+        ),
+    )
 
 
 # ------------------------------------------------------------------
