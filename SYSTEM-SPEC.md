@@ -1,6 +1,6 @@
 # BMA Health -- One-Stop Backend System Spec & Frontend Integration Guide
 
-> **Version:** 4.0.0 | **Last Updated:** 2026-04-10
+> **Version:** 4.2.0 | **Last Updated:** 2026-04-10
 > **Live API Docs:** `http://localhost:9002/docs` (Swagger) | `http://localhost:9002/redoc` (ReDoc)
 > **OpenAPI JSON:** `http://localhost:9002/openapi.json`
 
@@ -37,9 +37,11 @@
   - [Report Downloads](#report-downloads)
   - [TypeScript Types](#typescript-types)
 - [13. Response Schema Examples](#13-response-schema-examples)
-- [14. CORS Configuration](#14-cors-configuration)
-- [15. Caching Behavior](#15-caching-behavior)
-- [16. Running Services](#16-running-services)
+- [14. Data Preprocessing & Computed Variables](#14-data-preprocessing--computed-variables)
+- [15. Database Schema & Materialized Views](#15-database-schema--materialized-views)
+- [16. CORS Configuration](#16-cors-configuration)
+- [17. Caching Behavior](#17-caching-behavior)
+- [18. Running Services](#18-running-services)
 
 ---
 
@@ -316,7 +318,38 @@ See **Swagger UI** at `/docs` for the complete 84-endpoint V2 reference with req
 | `GET/POST` | `/api/health/chat/stream` | `message`, `history` | **SSE streaming** -- returns Server-Sent Events |
 
 **Requires:** LMStudio running at `LMSTUDIO_URL` (default `localhost:5555`).
-Returns `503` if LLM is unavailable.
+Returns `503` if LLM is unavailable. Falls back to rule-based responses.
+
+#### Agent Tools (7 registered)
+
+The LLM agent has 7 tools that give it access to all backend data:
+
+| Tool | What It Can Answer |
+|------|-------------------|
+| `query_health_data` | Disease prevalence by district/zone/age/sex/behavior, rankings, comparisons |
+| `query_api` | **25 specialized endpoints**: KPI targets, NCD cascade, lab values, BMI distribution, cost/budget, screening tests (EKG/X-ray), chronic history, family history, comorbidity counts, facility performance, YoY comparison, screening locations, zone comparison |
+| `query_statistical_test` | Chi-square, odds ratio, ANOVA, correlation, comorbidity matrix |
+| `generate_report` | PDF report generation (comprehensive/executive/disease) |
+| `generate_adaptive_report` | AI-written custom PDF with real data |
+| `query_zone_info` | Zone details, facilitator hospitals, district mapping |
+| `ask_clarification` | Ask follow-up questions to narrow query |
+
+#### What Personas Can Ask
+
+| Persona | Example Questions the Agent Can Answer |
+|---------|---------------------------------------|
+| **ผู้ว่า กทม.** | ภาพรวมสุขภาพ, โซนไหนมีปัญหามากสุด, งบคัดกรอง, เทียบปีที่แล้ว |
+| **รองผู้ว่า** | เปรียบเทียบโซน, Top 10 เบาหวาน, Lab เฉลี่ย, DM+HPT กี่คน |
+| **ผอ.สำนักการแพทย์** | NCD Cascade, KPI เทียบ สธ., ต้นทุน/คน, คัดกรองซ้ำ |
+| **ผอ.รพ.เขต** | สุขภาพโซน 1, EKG/X-ray, ออกกำลังกาย, งบจัดสรร |
+| **ประชาชนการศึกษาสูง** | ชาย 40-49 เสี่ยงเบาหวาน%, BMI เฉลี่ย, ประวัติครอบครัว |
+| **ประชาชนจบ ป.6** | ตรวจฟรีที่ไหน, เบาหวานอันตรายไหม, ผลเลือดปกติเท่าไหร่ |
+
+#### Data Quality Safeguards
+
+- **Sample size warning**: When data < 1,000 records, responses include: *"ข้อมูลจ���กกลุ่มต��วอย่าง N คน ส���ดส่วนอาจเปลี่ยนแปลงเมื่อม���ข้อมูลเพิ่ม"*
+- **Modeled data disclaimer**: When using demographic modifiers: *"ค่าประมาณจากแบบจำลอง อิงข้อมูลจริง กทม. ปรับด้วยค่���สัดส่วนจากสำรวจระดับชาติ"*
+- **Fallback responses**: When LLM is unavailable, rule-based fallback handles: overview, prevalence, risk factors, lab values, health advice, trend data, sex comparison
 
 #### SSE Event Types
 
@@ -756,7 +789,105 @@ data: {"type":"done"}
 
 ---
 
-## 14. CORS Configuration
+## 14. Data Preprocessing & Computed Variables
+
+Raw CSV data from the BMA health screening portal contains measurements but not all derived variables the frontend needs. The ETL pipeline and materialized views compute these automatically.
+
+### Computed at ETL Import Time
+
+| Variable | Formula | Stored In | Source CSV |
+|----------|---------|-----------|------------|
+| **Age** | `current_year - birth_year` | `raw_patients.age` | `pt.csv` BIRTHDATE |
+| **Age Group** | Thai lifecycle cohorts (6 groups) | `raw_patients.age_group` | `pt.csv` BIRTHDATE |
+| **BMI** | `weight_kg / (height_cm / 100)^2` | `raw_vitalsigns.bmi` | `vitalsignslf.csv` HEIGHT + WEIGHT |
+
+### Computed in Materialized Views
+
+| Variable | View | SQL Logic |
+|----------|------|-----------|
+| **% Risk DM/HPT/CVD** | `summary_district_disease` | `COUNT(FILTER WHERE risk_dm) / total_screened * 100` |
+| **% Found DM/HPT/CVD/Stroke** | `summary_district_disease` | `COUNT(FILTER WHERE found_dm) / total_screened * 100` |
+| **Avg SBP/DBP/BMI/Waist** | `summary_district_risk_factors` | `AVG()` grouped by district, sex, age_group, smoking, alcohol, exercise |
+| **BMI Categories** | `summary_bmi_waist` | `<18.5` underweight, `18.5-23` normal, `23-25` overweight, `25-30` obese, `>=30` severely obese |
+| **Waist Risk** | `summary_bmi_waist` | Male >=90cm, Female >=80cm (Asia-Pacific thresholds) |
+| **% Depression Risk** | `summary_district_mental` | PHQ-2 Q1>=1 OR Q2>=1 |
+| **% Moderate Depression** | `summary_district_mental` | PHQ-9 total >= 10 |
+| **% High Stress** | `summary_district_mental` | ST-5 total >= 7 |
+| **% Anemia** | `summary_district_lab` | Hemoglobin < 12 g/dL |
+| **% CKD** | `summary_district_lab` | eGFR < 60 mL/min |
+| **EKG/Xray/Vision/DR Rates** | `summary_screening_tests` | Count done, normal, abnormal per test |
+| **Chronic Disease History** | `summary_chronic_history` | From homehealth: known conditions, treatment adherence, vaccination |
+| **Family History** | `summary_family_history` | Family DM, parent DM/HPT/stroke/heart/kidney |
+| **Comorbidity Pairs** | `summary_comorbidity` | DM+HPT, DM+obesity, metabolic syndrome, multi-disease count |
+
+### Risk Flags (Pre-computed in Source CSV)
+
+These come directly from the screening portal as binary flags -- **not** recomputed by our system:
+
+| Flag | CSV Column | DB Column | Meaning |
+|------|-----------|-----------|---------|
+| `RISKDM` | vitalsignslf.csv | `risk_dm` BOOLEAN | At risk for diabetes |
+| `RISKHPT` | vitalsignslf.csv | `risk_hpt` BOOLEAN | At risk for hypertension |
+| `RISKCDVCL` | vitalsignslf.csv | `risk_cvd` BOOLEAN | At risk for cardiovascular disease |
+| `RISKBMI` | vitalsignslf.csv | `risk_bmi` BOOLEAN | At risk for obesity |
+| `DM` | vitalsignslf.csv | `found_dm` BOOLEAN | Diagnosed with diabetes |
+| `HPT` | vitalsignslf.csv | `found_hpt` BOOLEAN | Diagnosed with hypertension |
+| `CDVCL` | vitalsignslf.csv | `found_cvd` BOOLEAN | Diagnosed with CVD |
+| `STROKE` | vitalsignslf.csv | `found_stroke` BOOLEAN | Diagnosed with stroke |
+| `FAT` | vitalsignslf.csv | `found_obesity` BOOLEAN | Diagnosed with obesity |
+| `CHLTR` | vitalsignslf.csv | `found_dyslipidemia` BOOLEAN | Diagnosed with dyslipidemia |
+
+---
+
+## 15. Database Schema & Materialized Views
+
+### Raw Tables (7)
+
+| Table | Source CSV | Key Columns | Records |
+|-------|-----------|-------------|---------|
+| `raw_patients` | pt.csv | idcard_hash, sex, birth_year, **age**, age_group | ~1M |
+| `raw_vitalsigns` | vitalsignslf.csv | SBP, DBP, height, weight, **BMI**, waist, risk flags, disease flags, mental health scores | ~1M |
+| `raw_visits` | pthistory.csv | visit_date, facility_code | ~1M |
+| `raw_homevisit` | homevisit.csv | education, occupation, health_privilege, home_type | ~800K |
+| `raw_homehealth` | homehealth.csv | chronic disease history, treatment, exercise, vaccination, family history | ~800K |
+| `raw_lab_results` | labhealth.csv | FBS, cholesterol, TG, HDL, LDL, hemoglobin, creatinine, eGFR | ~500K |
+| `raw_lab_extended` | labhealthext.csv | respiratory symptoms, musculoskeletal pain | ~500K |
+
+### Materialized Views (13)
+
+| View | Groups By | Key Metrics |
+|------|-----------|-------------|
+| `summary_district_disease` | district | Total screened, risk counts, disease counts, percentages |
+| `summary_district_risk_factors` | district, sex, age_group, smoking, alcohol, exercise | Avg SBP/DBP/BMI/waist, patient count |
+| `summary_district_lab` | district | Avg lab values, % anemia, % CKD |
+| `summary_district_mental` | district | % depression risk, % PHQ-9 moderate, % high stress |
+| `summary_district_demographics` | district | Education, occupation, insurance, housing counts |
+| `summary_bmi_waist` | district, sex | BMI categories, waist risk, avg height/weight |
+| `summary_disease_age_sex` | district, sex, age_group | Disease counts by demographic |
+| `summary_comorbidity` | district | Disease pair counts, metabolic syndrome |
+| `summary_lab_disease_cross` | district | Lab values stratified by disease status |
+| `summary_facility` | facility, district | Screening counts, lab completion |
+| **`summary_screening_tests`** | district | **EKG, X-ray, vision, DR screening rates** |
+| **`summary_chronic_history`** | district | **Known conditions, treatment adherence, vaccination** |
+| **`summary_family_history`** | district | **Family DM, parent disease history** |
+
+### Migrations
+
+| File | Description |
+|------|-------------|
+| `001_create_raw_tables.sql` | 7 raw tables + indexes |
+| `002_create_materialized_views.sql` | Core 5 views (disease, risk, lab, mental, demographics) |
+| `003_create_import_history.sql` | ETL audit table |
+| `004_add_unique_constraints.sql` | Unique indexes for REFRESH CONCURRENTLY |
+| `005_pdpa_compliance.sql` | Privacy controls |
+| `006_expanded_views.sql` | 5 more views (disease_age_sex, bmi_waist, facility, comorbidity, lab_cross) |
+| `007_facility_expansion.sql` | Facility reference data |
+| **`008_add_computed_columns.sql`** | **Add age + BMI columns, backfill from existing data** |
+| **`009_new_materialized_views.sql`** | **3 new views: screening_tests, chronic_history, family_history** |
+
+---
+
+## 16. CORS Configuration
 
 **Default allowed origins:** `http://localhost:3000`, `http://localhost:5173`
 **Allowed methods:** `GET`, `POST`
@@ -767,7 +898,7 @@ data: {"type":"done"}
 
 ---
 
-## 15. Caching Behavior
+## 17. Caching Behavior
 
 | Tier | TTL | Endpoints |
 |------|-----|-----------|
@@ -780,7 +911,7 @@ Reports are cached as PDF files on disk until explicitly invalidated.
 
 ---
 
-## 16. Running Services
+## 18. Running Services
 
 ### Prerequisites
 
@@ -796,6 +927,8 @@ Reports are cached as PDF files on disk until explicitly invalidated.
 cp .env.example .env        # Configure environment
 make install                # Install Python dependencies
 make infra                  # Start PostgreSQL + Redis (Docker)
+make migrate                # Run all database migrations
+make seed                   # Load reference data
 make dev                    # Start API server (port 9002)
 ```
 
@@ -808,14 +941,23 @@ make dev                    # Start API server (port 9002)
 | `make down` | Stop Docker services |
 | `make infra` | Start only PostgreSQL + Redis |
 | `make install` | Install Python dependencies |
-| `make migrate` | Run database migrations |
-| `make seed` | Run seed data |
-| `make test` | Run test suite (68 tests) |
+| `make migrate` | Run all database migrations (001-009) |
+| `make seed` | Load reference/seed data |
+| `make test` | Run full test suite (218 tests) |
 | `make health` | Check API health |
-| `make status` | Show all service status |
+| `make status` | Show all service status + endpoint count |
+| `make endpoints` | List all endpoint groups with counts |
 | `make docs` | Open Swagger UI in browser |
+| `make redoc` | Open ReDoc in browser |
+| `make chat-test` | Test LLM chat with a sample question |
+| `make agent-tools` | List registered agent tools (7) |
 | `make generate-reports` | Trigger PDF report generation |
+| `make report-catalog` | List available reports with cache status |
+| `make report-status` | Check generation progress |
+| `make db-stats` | Show row counts for all tables and views |
+| `make refresh-views` | Refresh all 13 materialized views |
 | `make clean` | Stop and remove volumes |
+| `make clean-reports` | Remove generated PDF cache |
 
 ### Environment Variables
 
@@ -852,3 +994,14 @@ OpenAPI JSON:  http://localhost:9002/openapi.json
 ```
 
 Auto-generated from FastAPI source. Always reflects the current state of all 150 endpoints.
+
+---
+
+## Changelog
+
+| Version | Date | Changes |
+|---------|------|---------|
+| 4.2.0 | 2026-04-10 | Agent: 7 tools (added `query_api` with 25 endpoints), Gap #1-5 fixes, data quality safeguards |
+| 4.1.0 | 2026-04-10 | ETL: age + BMI preprocessing, 3 new materialized views (screening_tests, chronic_history, family_history) |
+| 4.0.0 | 2026-04-10 | One-stop backend: consolidated LLM chat, LaTeX reports, export, stats from 2 servers to 1 |
+| 3.0.0 | 2026-04-10 | Initial V2 data API: 85 endpoints, 16 domain groups |

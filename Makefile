@@ -124,26 +124,67 @@ env: ## Copy .env.example to .env (if not exists)
 # ---------------------------------------------------------------------------
 
 .PHONY: migrate
-migrate: ## Run all SQL migrations against local PostgreSQL
+migrate: ## Run all SQL migrations (001-009) via Docker
 	@for f in db/migrations/*.sql; do \
 		echo "Applying $$f ..."; \
-		psql "$(DB_URL)" -f "$$f"; \
+		docker exec -i bma-health-db psql -U postgres -d bma_health < "$$f"; \
 	done
-	@echo "Migrations complete."
+	@echo "Migrations complete (9 files)."
 
 .PHONY: seed
-seed: ## Run seed data against local PostgreSQL
+seed: ## Run seed data via Docker
 	@for f in db/seeds/*.sql; do \
 		echo "Seeding $$f ..."; \
-		psql "$(DB_URL)" -f "$$f"; \
+		docker exec -i bma-health-db psql -U postgres -d bma_health < "$$f"; \
 	done
 	@echo "Seeding complete."
+
+.PHONY: refresh-views
+refresh-views: ## Refresh all materialized views
+	@echo "Refreshing materialized views..."
+	@docker exec bma-health-db psql -U postgres -d bma_health -c "\
+		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_district_disease; \
+		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_district_risk_factors; \
+		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_district_lab; \
+		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_district_mental; \
+		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_district_demographics; \
+		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_bmi_waist; \
+		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_disease_age_sex; \
+		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_comorbidity; \
+		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_lab_disease_cross; \
+		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_facility; \
+		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_screening_tests; \
+		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_chronic_history; \
+		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_family_history; \
+	"
+	@echo "All 13 views refreshed."
+
+.PHONY: db-stats
+db-stats: ## Show row counts for all tables and views
+	@docker exec bma-health-db psql -U postgres -d bma_health -c "\
+		SELECT 'raw_patients' AS name, COUNT(*) FROM raw_patients \
+		UNION ALL SELECT 'raw_vitalsigns', COUNT(*) FROM raw_vitalsigns \
+		UNION ALL SELECT 'raw_visits', COUNT(*) FROM raw_visits \
+		UNION ALL SELECT 'raw_homevisit', COUNT(*) FROM raw_homevisit \
+		UNION ALL SELECT 'raw_homehealth', COUNT(*) FROM raw_homehealth \
+		UNION ALL SELECT 'raw_lab_results', COUNT(*) FROM raw_lab_results \
+		UNION ALL SELECT 'raw_lab_extended', COUNT(*) FROM raw_lab_extended \
+		UNION ALL SELECT '---VIEWS---', 0 \
+		UNION ALL SELECT 'summary_district_disease', COUNT(*) FROM summary_district_disease \
+		UNION ALL SELECT 'summary_screening_tests', COUNT(*) FROM summary_screening_tests \
+		UNION ALL SELECT 'summary_chronic_history', COUNT(*) FROM summary_chronic_history \
+		UNION ALL SELECT 'summary_family_history', COUNT(*) FROM summary_family_history \
+		UNION ALL SELECT '---COMPUTED---', 0 \
+		UNION ALL SELECT 'patients_with_age', COUNT(*) FROM raw_patients WHERE age IS NOT NULL \
+		UNION ALL SELECT 'vitalsigns_with_bmi', COUNT(*) FROM raw_vitalsigns WHERE bmi IS NOT NULL \
+		ORDER BY 1; \
+	"
 
 .PHONY: db-reset
 db-reset: ## Drop and recreate database (DESTRUCTIVE)
 	@echo "WARNING: This will destroy all data in bma_health database."
 	@read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1
-	psql "postgresql://postgres:bma_health_dev@localhost:5433/postgres" \
+	docker exec bma-health-db psql -U postgres \
 		-c "DROP DATABASE IF EXISTS bma_health;" \
 		-c "CREATE DATABASE bma_health;"
 	$(MAKE) migrate
@@ -155,7 +196,7 @@ db-reset: ## Drop and recreate database (DESTRUCTIVE)
 # ---------------------------------------------------------------------------
 
 .PHONY: test
-test: ## Run test suite (68 tests)
+test: ## Run full test suite (218 tests)
 	cd $(API_DIR) && $(PYTHON) -m pytest -v
 
 .PHONY: test-cov
@@ -169,6 +210,25 @@ lint: ## Run linter (ruff)
 .PHONY: format
 format: ## Auto-format code (ruff)
 	cd $(API_DIR) && $(PYTHON) -m ruff format .
+
+# ---------------------------------------------------------------------------
+# Chat / Agent
+# ---------------------------------------------------------------------------
+
+.PHONY: chat-test
+chat-test: ## Test LLM chat with a sample question
+	@echo "Testing chat endpoint..."
+	@curl -s -H "X-API-Key: $${API_KEY:-dev-api-key}" \
+		"http://localhost:$(API_PORT)/api/health/chat?message=%E0%B8%A0%E0%B8%B2%E0%B8%9E%E0%B8%A3%E0%B8%A7%E0%B8%A1%E0%B8%AA%E0%B8%B8%E0%B8%82%E0%B8%A0%E0%B8%B2%E0%B8%9E" \
+		| python3 -m json.tool 2>/dev/null || echo "Chat unavailable (LMStudio not running?)"
+
+.PHONY: agent-tools
+agent-tools: ## List registered agent tools
+	@cd $(API_DIR) && $(PYTHON) -c "\
+	from agents.tools.registry import ToolRegistry; \
+	reg = ToolRegistry.create_default(); \
+	print(f'{len(reg.list_tools())} tools registered:'); \
+	[print(f'  - {t.name}') for t in reg.list_tools()]"
 
 # ---------------------------------------------------------------------------
 # Reports

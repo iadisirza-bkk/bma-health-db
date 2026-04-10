@@ -100,7 +100,7 @@ def district_detail(dcode: str):
                   occ_agriculture, occ_unemployed, occ_student, occ_retired,
                   priv_ucs, priv_sso, priv_csmbs, priv_other,
                   house_owned, house_rented, house_condo, house_other
-           FROM summary_district_demographics WHERE district_code = %s""", (dcode,)
+           FROM summary_district_demographics WHERE district_code::text = %s""", (dcode,)
     )
 
     return {

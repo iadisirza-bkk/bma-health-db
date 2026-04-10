@@ -176,6 +176,16 @@ class QueryHealthDataTool(BaseTool):
                 chart_data.append({"name": cat_th, "value": rate})
                 text_lines.append(f"- {cat_th}: {rate}% ({count:,} คน)")
 
+        # --- Gap #3 fix: label modeled vs actual data ---
+        has_modifiers = any(filters.get(fk) for fk in ["age_group", "sex", "smoking", "alcohol", "exercise"])
+        if has_modifiers:
+            text_lines.append("")
+            text_lines.append("*หมายเหตุ: ค่าประมาณจากแบบจำลอง (modifier-based) อิงข้อมูลจริง กทม. ปรับด้วยค่าสัดส่วนจากสำรวจระดับชาติ*")
+
+        # --- Gap #4 fix: sample size warning ---
+        if total < 1000:
+            text_lines.append(f"*ข้อมูลจากกลุ่มตัวอย่าง {total:,} คน สัดส่วนอาจเปลี่ยนแปลงเมื่อมีข้อมูลเพิ่ม*")
+
         text = "\n".join(text_lines) if text_lines else "ไม่พบข้อมูล"
         chart_type = args.get("chart_type", "none")
         viz = []

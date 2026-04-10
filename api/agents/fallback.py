@@ -28,6 +28,7 @@ DISEASE_MAP = {
 
 INTENT_PATTERNS = [
     ("advice", [r"ต้องทำ", r"ทำยังไง", r"ทำอย่างไร", r"แนะนำ", r"ป้องกัน", r"รักษา", r"ดูแล", r"ลด.*ความเสี่ยง", r"หลีกเลี่ยง", r"advice", r"prevent", r"how to", r"วิธี"]),
+    ("lab_values", [r"ผลเลือด", r"ค่าเลือด", r"lab", r"ผลตรวจเลือด", r"ค่าปกติ", r"normal.*value", r"ผล.*ตรวจ"]),
     ("overview", [r"ภาพรวม", r"สรุป", r"ทั้งหมด", r"overview", r"summary", r"รวม"]),
     ("prevalence", [r"ความชุก", r"prevalence", r"อัตรา", r"เท่าไ[หร]", r"กี่เปอร์เซ็นต์", r"เปอร์เซ็น", r"%"]),
     ("compare_sex", [r"เพศ", r"ชาย.*หญิง", r"หญิง.*ชาย", r"sex", r"gender"]),
@@ -78,6 +79,8 @@ async def handle_fallback(session, message: str, context: dict | None = None) ->
 
     if intent == "advice":
         return build_advice(data, disease)
+    elif intent == "lab_values":
+        return build_lab_values(data)
     elif intent == "overview":
         return build_overview(data, disease)
     elif intent == "prevalence":
@@ -186,13 +189,33 @@ def build_prevalence(data: dict, disease: str | None, district: str | None) -> d
 
 
 def build_compare_sex(data: dict, disease: str | None) -> dict:
-    lines = [
-        "## เปรียบเทียบรายเพศ",
-        "",
-        "ข้อมูลการเปรียบเทียบรายเพศยังไม่พร้อมใช้งานในชุดข้อมูลปัจจุบัน",
-        "กรุณาติดต่อทีมข้อมูลเพื่อเพิ่มข้อมูลแยกเพศ",
-    ]
-    return {"content": "\n".join(lines), "visualizations": []}
+    try:
+        from agents.tools.query_api import _query
+        rows = _query("""
+            SELECT p.sex, COUNT(DISTINCT v.patient_id) AS total,
+                   COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_dm) AS risk_dm,
+                   COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_hpt) AS risk_hpt,
+                   COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_obesity) AS found_obesity
+            FROM raw_vitalsigns v
+            JOIN raw_patients p ON v.patient_id = p.id
+            WHERE v.cancel_status IS DISTINCT FROM 1
+            GROUP BY p.sex
+        """)
+        sex_labels = {10: "ชาย", 20: "หญิง"}
+        lines = ["## เปรียบเทียบรายเพศ", ""]
+        chart_data = []
+        for r in rows:
+            label = sex_labels.get(r.get("sex"), f"เพศ {r.get('sex')}")
+            t = r.get("total") or 1
+            dm_pct = round(100.0 * (r.get("risk_dm") or 0) / t, 1)
+            hpt_pct = round(100.0 * (r.get("risk_hpt") or 0) / t, 1)
+            lines.append(f"- **{label}** ({t:,} คน): เสี่ยงเบาหวาน {dm_pct}%, ความดัน {hpt_pct}%")
+            chart_data.append({"name": label, "value": dm_pct})
+        viz = [{"type": "bar", "title": "เสี่ยงเบาหวาน แยกเพศ (%)", "data": chart_data, "xKey": "name", "yKey": "value", "color": "#3b82f6"}] if chart_data else []
+        return {"content": "\n".join(lines), "visualizations": viz}
+    except Exception:
+        lines = ["## เปรียบเทียบรายเพศ", "", "ไม่สามารถดึงข้อมูลแยกเพศได้ในขณะนี้"]
+        return {"content": "\n".join(lines), "visualizations": []}
 
 
 def build_by_area(data: dict, disease: str | None) -> dict:
@@ -254,12 +277,23 @@ def build_risk(data: dict, disease: str | None) -> dict:
 
 
 def build_trend(data: dict, disease: str | None) -> dict:
-    lines = [
-        "## แนวโน้มข้อมูล",
-        "",
-        "ข้อมูลแนวโน้มรายปียังไม่พร้อมใช้งานในชุดข้อมูลปัจจุบัน",
-        "ชุดข้อมูลนี้เป็นข้อมูล cross-sectional ของรอบการคัดกรองปัจจุบัน",
-    ]
+    try:
+        from agents.tools.query_api import _yoy_comparison
+        result = _yoy_comparison()
+        quarters = result.get("quarters", [])
+        if quarters:
+            lines = ["## แนวโน้มการคัดกรอง (รายไตรมาส)", ""]
+            chart_data = []
+            for q in quarters:
+                period = str(q.get("quarter", ""))[:7]
+                screened = q.get("screened", 0)
+                lines.append(f"- **{period}**: คัดกรอง {screened:,} คน")
+                chart_data.append({"name": period, "value": screened})
+            viz = [{"type": "line", "title": "จำนวนคัดกรองรายไตรมาส", "data": chart_data, "xKey": "name", "yKey": "value", "color": "#00744B"}] if chart_data else []
+            return {"content": "\n".join(lines), "visualizations": viz}
+    except Exception:
+        pass
+    lines = ["## แนวโน้มข้อมูล", "", "ข้อมูลแนวโน้มรายปียังไม่เพียงพอสำหรับการวิเคราะห์"]
     return {"content": "\n".join(lines), "visualizations": []}
 
 
@@ -407,5 +441,44 @@ def build_advice(data: dict, disease: str | None) -> dict:
     lines.append("")
     lines.append("---")
     lines.append("*ข้อมูลนี้เป็นคำแนะนำเบื้องต้น ควรปรึกษาแพทย์เพื่อรับคำแนะนำเฉพาะบุคคล*")
+
+    return {"content": "\n".join(lines), "visualizations": []}
+
+
+def build_lab_values(data: dict) -> dict:
+    """Lab values with reference ranges + actual BMA averages."""
+    try:
+        from agents.tools.query_api import _lab_city_average
+        city = _lab_city_average()
+    except Exception:
+        city = {}
+
+    lines = [
+        "## ค่าผลตรวจเลือดสำคัญ",
+        "",
+        "| รายการ | ค่าเฉลี่ย กทม. | ค่าปกติ | หน่วย |",
+        "|--------|---------------|--------|------|",
+    ]
+
+    ref = [
+        ("น้ำตาลในเลือด (FBS)", city.get("avg_fbs"), "< 100", "mg/dL"),
+        ("คอเลสเตอรอล", city.get("avg_cholesterol"), "< 200", "mg/dL"),
+        ("ไตรกลีเซอไรด์", city.get("avg_triglyceride"), "< 150", "mg/dL"),
+        ("HDL (ไขมันดี)", city.get("avg_hdl"), "> 40", "mg/dL"),
+        ("LDL (ไขมันไม่ดี)", city.get("avg_ldl"), "< 130", "mg/dL"),
+        ("ฮีโมโกลบิน", city.get("avg_hemoglobin"), "> 12", "g/dL"),
+        ("ครีเอตินิน", city.get("avg_creatinine"), "< 1.2", "mg/dL"),
+        ("eGFR (การกรองไต)", city.get("avg_egfr"), "> 60", "mL/min"),
+    ]
+    for label, val, normal, unit in ref:
+        val_str = f"{val}" if val else "ไม่มีข้อมูล"
+        lines.append(f"| {label} | {val_str} | {normal} | {unit} |")
+
+    lines.extend([
+        "",
+        "**คำแนะนำ**: ค่าผิดปกติไม่ได้แปลว่าเป็นโรค ควรปรึกษาแพทย์เพื่อแปลผลเฉพาะบุคคล",
+        "",
+        "*ข้อมูลเฉลี่ยจากการคัดกรองสุขภาพ กทม.*",
+    ])
 
     return {"content": "\n".join(lines), "visualizations": []}

@@ -145,6 +145,7 @@ def import_patients(cur, df, current_year: int) -> Dict[str, int]:
         # Buddhist calendar: if year > 2400, assume Buddhist era
         if by_year and by_year > 2400:
             by_year -= 543
+        computed_age = (current_year - by_year) if by_year else None
         rows.append((
             id_hash,
             safe_int(r.get("NOTYPE")),
@@ -152,6 +153,7 @@ def import_patients(cur, df, current_year: int) -> Dict[str, int]:
             safe_int(r.get("MALE")),
             by_year,
             age_group(by_year, current_year),
+            computed_age,
             parse_date(r.get("FIRSTDATE")),
             parse_date(r.get("LASTDATE")),
         ))
@@ -170,7 +172,7 @@ def import_patients(cur, df, current_year: int) -> Dict[str, int]:
     rows = deduped
 
     sql = """
-        INSERT INTO raw_patients (idcard_hash, notype, pname, sex, birth_year, age_group, created_at, updated_at)
+        INSERT INTO raw_patients (idcard_hash, notype, pname, sex, birth_year, age_group, age, created_at, updated_at)
         VALUES %s
         ON CONFLICT (idcard_hash) DO UPDATE SET
             notype     = EXCLUDED.notype,
@@ -178,6 +180,7 @@ def import_patients(cur, df, current_year: int) -> Dict[str, int]:
             sex        = EXCLUDED.sex,
             birth_year = EXCLUDED.birth_year,
             age_group  = EXCLUDED.age_group,
+            age        = EXCLUDED.age,
             updated_at = EXCLUDED.updated_at
     """
     execute_values(cur, sql, rows, page_size=500)
@@ -274,6 +277,12 @@ def import_vitalsigns(cur, df, patient_map: Dict[str, int]):
 
         stress = collect_array(r, ["STMNG1", "STMNG2", "STMNG3", "STMNG4"])
 
+        height = safe_float(r.get("HEIGHT"))
+        weight = safe_float(r.get("WEIGHT"))
+        computed_bmi = None
+        if height and height > 0 and height < 250 and weight and weight > 0 and weight < 300:
+            computed_bmi = round(weight / (height / 100.0) ** 2, 2)
+
         rows.append((
             pid,
             parse_date(r.get("VSTDATE")),
@@ -282,8 +291,8 @@ def import_vitalsigns(cur, df, patient_map: Dict[str, int]):
             safe_int(r.get("LBPN")),
             safe_float(r.get("PREFPG")),
             safe_float(r.get("POSTFPG")),
-            safe_float(r.get("HEIGHT")),
-            safe_float(r.get("WEIGHT")),
+            height,
+            weight,
             safe_float(r.get("WSTL")),
             safe_int(r.get("PR")),
             safe_int(r.get("SMOKE")),
@@ -325,6 +334,7 @@ def import_vitalsigns(cur, df, patient_map: Dict[str, int]):
             safe_str(r.get("LOCATION")),
             stress,
             safe_int(r.get("CANCELST")),
+            computed_bmi,
         ))
 
     if not rows:
@@ -346,7 +356,8 @@ def import_vitalsigns(cur, df, patient_map: Dict[str, int]):
             found_dm, found_hpt, found_cvd, found_stroke,
             found_obesity, found_dyslipidemia, found_other,
             family_dm, district_code, location_code,
-            stress_management, cancel_status
+            stress_management, cancel_status,
+            bmi
         ) VALUES %s
         ON CONFLICT DO NOTHING
     """

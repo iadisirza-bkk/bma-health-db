@@ -437,10 +437,10 @@ class HealthDataService:
         params: list = []
 
         if dcode:
-            conditions.append("d.district_code = %s")
+            conditions.append("d.district_code::text = %s")
             params.append(str(dcode).strip())
         elif zone_code:
-            conditions.append("d.district_code IN (SELECT district_code FROM summary_district_disease WHERE zone_code = %s)")
+            conditions.append("d.district_code::text IN (SELECT district_code FROM summary_district_disease WHERE zone_code = %s)")
             params.append(str(zone_code).strip())
 
         where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""

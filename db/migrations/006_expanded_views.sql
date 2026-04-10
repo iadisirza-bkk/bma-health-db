@@ -93,26 +93,21 @@ CREATE MATERIALIZED VIEW summary_bmi_waist AS
 SELECT
   COALESCE(v.district_code, '__none__') AS district_code,
   COALESCE(p.sex, -1) AS sex,
-  COUNT(*) FILTER (WHERE v.height_cm > 0 AND v.weight_kg > 0) AS total_measured,
+  COUNT(*) FILTER (WHERE v.bmi IS NOT NULL OR (v.height_cm > 0 AND v.weight_kg > 0)) AS total_measured,
 
-  -- BMI categories (Asia-Pacific WHO)
-  COUNT(*) FILTER (WHERE v.height_cm > 0 AND v.weight_kg > 0
-    AND v.weight_kg / POWER(v.height_cm / 100.0, 2) < 18.5) AS bmi_underweight,
-  COUNT(*) FILTER (WHERE v.height_cm > 0 AND v.weight_kg > 0
-    AND v.weight_kg / POWER(v.height_cm / 100.0, 2) >= 18.5
-    AND v.weight_kg / POWER(v.height_cm / 100.0, 2) < 23) AS bmi_normal,
-  COUNT(*) FILTER (WHERE v.height_cm > 0 AND v.weight_kg > 0
-    AND v.weight_kg / POWER(v.height_cm / 100.0, 2) >= 23
-    AND v.weight_kg / POWER(v.height_cm / 100.0, 2) < 25) AS bmi_overweight,
-  COUNT(*) FILTER (WHERE v.height_cm > 0 AND v.weight_kg > 0
-    AND v.weight_kg / POWER(v.height_cm / 100.0, 2) >= 25
-    AND v.weight_kg / POWER(v.height_cm / 100.0, 2) < 30) AS bmi_obese,
-  COUNT(*) FILTER (WHERE v.height_cm > 0 AND v.weight_kg > 0
-    AND v.weight_kg / POWER(v.height_cm / 100.0, 2) >= 30) AS bmi_severely_obese,
+  -- BMI categories (Asia-Pacific WHO) — use stored bmi column with fallback
+  COUNT(*) FILTER (WHERE COALESCE(v.bmi, CASE WHEN v.height_cm > 0 THEN v.weight_kg / POWER(v.height_cm / 100.0, 2) END) < 18.5) AS bmi_underweight,
+  COUNT(*) FILTER (WHERE COALESCE(v.bmi, CASE WHEN v.height_cm > 0 THEN v.weight_kg / POWER(v.height_cm / 100.0, 2) END) >= 18.5
+    AND COALESCE(v.bmi, CASE WHEN v.height_cm > 0 THEN v.weight_kg / POWER(v.height_cm / 100.0, 2) END) < 23) AS bmi_normal,
+  COUNT(*) FILTER (WHERE COALESCE(v.bmi, CASE WHEN v.height_cm > 0 THEN v.weight_kg / POWER(v.height_cm / 100.0, 2) END) >= 23
+    AND COALESCE(v.bmi, CASE WHEN v.height_cm > 0 THEN v.weight_kg / POWER(v.height_cm / 100.0, 2) END) < 25) AS bmi_overweight,
+  COUNT(*) FILTER (WHERE COALESCE(v.bmi, CASE WHEN v.height_cm > 0 THEN v.weight_kg / POWER(v.height_cm / 100.0, 2) END) >= 25
+    AND COALESCE(v.bmi, CASE WHEN v.height_cm > 0 THEN v.weight_kg / POWER(v.height_cm / 100.0, 2) END) < 30) AS bmi_obese,
+  COUNT(*) FILTER (WHERE COALESCE(v.bmi, CASE WHEN v.height_cm > 0 THEN v.weight_kg / POWER(v.height_cm / 100.0, 2) END) >= 30) AS bmi_severely_obese,
 
-  -- BMI average
-  AVG(CASE WHEN v.height_cm > 0 AND v.weight_kg > 0
-    THEN v.weight_kg / POWER(v.height_cm / 100.0, 2) END) AS avg_bmi,
+  -- BMI average — prefer stored column
+  AVG(COALESCE(v.bmi, CASE WHEN v.height_cm > 0 AND v.weight_kg > 0
+    THEN v.weight_kg / POWER(v.height_cm / 100.0, 2) END)) AS avg_bmi,
 
   -- Waist circumference (risk: male >= 90cm, female >= 80cm)
   COUNT(*) FILTER (WHERE v.waist_cm IS NOT NULL AND v.waist_cm > 0) AS total_waist_measured,

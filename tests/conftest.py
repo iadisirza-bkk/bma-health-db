@@ -10,6 +10,9 @@ import pytest
 # Add api/ to path so we can import the FastAPI app
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "api"))
 
+# Raise rate limit for test suite (218+ tests hit the 60/min default)
+os.environ.setdefault("RATE_LIMIT_PUBLIC", "5000")
+
 from httpx import ASGITransport, AsyncClient
 
 

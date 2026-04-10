@@ -73,11 +73,34 @@ class OpenMultiAgent:
         try:
             team = self.create_team()
             analyst = team.get_agent("analyst")
+            synthesizer = team.get_agent("synthesizer")
             runner = AgentRunner(analyst, self.registry)
 
             messages = [{"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": user_message}]
             text, viz, artifacts, results = await runner.run_conversation(messages)
+
+            # --- Gap #2 fix: if tools ran but text is empty, synthesize from tool results ---
+            if not text.strip() and results:
+                tool_context = "\n".join(r.text[:1500] for r in results if r.text)
+                if tool_context:
+                    synth_msgs = [
+                        {"role": "system", "content": "ตอบภาษาไทย Markdown กระชับ <=200 คำ ใช้ข้อมูลที่ให้มาเท่านั้น"},
+                        {"role": "user", "content": f"ข้อมูล:\n{tool_context}\n\nสรุปข้อมูลนี้ตอบคำถาม: {user_message}"},
+                    ]
+                    synth_resp = await self.adapter.chat(synth_msgs)
+                    text = synth_resp.content
+
+            # --- Gap #4 fix: add sample size warning for small datasets ---
+            if text.strip():
+                from agents.tools.helpers import get_total_screened, load_data
+                try:
+                    total = get_total_screened(load_data())
+                    if total < 1000:
+                        text += f"\n\n> **หมายเหตุ**: ข้อมูลจากกลุ่มตัวอย่าง {total:,} คน (เป้าหมาย 1.6 ล้านคน) สัดส่วนอาจเปลี่ยนแปลงเมื่อมีข้อมูลเพิ่ม"
+                except Exception:
+                    pass
+
             self.cb.record_success()
             return {"content": text, "visualizations": viz}
         except Exception as e:
@@ -243,9 +266,20 @@ class OpenMultiAgent:
 
             tool_results = [m["content"] for m in messages if m.get("role") == "tool" and m.get("content")]
             tool_context = "\n".join(tool_results) if tool_results else "ไม่มีข้อมูล"
+
+            # --- Gap #4 fix: inject sample size context ---
+            sample_note = ""
+            try:
+                from agents.tools.helpers import get_total_screened, load_data
+                total = get_total_screened(load_data())
+                if total < 1000:
+                    sample_note = f"\nหมายเหตุ: ข้อมูลจากกลุ่มตัวอย่าง {total:,} คน (เป้า 1.6 ล้าน) ให้ระบุในคำตอบด้วย"
+            except Exception:
+                pass
+
             synth_messages = [
-                {"role": "system", "content": "ตอบภาษาไทย Markdown กระชับ <=200 คำ"},
-                {"role": "user", "content": f"ข้อมูล:\n{tool_context}\n\nสรุปข้อมูลนี้ตอบคำถาม: {user_message}"},
+                {"role": "system", "content": "ตอบภาษาไทย Markdown กระชับ <=200 คำ ถ้ามีหมายเหตุเรื่องขนาดตัวอย่างให้ระบุด้วย"},
+                {"role": "user", "content": f"ข้อมูล:\n{tool_context}{sample_note}\n\nสรุปข้อมูลนี้ตอบคำถาม: {user_message}"},
             ]
 
             try:

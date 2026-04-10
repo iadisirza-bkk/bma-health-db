@@ -153,10 +153,10 @@ def resource_optimization():
         SELECT s.district_code, s.district_name, s.zone_code,
                s.total_screened, s.risk_dm_count, s.risk_hpt_count,
                d.population,
-               COUNT(c.id) as clinic_count
+               COUNT(f.code) as clinic_count
         FROM summary_district_disease s
         JOIN ref_districts d ON d.dcode = s.district_code
-        LEFT JOIN ref_clinics c ON c.district_code = s.district_code
+        LEFT JOIN ref_facilities f ON f.district_code = s.district_code
         WHERE s.total_screened > 0
         GROUP BY s.district_code, s.district_name, s.zone_code,
                  s.total_screened, s.risk_dm_count, s.risk_hpt_count, d.population

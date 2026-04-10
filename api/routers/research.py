@@ -147,7 +147,7 @@ def correlation_matrix():
     """Correlation matrix of key health variables (aggregate level)."""
     # Return district-level averages for correlation computation
     rows = execute_query("""
-        SELECT d.district_code,
+        SELECT d.dcode AS district_code,
                COALESCE(s.total_screened, 0) as screened,
                COALESCE(s.pct_risk_dm, 0) as dm_pct,
                COALESCE(s.pct_risk_hpt, 0) as hpt_pct,

@@ -63,8 +63,9 @@ class ToolRegistry:
         from agents.tools.clarification import AskClarificationTool
         from agents.tools.zone_info import QueryZoneInfoTool
         from agents.tools.adaptive_report import GenerateAdaptiveReportTool
+        from agents.tools.query_api import QueryAPITool
 
-        for tool_cls in [QueryHealthDataTool, QueryStatisticalTestTool,
+        for tool_cls in [QueryHealthDataTool, QueryAPITool, QueryStatisticalTestTool,
                          GenerateReportTool, GenerateAdaptiveReportTool,
                          AskClarificationTool, QueryZoneInfoTool]:
             registry.register(tool_cls())

@@ -258,7 +258,7 @@ def demographics_summary(
           dm.priv_ucs, dm.priv_sso, dm.priv_csmbs, dm.priv_other,
           dm.house_owned, dm.house_rented, dm.house_condo, dm.house_other
         FROM summary_district_demographics dm
-        JOIN ref_districts d ON dm.district_code = d.dcode
+        JOIN ref_districts d ON dm.district_code::text = d.dcode
         {where}
         ORDER BY dm.district_code
     """, tuple(params) or None)

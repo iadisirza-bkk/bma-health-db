@@ -60,7 +60,7 @@ SELECT
   AVG(v.dbp) AS avg_dbp,
   AVG(v.weight_kg) AS avg_weight_kg,
   AVG(v.waist_cm) AS avg_waist_cm,
-  AVG(CASE WHEN v.height_cm > 0 THEN v.weight_kg / POWER(v.height_cm / 100.0, 2) END) AS avg_bmi
+  AVG(COALESCE(v.bmi, CASE WHEN v.height_cm > 0 THEN v.weight_kg / POWER(v.height_cm / 100.0, 2) END)) AS avg_bmi
 FROM raw_vitalsigns v
 JOIN raw_patients p ON v.patient_id = p.id
 LEFT JOIN raw_homehealth h ON v.patient_id = h.patient_id AND h.cancel_status IS DISTINCT FROM 1
