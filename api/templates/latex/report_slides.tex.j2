@@ -283,19 +283,26 @@
 \column{0.5\textwidth}
 \begin{block}{<< i18n.seasonal_comparison >>}
 \small
-\begin{tabular}{l r r}
+<% if data.pm25.data_available %>
+\begin{tabular}{l r}
 \toprule
-& \textbf{<< i18n.dry_season >>} & \textbf{<< i18n.rainy_season >>} \\
-\midrule
-PM2.5 & << data.pm25.dry_avg >> & << data.pm25.rainy_avg >> \\
-<< i18n.respiratory_risk >> & << data.pm25.dry_resp_pct >>\% & << data.pm25.rainy_resp_pct >>\% \\
+\textbf{PM2.5 เฉลี่ย กทม.} & << data.pm25.city_avg >> $\mu$g/m$^3$ \\
 \bottomrule
 \end{tabular}
+<% if data.pm25.top_districts %>
+\vspace{4pt}
+\textbf{เขตที่สูงสุด:}
+\begin{itemize}
+<% for d in data.pm25.top_districts[:3] %>
+\item << d.district >>: << d.pm25_avg >>
+<% endfor %>
+\end{itemize}
+<% endif %>
+<% else %>
+ไม่มีข้อมูล PM2.5
+<% endif %>
 \end{block}
 \column{0.48\textwidth}
-<% if data.pm25.chart_path %>
-\includegraphics[width=\textwidth]{<< data.pm25.chart_path >>}
-<% endif %>
 \end{columns}
 \end{frame}
 

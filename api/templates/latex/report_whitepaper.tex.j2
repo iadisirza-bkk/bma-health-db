@@ -264,10 +264,10 @@
 \caption{<< i18n.screening_results_for >> << test.name >>}
 \begin{tabular}{l r r r}
 \toprule
-\textbf{<< i18n.result_category >>} & \textbf{<< i18n.count >>} & \textbf{<< i18n.pct >>} & \textbf{<< i18n.interpretation >>} \\
+\textbf{<< i18n.result_category >>} & \textbf{<< i18n.count >>} & \textbf{<< i18n.pct >>} \\
 \midrule
 <% for row in test.results %>
-<< row.category >> & << row.count|number_format >> & << row.pct >>\% & << row.interpretation >> \\
+<< row.category >> & << row.count|number_format >> & << row.pct >>\% \\
 <% endfor %>
 \midrule
 \textbf{<< i18n.total >>} & \textbf{<< test.total|number_format >>} & \textbf{100\%} & \\
@@ -380,24 +380,31 @@
 
 \begin{table}[H]
 \centering
+<% if data.pm25.data_available %>
 \caption{<< i18n.pm25_seasonal_table >>}
-\begin{tabular}{l r r r}
+\begin{tabular}{l r}
 \toprule
-\textbf{<< i18n.metric >>} & \textbf{<< i18n.dry_season >>} & \textbf{<< i18n.rainy_season >>} & \textbf{<< i18n.p_value >>} \\
+\textbf{<< i18n.metric >>} & \textbf{<< i18n.value >>} \\
 \midrule
-<< i18n.avg_pm25 >> & << data.pm25.dry_avg >> $\mu$g/m$^3$ & << data.pm25.rainy_avg >> $\mu$g/m$^3$ & << data.pm25.pm25_p_value >> \\
-<< i18n.respiratory_risk >> & << data.pm25.dry_resp_pct >>\% & << data.pm25.rainy_resp_pct >>\% & << data.pm25.resp_p_value >> \\
-<< i18n.cardiovascular_risk >> & << data.pm25.dry_cvd_pct >>\% & << data.pm25.rainy_cvd_pct >>\% & << data.pm25.cvd_p_value >> \\
+<< i18n.avg_pm25 >> & << data.pm25.city_avg >> $\mu$g/m$^3$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-<% if data.pm25.chart_path %>
-\begin{figure}[H]
-\centering
-\includegraphics[width=0.75\textwidth]{<< data.pm25.chart_path >>}
-\caption{<< i18n.pm25_chart_caption >>}
-\end{figure}
+<% if data.pm25.top_districts %>
+\textbf{เขตที่มี PM2.5 สูงสุด:}
+\begin{itemize}
+<% for d in data.pm25.top_districts %>
+\item << d.district >>: << d.pm25_avg >> $\mu$g/m$^3$
+<% endfor %>
+\end{itemize}
+<% endif %>
+<% else %>
+\caption{PM2.5}
+\begin{tabular}{l}
+ไม่มีข้อมูล PM2.5 ในขณะนี้ \\
+\end{tabular}
+\end{table}
 <% endif %>
 
 \subsection{<< i18n.pm25_district_ranking >>}

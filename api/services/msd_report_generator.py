@@ -152,7 +152,7 @@ class MSDReportGenerator:
                 "avg_smoking": rd.behavior_summary.get("smoking_pct", 0) if hasattr(rd, "behavior_summary") and rd.behavior_summary else 0,
                 "avg_alcohol": rd.behavior_summary.get("alcohol_pct", 0) if hasattr(rd, "behavior_summary") and rd.behavior_summary else 0,
                 "avg_no_exercise": rd.behavior_summary.get("no_exercise_pct", 0) if hasattr(rd, "behavior_summary") and rd.behavior_summary else 0,
-                "avg_obese": next((d["pct"] for d in rd.diseases if d["key"] == "obesity"), 0) if rd.diseases else 0,
+                "avg_obese": next((d["avg_pct"] for d in rd.city_disease_summary if d["key"] == "obesity"), 0) if rd.city_disease_summary else 0,
                 "total_hospitals": 11, "total_health_centers": 69,
                 "total_districts": 50,
                 "anova_results": [],
