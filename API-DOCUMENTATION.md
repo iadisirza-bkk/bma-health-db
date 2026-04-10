@@ -1484,6 +1484,81 @@ export function useDistrictSearch(disease: string, sortBy = "pct_desc", limit = 
     enabled: !!disease,
   });
 }
+
+// ---------- Report Dashboard (unified endpoint) ----------
+
+interface ReportDashboardItem {
+  label: string;
+  url: string;
+  cached: boolean;
+  size: number;
+  updated_at: string | null;
+}
+
+interface ReportCategory {
+  id: string;
+  label: string;
+  icon: string;
+  reports: ReportDashboardItem[];
+}
+
+interface GenerationProgress {
+  running: boolean;
+  percent: number;          // 0-100
+  completed: number;
+  total: number;
+  current: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  errors: string[];
+}
+
+interface SchedulerInfo {
+  enabled: boolean;
+  cron: string;
+  last_run: string | null;
+  next_run: string | null;
+  running: boolean;
+}
+
+interface DashboardSummary {
+  total_reports: number;
+  cached_reports: number;
+  percent_ready: number;
+}
+
+interface ReportDashboardResponse {
+  generation: GenerationProgress;
+  scheduler: SchedulerInfo;
+  categories: ReportCategory[];
+  summary: DashboardSummary;
+}
+
+/**
+ * Report Dashboard — single endpoint for the Reports page.
+ *
+ * Poll this at 3-5s interval. When generation.running is true,
+ * show a progress bar using generation.percent (0-100).
+ * When generation.running is false, display cached reports from
+ * categories — each report has a download url and updated_at timestamp.
+ *
+ * Nightly cron runs at 00:30 and regenerates all reports.
+ * summary.percent_ready shows how many reports are cached (0-100).
+ */
+export function useReportDashboard(pollWhileGenerating = true) {
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  return useQuery({
+    queryKey: ["report-dashboard"],
+    queryFn: async () => {
+      const data = await apiFetch<ReportDashboardResponse>("/api/reports/dashboard");
+      setIsGenerating(data.generation.running);
+      return data;
+    },
+    // Poll every 3s during generation, otherwise every 60s
+    refetchInterval: isGenerating && pollWhileGenerating ? 3000 : 60000,
+  });
+}
 ```
 
 ### Environment Variables

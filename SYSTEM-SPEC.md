@@ -78,7 +78,7 @@ The BMA Health One-Stop Backend serves **all** backend functionality for the Ban
 | 15 | GIS | `/api/v2/gis/` | 12 | Facility coords, heatmaps, PM2.5 zones/districts/monthly |
 | 16 | Monitoring | `/api/v2/monitoring/` | 7 | Data quality, ETL status, cache |
 | 17 | **Chat** | `/api/health/` | **2** | **LLM chat (sync + SSE streaming)** |
-| 18 | **Reports** | `/api/reports/` | **15** | **PDF generation, download, catalog** |
+| 18 | **Reports** | `/api/reports/` | **16** | **PDF generation, download, catalog, dashboard** |
 | 19 | **Export** | `/api/export/` | **6** | **PDF/Excel export per district/zone** |
 | 20 | **Statistics** | `/api/stats/` | **6** | **Descriptive stats, comparison, ranking** |
 | 21 | **Dashboards** | `/api/dashboard/` | **3** | **Governor, director, medical views** |
@@ -381,10 +381,11 @@ The LLM agent has 7 tools that give it access to all backend data:
 
 ---
 
-### PDF Reports (15 endpoints)
+### PDF Reports (16 endpoints)
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/api/reports/dashboard` | **Unified dashboard: progress %, scheduler, catalog, summary** |
 | `GET` | `/api/reports/catalog` | List all reports with cache status |
 | `GET` | `/api/reports/status` | Cache status for all variants |
 | `GET` | `/api/reports/generation-progress` | Real-time generation progress |
@@ -582,8 +583,9 @@ Epidemiology Page:
   GET /api/factors/age-group             -> Risk by age
 
 Reports Page:
+  GET /api/reports/dashboard             -> Unified: progress %, catalog, scheduler (poll this)
   GET /api/reports/catalog               -> List all reports
-  GET /api/reports/generation-progress   -> Poll during generation
+  GET /api/reports/generation-progress   -> Poll during generation (legacy)
   POST /api/reports/generate             -> Trigger generation
 
 Admin Page:
@@ -640,35 +642,72 @@ function streamChat(message: string, history: ChatMessage[]) {
 
 ---
 
-### Report Downloads
+### Report Dashboard (Unified Endpoint)
+
+Frontend should use `GET /api/reports/dashboard` as a **single polling endpoint** for the reports page.
 
 ```typescript
-// Download PDF report
-async function downloadReport(lang: string, type: 'comprehensive' | 'executive') {
-  const endpoint = type === 'comprehensive'
-    ? `/api/reports/comprehensive/${lang}`
-    : `/api/reports/executive/${lang}`;
+// hooks/useReportDashboard.ts
+function useReportDashboard(pollInterval = 5000) {
+  const [dashboard, setDashboard] = useState<ReportDashboardResponse | null>(null);
 
-  const res = await fetch(endpoint, {
+  useEffect(() => {
+    const fetchDashboard = async () => {
+      const res = await apiFetch<ReportDashboardResponse>('/api/reports/dashboard');
+      setDashboard(res);
+    };
+    fetchDashboard();
+    const interval = setInterval(fetchDashboard, pollInterval);
+    return () => clearInterval(interval);
+  }, [pollInterval]);
+
+  return dashboard;
+}
+
+// Usage in Reports page
+function ReportsPage() {
+  const dashboard = useReportDashboard();
+  if (!dashboard) return <Loading />;
+
+  const { generation, scheduler, categories, summary } = dashboard;
+
+  // 1. Show progress bar if generation is running (cron runs at 00:30)
+  if (generation.running) {
+    return <ProgressBar percent={generation.percent} current={generation.current} />;
+  }
+
+  // 2. Show cached reports immediately (no generation needed)
+  return (
+    <>
+      <SummaryBadge ready={summary.cached_reports} total={summary.total_reports}
+                    percent={summary.percent_ready} />
+      {categories.map(cat => (
+        <CategorySection key={cat.id} label={cat.label} icon={cat.icon}>
+          {cat.reports.map(r => (
+            <ReportCard key={r.url} label={r.label} cached={r.cached}
+                        size={r.size} updatedAt={r.updated_at}
+                        onDownload={() => window.open(r.url)} />
+          ))}
+        </CategorySection>
+      ))}
+      <SchedulerInfo nextRun={scheduler.next_run} lastRun={scheduler.last_run} />
+    </>
+  );
+}
+```
+
+### Report Downloads (Direct)
+
+```typescript
+// Download PDF report directly via URL from dashboard
+async function downloadReport(url: string) {
+  const res = await fetch(url, {
     headers: { 'X-API-Key': API_KEY },
   });
   if (!res.ok) throw new Error('Report not available');
   const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  window.open(url);
-}
-
-// Trigger report generation
-async function generateReports() {
-  await fetch('/api/reports/generate', {
-    method: 'POST',
-    headers: { 'X-API-Key': API_KEY },
-  });
-  // Poll progress
-  const interval = setInterval(async () => {
-    const res = await apiFetch<GenerationProgress>('/api/reports/generation-progress');
-    if (!res.running) clearInterval(interval);
-  }, 3000);
+  const blobUrl = URL.createObjectURL(blob);
+  window.open(blobUrl);
 }
 ```
 
@@ -710,6 +749,54 @@ interface SSEEvent {
   data?: Record<string, unknown>;
 }
 
+interface ReportDashboardResponse {
+  generation: GenerationProgress;
+  scheduler: SchedulerInfo;
+  categories: ReportCategory[];
+  summary: DashboardSummary;
+}
+
+interface GenerationProgress {
+  running: boolean;
+  percent: number;          // 0-100
+  completed: number;
+  total: number;
+  current: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  errors: string[];
+}
+
+interface SchedulerInfo {
+  enabled: boolean;
+  cron: string;
+  last_run: string | null;
+  next_run: string | null;
+  running: boolean;
+}
+
+interface ReportCategory {
+  id: string;
+  label: string;
+  icon: string;
+  reports: ReportDashboardItem[];
+}
+
+interface ReportDashboardItem {
+  label: string;
+  url: string;
+  cached: boolean;
+  size: number;
+  updated_at: string | null;  // ISO 8601 UTC, null if not cached
+}
+
+interface DashboardSummary {
+  total_reports: number;
+  cached_reports: number;
+  percent_ready: number;    // 0-100
+}
+
+/** @deprecated Use ReportDashboardResponse instead */
 interface ReportCatalog {
   categories: {
     id: string;
@@ -717,16 +804,6 @@ interface ReportCatalog {
     icon: string;
     reports: { label: string; url: string; cached: boolean; size: number }[];
   }[];
-}
-
-interface GenerationProgress {
-  running: boolean;
-  completed: number;
-  total: number;
-  current: string | null;
-  started_at: string | null;
-  finished_at: string | null;
-  errors: string[];
 }
 
 interface GovernorDashboard {

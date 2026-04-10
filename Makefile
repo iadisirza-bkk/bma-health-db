@@ -196,7 +196,7 @@ db-reset: ## Drop and recreate database (DESTRUCTIVE)
 # ---------------------------------------------------------------------------
 
 .PHONY: test
-test: ## Run full test suite (224 tests)
+test: ## Run full test suite (225 tests)
 	cd $(API_DIR) && $(PYTHON) -m pytest -v
 
 .PHONY: test-cov
@@ -245,6 +245,12 @@ generate-reports: ## Trigger PDF report generation for all languages
 report-status: ## Check report generation progress
 	@curl -s -H "X-API-Key: $${API_KEY:-dev-api-key}" \
 		http://localhost:$(API_PORT)/api/reports/generation-progress | python3 -m json.tool 2>/dev/null || \
+	echo "API is not running."
+
+.PHONY: report-dashboard
+report-dashboard: ## Show unified report dashboard (progress %, catalog, scheduler)
+	@curl -s -H "X-API-Key: $${API_KEY:-dev-api-key}" \
+		http://localhost:$(API_PORT)/api/reports/dashboard | python3 -m json.tool 2>/dev/null || \
 	echo "API is not running."
 
 .PHONY: report-catalog
