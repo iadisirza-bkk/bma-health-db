@@ -141,7 +141,23 @@ def _yoy_comparison() -> dict:
         GROUP BY DATE_TRUNC('quarter', v.visit_date)
         ORDER BY quarter
     """)
-    return {"quarters": rows, "note": "Quarterly aggregation from 2024 onwards"}
+    # Format as readable text so synthesizer can summarize
+    lines = ["เปรียบเทียบรายไตรมาส (2024-ปัจจุบัน):"]
+    for r in rows:
+        q = str(r.get("quarter", ""))[:10]
+        lines.append(
+            f"- {q}: คัดกรอง {int(r.get('screened', 0)):,} คน, "
+            f"เสี่ยงเบาหวาน {int(r.get('risk_dm', 0)):,}, "
+            f"เสี่ยงความดัน {int(r.get('risk_hpt', 0)):,}, "
+            f"พบอ้วน {int(r.get('found_obesity', 0)):,}"
+        )
+    if len(rows) >= 2:
+        latest = rows[-1]
+        prev = rows[-2]
+        delta = int(latest.get("screened", 0)) - int(prev.get("screened", 0))
+        pct = round(100.0 * delta / max(int(prev.get("screened", 0)), 1), 1)
+        lines.append(f"\nเทียบไตรมาสล่าสุด: {'เพิ่มขึ้น' if delta > 0 else 'ลดลง'} {abs(delta):,} คน ({pct:+.1f}%)")
+    return {"summary": "\n".join(lines)}
 
 
 def _moph_targets() -> dict:
