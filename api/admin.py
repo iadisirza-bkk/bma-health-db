@@ -301,7 +301,8 @@ def _run_import(upload_id: str, history_id: int):
             cur.execute("TRUNCATE raw_patients CASCADE")
             logger.info("Truncated raw_patients CASCADE before import")
         else:
-            cur.execute(f'TRUNCATE "{table_name}"')
+            from psycopg2 import sql
+            cur.execute(sql.SQL("TRUNCATE {}").format(sql.Identifier(table_name)))
             logger.info("Truncated %s before import", table_name)
 
         if file_type == "pt":
