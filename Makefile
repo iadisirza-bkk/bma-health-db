@@ -3,12 +3,11 @@
 # ============================================================================
 #
 # Usage:
-#   make dev              — Start API locally with hot-reload (port 9002)
-#   make up               — Start all services via Docker Compose
-#   make down             — Stop all Docker services
-#   make infra            — Start only PostgreSQL + Redis
+#   make start            — Start API + Cloudflare tunnel (background)
+#   make stop             — Stop API + tunnel
+#   make dev              — Start API with hot-reload (foreground)
+#   make status           — Show all service status
 #   make test             — Run test suite
-#   make generate-reports — Trigger PDF report generation
 #   make help             — Show all targets
 #
 # ============================================================================
@@ -34,6 +33,65 @@ DB_URL        := postgresql://postgres:bma_health_dev@localhost:5433/bma_health
 # Load .env if exists
 -include .env
 export
+
+# ---------------------------------------------------------------------------
+# Service Management (start/stop all)
+# ---------------------------------------------------------------------------
+
+API_LOG       := /tmp/bma-api.log
+TUNNEL_LOG    := /tmp/cloudflared.log
+API_PID       = $(shell lsof -ti :$(API_PORT) 2>/dev/null)
+TUNNEL_PID    = $(shell pgrep -f "cloudflared tunnel run" 2>/dev/null)
+
+.PHONY: start
+start: ## Start everything: API + Cloudflare tunnel (background, persistent)
+	@# --- API ---
+	@if lsof -i :$(API_PORT) -P -sTCP:LISTEN >/dev/null 2>&1; then \
+		echo "  API already running on :$(API_PORT)"; \
+	else \
+		echo "  Starting API on :$(API_PORT)..."; \
+		nohup bash -c 'cd $(API_DIR) && $(PYTHON) -m uvicorn main:app --host $(API_HOST) --port $(API_PORT)' > $(API_LOG) 2>&1 & \
+		sleep 4; \
+		if curl -s http://localhost:$(API_PORT)/health >/dev/null 2>&1; then \
+			echo "  API: OK"; \
+		else \
+			echo "  API: FAILED — check $(API_LOG)"; \
+		fi; \
+	fi
+	@# --- Cloudflare Tunnel ---
+	@if pgrep -f "cloudflared tunnel run" >/dev/null 2>&1; then \
+		echo "  Tunnel already running"; \
+	else \
+		if command -v cloudflared >/dev/null 2>&1; then \
+			echo "  Starting Cloudflare tunnel..."; \
+			nohup cloudflared tunnel run bma-health > $(TUNNEL_LOG) 2>&1 & \
+			sleep 3; \
+			echo "  Tunnel: started"; \
+		else \
+			echo "  Tunnel: cloudflared not installed — skipped"; \
+		fi; \
+	fi
+	@echo ""
+	@$(MAKE) --no-print-directory status
+
+.PHONY: stop
+stop: ## Stop API + Cloudflare tunnel
+	@echo "Stopping services..."
+	@if [ -n "$(API_PID)" ]; then \
+		kill $(API_PID) 2>/dev/null; \
+		echo "  API: stopped"; \
+	else \
+		echo "  API: not running"; \
+	fi
+	@if [ -n "$(TUNNEL_PID)" ]; then \
+		kill $(TUNNEL_PID) 2>/dev/null; \
+		echo "  Tunnel: stopped"; \
+	else \
+		echo "  Tunnel: not running"; \
+	fi
+
+.PHONY: restart-all
+restart-all: stop start ## Restart API + tunnel
 
 # ---------------------------------------------------------------------------
 # Development
