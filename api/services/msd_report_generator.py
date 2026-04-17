@@ -109,6 +109,24 @@ class MSDReportGenerator:
         """Build template context from ReportData."""
         from data.facts import HEALTH_ZONES
 
+        # Compute behavior stats from factors
+        _smoking_pct = 0.0
+        _alcohol_pct = 0.0
+        _no_exercise_pct = 0.0
+        for f in rd.factors:
+            if f["factor"] == "smoking":
+                for c in f["categories"]:
+                    if c["name"] == "Current Smoker":
+                        _smoking_pct = c["pct_of_total"]
+            elif f["factor"] == "alcohol":
+                for c in f["categories"]:
+                    if c["name"] in ("Regular", "Heavy"):
+                        _alcohol_pct += c["pct_of_total"]
+            elif f["factor"] == "exercise":
+                for c in f["categories"]:
+                    if c["name"] == "Sedentary":
+                        _no_exercise_pct = c["pct_of_total"]
+
         ctx: dict[str, Any] = {
             "total_screened": rd.total_screened,
             "district_count": rd.district_count,
@@ -149,10 +167,10 @@ class MSDReportGenerator:
             "gis_layers": rd.gis_layers,
             "zone_comparison": {
                 "zones": rd.zone_summaries,
-                "avg_smoking": rd.behavior_summary.get("smoking_pct", 0) if hasattr(rd, "behavior_summary") and rd.behavior_summary else 0,
-                "avg_alcohol": rd.behavior_summary.get("alcohol_pct", 0) if hasattr(rd, "behavior_summary") and rd.behavior_summary else 0,
-                "avg_no_exercise": rd.behavior_summary.get("no_exercise_pct", 0) if hasattr(rd, "behavior_summary") and rd.behavior_summary else 0,
-                "avg_obese": next((d["avg_pct"] for d in rd.city_disease_summary if d["key"] == "obesity"), 0) if rd.city_disease_summary else 0,
+                "avg_smoking": _smoking_pct,
+                "avg_alcohol": _alcohol_pct,
+                "avg_no_exercise": _no_exercise_pct,
+                "avg_obese": next((d["avg_pct"] for d in rd.city_disease_summary if d["disease"] == "obesity"), 0) if rd.city_disease_summary else 0,
                 "total_hospitals": 11, "total_health_centers": 69,
                 "total_districts": 50,
                 "anova_results": [],

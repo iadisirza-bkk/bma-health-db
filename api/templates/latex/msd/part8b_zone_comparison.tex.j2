@@ -89,14 +89,16 @@
 \end{tabular}
 \end{table}
 
-\IfFileExists{charts/zone_radar.png}{%
+<% for zone in data.zone_comparison.zones %>
+\IfFileExists{charts/radar_zone_<< zone.zone >>.png}{%
 \begin{figure}[H]
 \centering
-\includegraphics[width=0.85\textwidth]{charts/zone_radar.png}
-\caption{Radar Chart เปรียบเทียบร้อยละความเสี่ยง 8 โรค ต่อโซน (แต่ละเส้นคือ 1 โซน)}
-\label{fig:zone_radar}
+\includegraphics[width=0.6\textwidth]{charts/radar_zone_<< zone.zone >>.png}
+\caption{Radar Chart เปรียบเทียบร้อยละความเสี่ยง 8 โรค โซน << zone.zone >> กับค่าเฉลี่ย กทม.}
+\label{fig:zone_radar_<< zone.zone >>}
 \end{figure}
 }{}
+<% endfor %>
 
 % =====================================================================
 \subsection{ผล ANOVA เปรียบเทียบข้ามโซน (ANOVA Results)}

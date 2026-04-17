@@ -8,6 +8,7 @@ Ported from bma-health — import paths adjusted for flat layout.
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -200,6 +201,18 @@ class ChartGenerator:
             except Exception as e:
                 logger.error("Failed %s chart: %s", key, e)
 
+        # Comorbidity Heatmap
+        try:
+            charts["comorbidity_heatmap"] = self.comorbidity_heatmap(data)
+        except Exception as e:
+            logger.error("Failed comorbidity_heatmap chart: %s", e)
+
+        # Zone Grouped Bar
+        try:
+            charts["zone_grouped_bar"] = self.zone_grouped_bar(data)
+        except Exception as e:
+            logger.error("Failed zone_grouped_bar chart: %s", e)
+
         # Individual Trend Lines
         if data.seasonal_decomposition:
             for decomp in data.seasonal_decomposition:
@@ -298,6 +311,9 @@ class ChartGenerator:
         path = self.output_dir / "zone_heatmap.png"
         fig.savefig(path, dpi=self.dpi)
         plt.close(fig)
+        # Also save as zone_disease_heatmap.png (alias used by some templates)
+        alias_path = self.output_dir / "zone_disease_heatmap.png"
+        shutil.copy2(path, alias_path)
         return path
 
     # ------------------------------------------------------------------
@@ -459,10 +475,9 @@ class ChartGenerator:
         district_names: list[str] = []
         district_pcts: list[float] = []
         zone_districts = zone_info.get("district_codes", [])
-        if not zone_districts and data.district_data:
-            for dcode, dinfo in data.district_data.items():
-                if dinfo.get("zone") == zone_code:
-                    zone_districts.append(dcode)
+        if not zone_districts:
+            from services.report_data_collector import ZONE_MAPPING
+            zone_districts = [dc for dc, zc in ZONE_MAPPING.items() if zc == zone_code]
 
         for dcode in zone_districts:
             dinfo = data.district_data.get(dcode, data.district_data.get(str(dcode), {}))
@@ -601,10 +616,9 @@ class ChartGenerator:
             zone_code = zone_info.get("zone", "")
             zone_name = zone_info.get("name", zone_code)
             zone_districts = zone_info.get("district_codes", [])
-            if not zone_districts and data.district_data:
-                for dcode, dinfo in data.district_data.items():
-                    if dinfo.get("zone") == zone_code:
-                        zone_districts.append(dcode)
+            if not zone_districts:
+                from services.report_data_collector import ZONE_MAPPING
+                zone_districts = [dc for dc, zc in ZONE_MAPPING.items() if zc == zone_code]
             pcts: list[float] = []
             for dcode in zone_districts:
                 dinfo = data.district_data.get(dcode, data.district_data.get(str(dcode), {}))
@@ -938,6 +952,79 @@ class ChartGenerator:
         ax.set_title("Weekly Risk Heatmap", fontsize=11, fontweight="bold", color=BMA_DARK, pad=10)
         fig.tight_layout()
         path = self.output_dir / "heatmap_weekly.png"
+        fig.savefig(path, dpi=self.dpi)
+        plt.close(fig)
+        return path
+
+    # ------------------------------------------------------------------
+    # Comorbidity Heatmap
+    # ------------------------------------------------------------------
+
+    def comorbidity_heatmap(self, data: ReportData) -> Path:
+        """Disease co-occurrence heatmap across districts."""
+        if not data.district_data:
+            raise ValueError("No district data for comorbidity")
+
+        # Build matrix: rows = districts, cols = diseases
+        districts = list(data.district_data.values())
+        matrix = np.zeros((len(districts), len(DISEASES)))
+        for i, d in enumerate(districts):
+            for j, disease in enumerate(DISEASES):
+                matrix[i, j] = d.get("diseases", {}).get(disease, {}).get("pct_at_risk", 0)
+
+        # Correlation matrix
+        if matrix.shape[0] < 3:
+            raise ValueError("Too few districts for correlation")
+        corr = np.corrcoef(matrix.T)
+
+        disease_labels = [DISEASE_NAMES_TH.get(d, d) for d in DISEASES]
+        fig, ax = plt.subplots(figsize=(10, 8))
+        im = ax.imshow(corr, cmap="RdYlGn_r", vmin=-1, vmax=1, aspect="equal")
+        ax.set_xticks(np.arange(len(DISEASES)))
+        ax.set_yticks(np.arange(len(DISEASES)))
+        ax.set_xticklabels(disease_labels, rotation=45, ha="right", fontsize=9)
+        ax.set_yticklabels(disease_labels, fontsize=9)
+        for i in range(len(DISEASES)):
+            for j in range(len(DISEASES)):
+                val = corr[i, j]
+                color = "white" if abs(val) > 0.5 else "black"
+                ax.text(j, i, f"{val:.2f}", ha="center", va="center", fontsize=7, color=color)
+        fig.colorbar(im, ax=ax, shrink=0.8, label="Correlation (r)")
+        ax.set_title("Disease Comorbidity Correlation", fontsize=13, fontweight="bold", color=BMA_DARK, pad=12)
+        fig.tight_layout()
+        path = self.output_dir / "comorbidity_heatmap.png"
+        fig.savefig(path, dpi=self.dpi)
+        plt.close(fig)
+        return path
+
+    # ------------------------------------------------------------------
+    # Zone Grouped Bar
+    # ------------------------------------------------------------------
+
+    def zone_grouped_bar(self, data: ReportData) -> Path:
+        """Grouped bar chart comparing disease rates across all zones."""
+        zones = data.zone_summaries
+        if not zones:
+            raise ValueError("No zone data")
+
+        zone_names = [z["name"] for z in zones]
+        x = np.arange(len(zone_names))
+        width = 0.8 / len(DISEASES)
+
+        fig, ax = plt.subplots(figsize=(14, 7))
+        for i, disease in enumerate(DISEASES):
+            vals = [z.get("disease_avgs", {}).get(disease, 0) for z in zones]
+            offset = (i - len(DISEASES) / 2 + 0.5) * width
+            bars = ax.bar(x + offset, vals, width, label=DISEASE_NAMES_TH.get(disease, disease),
+                          color=COLORS_8[i % len(COLORS_8)], edgecolor="white", linewidth=0.3)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(zone_names, rotation=30, ha="right", fontsize=9)
+        ax.set_ylabel("% at risk", fontsize=10)
+        ax.set_title("Zone Disease Comparison", fontsize=13, fontweight="bold", color=BMA_DARK, pad=12)
+        ax.legend(fontsize=7, ncol=4, loc="upper right")
+        fig.tight_layout()
+        path = self.output_dir / "zone_grouped_bar.png"
         fig.savefig(path, dpi=self.dpi)
         plt.close(fig)
         return path
