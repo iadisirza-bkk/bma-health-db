@@ -23,6 +23,11 @@ pgdata/
 # Temp uploads
 /tmp/
 
+# Runtime data (generated, not source)
+api/minimal_data/
+data/reports/
+minimal_data/portal_top/district_health_data.json
+
 # Claude internal
 .claude/plans/
 .claude/launch.json
