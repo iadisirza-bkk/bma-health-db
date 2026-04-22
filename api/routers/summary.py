@@ -288,7 +288,7 @@ def non_bangkok_overview():
     if hit is not None:
         return hit
 
-    # Core aggregation: screenings for patients with non-Bangkok home province
+    # Core aggregation: screenings + physical vitals for non-Bangkok residents
     rows = execute_query("""
         SELECT
           COUNT(DISTINCT v.patient_id)                                     AS total_screened,
@@ -303,7 +303,14 @@ def non_bangkok_overview():
           COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_stroke)       AS found_stroke_count,
           COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_dyslipidemia) AS found_dyslipidemia_count,
           COUNT(DISTINCT v.patient_id) FILTER (WHERE v.smoking = 1)        AS smoking_count,
-          MAX(v.visit_date)                                                 AS last_visit
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.smoking IS NOT NULL) AS smoking_answered,
+          -- physical vitals (used by lab-factor display when a disease is active)
+          AVG(v.sbp)        AS avg_sbp,
+          AVG(v.dbp)        AS avg_dbp,
+          AVG(v.weight_kg)  AS avg_weight_kg,
+          AVG(v.waist_cm)   AS avg_waist_cm,
+          AVG(CASE WHEN v.height_cm > 0 THEN v.weight_kg / POWER(v.height_cm / 100.0, 2) END) AS avg_bmi,
+          MAX(v.visit_date) AS last_visit
         FROM raw_vitalsigns v
         JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
         WHERE v.cancel_status IS DISTINCT FROM 1
@@ -361,18 +368,137 @@ def non_bangkok_overview():
         LIMIT 15
     """, (K_ANONYMITY_THRESHOLD,)) or []
 
-    # Smoking rate as a headline risk modifier
+    # Lab aggregates (avg lab values) — same shape as /summary/lab per-district
+    lab_rows = execute_query("""
+        SELECT
+          COUNT(DISTINCT l.patient_id) AS total_lab_patients,
+          AVG(l.hemoglobin)   AS avg_hemoglobin,
+          AVG(l.hematocrit)   AS avg_hematocrit,
+          AVG(l.fbs)          AS avg_fbs,
+          AVG(l.cholesterol)  AS avg_cholesterol,
+          AVG(l.triglyceride) AS avg_triglyceride,
+          AVG(l.hdl)          AS avg_hdl,
+          AVG(l.ldl)          AS avg_ldl,
+          AVG(l.creatinine)   AS avg_creatinine,
+          AVG(l.egfr)         AS avg_egfr,
+          AVG(l.uric_acid)    AS avg_uric_acid,
+          AVG(l.sgot)         AS avg_sgot,
+          AVG(l.sgpt)         AS avg_sgpt,
+          ROUND(100.0 * COUNT(*) FILTER (WHERE l.hemoglobin < 12)
+                      / NULLIF(COUNT(*) FILTER (WHERE l.hemoglobin IS NOT NULL), 0), 2) AS pct_anemia,
+          ROUND(100.0 * COUNT(*) FILTER (WHERE l.egfr < 60)
+                      / NULLIF(COUNT(*) FILTER (WHERE l.egfr IS NOT NULL), 0), 2) AS pct_ckd
+        FROM raw_vitalsigns v
+        JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
+        JOIN raw_lab_results l ON l.patient_id = v.patient_id
+          AND l.cancel_status IS DISTINCT FROM 1
+        WHERE v.cancel_status IS DISTINCT FROM 1
+          AND hv.home_province IS NOT NULL
+          AND hv.home_province <> 10
+    """) or []
+    lab_row = lab_rows[0] if lab_rows else {}
+
+    # Exercise / lifestyle (no-exercise rate from raw_homehealth.exercise == 0)
+    hh_rows = execute_query("""
+        SELECT
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE h.exercise = 0) AS no_exercise_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE h.exercise IS NOT NULL) AS exercise_answered
+        FROM raw_vitalsigns v
+        JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
+        LEFT JOIN raw_homehealth h ON h.patient_id = v.patient_id
+          AND h.cancel_status IS DISTINCT FROM 1
+        WHERE v.cancel_status IS DISTINCT FROM 1
+          AND hv.home_province IS NOT NULL
+          AND hv.home_province <> 10
+    """) or []
+    hh_row = hh_rows[0] if hh_rows else {}
+
+    # Mental health percentages (same computation as summary_district_mental)
+    mental_rows = execute_query("""
+        SELECT
+          ROUND(100.0 * COUNT(DISTINCT v.patient_id) FILTER (
+            WHERE v.depression_2q_1 >= 1 OR v.depression_2q_2 >= 1
+          ) / NULLIF(COUNT(DISTINCT v.patient_id), 0), 2) AS pct_depression_risk,
+          ROUND(100.0 * COUNT(DISTINCT v.patient_id) FILTER (
+            WHERE (COALESCE(v.phq9_q1,0) + COALESCE(v.phq9_q2,0) + COALESCE(v.phq9_q3,0)
+                 + COALESCE(v.phq9_q4,0) + COALESCE(v.phq9_q5,0) + COALESCE(v.phq9_q6,0)
+                 + COALESCE(v.phq9_q7,0) + COALESCE(v.phq9_q8,0) + COALESCE(v.phq9_q9,0)) >= 10
+          ) / NULLIF(COUNT(DISTINCT v.patient_id), 0), 2) AS pct_phq9_moderate,
+          ROUND(100.0 * COUNT(DISTINCT v.patient_id) FILTER (
+            WHERE (COALESCE(v.st5_q1,0) + COALESCE(v.st5_q2,0) + COALESCE(v.st5_q3,0)
+                 + COALESCE(v.st5_q4,0) + COALESCE(v.st5_q5,0)) >= 7
+          ) / NULLIF(COUNT(DISTINCT v.patient_id), 0), 2) AS pct_high_stress
+        FROM raw_vitalsigns v
+        JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
+        WHERE v.cancel_status IS DISTINCT FROM 1
+          AND hv.home_province IS NOT NULL
+          AND hv.home_province <> 10
+    """) or []
+    mental_row = mental_rows[0] if mental_rows else {}
+
+    # Rates
     smoking_count = int(row.get("smoking_count") or 0)
-    smoking_rate = round(100.0 * smoking_count / total, 2) if total else 0
+    smoking_answered = int(row.get("smoking_answered") or 0)
+    smoking_rate = round(100.0 * smoking_count / smoking_answered, 2) if smoking_answered else 0
+
+    no_ex = int(hh_row.get("no_exercise_count") or 0)
+    ex_answered = int(hh_row.get("exercise_answered") or 0)
+    no_exercise_rate = round(100.0 * no_ex / ex_answered, 2) if ex_answered else 0
 
     last_visit = row.get("last_visit")
+
+    # Helper: safely convert numeric or None to float
+    def _f(v):
+        return float(v) if v is not None else None
 
     result = {
         "total_screened": total,
         "smoking_rate": smoking_rate,
+        "no_exercise_rate": no_exercise_rate,
         "last_updated": str(last_visit) if last_visit else None,
         "by_disease": by_disease,
         "by_home_province": by_home_province,
+        # Disease counts (raw) — used to build ZoneHealthData.diseases shape
+        "disease_counts": {
+            "diabetes":       int(row.get("risk_dm_count") or 0),
+            "hypertension":   int(row.get("risk_hpt_count") or 0),
+            "cardiovascular": int(row.get("risk_cvd_count") or 0),
+            "obesity":        int(row.get("risk_bmi_count") or 0),
+            "dyslipidemia":   int(row.get("found_dyslipidemia_count") or 0),
+            "stroke":         int(row.get("found_stroke_count") or 0),
+        },
+        # Physical vitals (averages)
+        "physical": {
+            "avg_sbp":       _f(row.get("avg_sbp")),
+            "avg_dbp":       _f(row.get("avg_dbp")),
+            "avg_weight_kg": _f(row.get("avg_weight_kg")),
+            "avg_waist_cm":  _f(row.get("avg_waist_cm")),
+            "avg_bmi":       _f(row.get("avg_bmi")),
+        },
+        # Lab averages (same shape as /summary/lab row)
+        "lab": {
+            "total_lab_patients": int(lab_row.get("total_lab_patients") or 0),
+            "avg_hemoglobin":   _f(lab_row.get("avg_hemoglobin")),
+            "avg_hematocrit":   _f(lab_row.get("avg_hematocrit")),
+            "avg_fbs":          _f(lab_row.get("avg_fbs")),
+            "avg_cholesterol":  _f(lab_row.get("avg_cholesterol")),
+            "avg_triglyceride": _f(lab_row.get("avg_triglyceride")),
+            "avg_hdl":          _f(lab_row.get("avg_hdl")),
+            "avg_ldl":          _f(lab_row.get("avg_ldl")),
+            "avg_creatinine":   _f(lab_row.get("avg_creatinine")),
+            "avg_egfr":         _f(lab_row.get("avg_egfr")),
+            "avg_uric_acid":    _f(lab_row.get("avg_uric_acid")),
+            "avg_sgot":         _f(lab_row.get("avg_sgot")),
+            "avg_sgpt":         _f(lab_row.get("avg_sgpt")),
+            "pct_anemia":       _f(lab_row.get("pct_anemia")),
+            "pct_ckd":          _f(lab_row.get("pct_ckd")),
+        },
+        # Mental health (%s already computed)
+        "mental": {
+            "pct_depression_risk": _f(mental_row.get("pct_depression_risk")),
+            "pct_phq9_moderate":   _f(mental_row.get("pct_phq9_moderate")),
+            "pct_high_stress":     _f(mental_row.get("pct_high_stress")),
+        },
     }
     cache_set("summary:non_bangkok_overview", result, TTL_T2_AGGREGATE)
     return result
