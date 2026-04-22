@@ -20,7 +20,7 @@ class HealthDataService:
     can share the same business logic.
     """
 
-    TARGET_SCREENED = 1_600_000
+    TARGET_SCREENED = 1_000_000
     K_ANONYMITY_THRESHOLD = 5
 
     DISEASE_KEY_MAP = {

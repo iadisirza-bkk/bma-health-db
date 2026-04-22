@@ -11,7 +11,7 @@ from cache import cache_get, cache_set, TTL_T2_AGGREGATE, TTL_T3_FILTERED, TTL_T
 
 router = APIRouter(prefix="/api/v2/summary", tags=["Summary"])
 
-TARGET_SCREENED = 1_600_000
+TARGET_SCREENED = 1_000_000
 
 
 # =========================================================================== #

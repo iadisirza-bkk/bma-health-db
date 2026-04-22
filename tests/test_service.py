@@ -21,7 +21,7 @@ def test_overview_has_required_fields(svc):
     r = svc.get_overview()
     assert "total_screened" in r
     assert "target" in r
-    assert r["target"] == 1_600_000
+    assert r["target"] == 1_000_000
 
 
 def test_overview_total_is_numeric(svc):

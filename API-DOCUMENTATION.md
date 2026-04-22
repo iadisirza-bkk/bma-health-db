@@ -197,7 +197,7 @@ curl -H "X-API-Key: your-api-key" http://localhost:8000/api/v2/summary/overview
 ```json
 {
   "total_screened": 1245832,
-  "target": 1600000,
+  "target": 1000000,
   "zones_count": 8,
   "districts_count": 50,
   "last_updated": "2025-03-15 10:00:00+07",
@@ -251,7 +251,7 @@ curl -H "X-API-Key: your-api-key" http://localhost:8000/api/v2/summary/overview
 | Field | Type | Description |
 |-------|------|-------------|
 | total_screened | integer | Total unique screenings across all districts |
-| target | integer | Target screening goal (fixed at 1,600,000) |
+| target | integer | Target screening goal (fixed at 1,000,000) |
 | zones_count | integer | Number of health zones |
 | districts_count | integer | Number of districts |
 | last_updated | string or null | Latest `refreshed_at` from summary data |
