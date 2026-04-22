@@ -352,11 +352,17 @@ def non_bangkok_overview():
             "pct": round(100.0 * cnt / total, 2) if total else 0,
         })
 
-    # Top home-provinces (self-reported in raw_homevisit). k-anonymity per bucket.
-    by_home_province = execute_query("""
+    # Top home-provinces with per-disease breakdown. k-anonymity per bucket.
+    by_home_province_rows = execute_query("""
         SELECT
           hv.home_province AS province_code,
-          COUNT(DISTINCT v.patient_id) AS count
+          COUNT(DISTINCT v.patient_id) AS count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_dm)            AS dm_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_hpt)           AS hpt_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_cvd)           AS cvd_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_bmi)           AS bmi_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_dyslipidemia) AS dys_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_stroke)       AS stroke_count
         FROM raw_vitalsigns v
         JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
         WHERE v.cancel_status IS DISTINCT FROM 1
@@ -365,8 +371,32 @@ def non_bangkok_overview():
         GROUP BY hv.home_province
         HAVING COUNT(DISTINCT v.patient_id) >= %s
         ORDER BY count DESC
-        LIMIT 15
     """, (K_ANONYMITY_THRESHOLD,)) or []
+
+    def _disease_breakdown(r: dict) -> dict:
+        n = int(r.get("count") or 0)
+        pairs = [
+            ("diabetes",       "dm_count"),
+            ("hypertension",   "hpt_count"),
+            ("cardiovascular", "cvd_count"),
+            ("obesity",        "bmi_count"),
+            ("dyslipidemia",   "dys_count"),
+            ("stroke",         "stroke_count"),
+        ]
+        out = {}
+        for key, col in pairs:
+            c = int(r.get(col) or 0)
+            out[key] = {"count": c, "pct": round(100.0 * c / n, 2) if n else 0}
+        return out
+
+    by_home_province = [
+        {
+            "province_code": r["province_code"],
+            "count": int(r["count"]),
+            "diseases": _disease_breakdown(r),
+        }
+        for r in by_home_province_rows
+    ]
 
     # Lab aggregates (avg lab values) — same shape as /summary/lab per-district
     lab_rows = execute_query("""
