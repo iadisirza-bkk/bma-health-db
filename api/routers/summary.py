@@ -140,6 +140,15 @@ def filtered_summary(
               v.smoking,
               NULL::int  AS exercise,
               COUNT(DISTINCT v.patient_id)::int AS patient_count,
+              -- Disease counts for map choropleth + zone aggregation
+              COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_dm)              AS risk_dm_count,
+              COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_hpt)             AS risk_hpt_count,
+              COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_cvd)             AS risk_cvd_count,
+              COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_bmi)             AS risk_bmi_count,
+              COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_obesity)        AS found_obesity_count,
+              COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_dyslipidemia)   AS found_dyslipidemia_count,
+              COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_stroke)         AS found_stroke_count,
+              -- Vitals averages
               ROUND(AVG(v.sbp)::numeric, 1)          AS avg_sbp,
               ROUND(AVG(v.dbp)::numeric, 1)          AS avg_dbp,
               ROUND(AVG(v.weight_kg)::numeric, 1)    AS avg_weight_kg,
