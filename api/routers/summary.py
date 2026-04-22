@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Path, Query
 
 from database import execute_query, execute_scalar
 from security import enforce_k_anonymity, K_ANONYMITY_THRESHOLD
@@ -501,4 +501,155 @@ def non_bangkok_overview():
         },
     }
     cache_set("summary:non_bangkok_overview", result, TTL_T2_AGGREGATE)
+    return result
+
+
+# =========================================================================== #
+# Non-Bangkok per-province detail
+# =========================================================================== #
+
+@router.get("/non-bangkok-province/{province_code}")
+def non_bangkok_province(
+    province_code: int = Path(..., ge=11, le=96, description="Thai province code (TIS 1099)"),
+):
+    """Full health stats for patients whose home_province equals the given code.
+
+    Same response shape as /non-bangkok-overview but filtered to one province.
+    Returns 404 if the province has no qualifying records.
+    k-anonymity: suppressed flag set when total < threshold.
+    """
+    if province_code == 10:
+        raise HTTPException(status_code=400, detail="use /summary/overview for Bangkok")
+
+    cache_key = f"summary:non_bangkok_province:{province_code}"
+    hit = cache_get(cache_key)
+    if hit is not None:
+        return hit
+
+    rows = execute_query("""
+        SELECT
+          COUNT(DISTINCT v.patient_id)                                     AS total_screened,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_dm)            AS risk_dm_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_hpt)           AS risk_hpt_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_cvd)           AS risk_cvd_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_bmi)           AS risk_bmi_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_stroke)       AS found_stroke_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_dyslipidemia) AS found_dyslipidemia_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.smoking = 1)        AS smoking_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.smoking IS NOT NULL) AS smoking_answered,
+          AVG(v.sbp)        AS avg_sbp,
+          AVG(v.dbp)        AS avg_dbp,
+          AVG(v.weight_kg)  AS avg_weight_kg,
+          AVG(v.waist_cm)   AS avg_waist_cm,
+          AVG(CASE WHEN v.height_cm > 0 THEN v.weight_kg / POWER(v.height_cm / 100.0, 2) END) AS avg_bmi,
+          MAX(v.visit_date) AS last_visit
+        FROM raw_vitalsigns v
+        JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
+        WHERE v.cancel_status IS DISTINCT FROM 1
+          AND hv.home_province = %s
+    """, (province_code,))
+    row = rows[0] if rows else {}
+    total = int(row.get("total_screened") or 0)
+
+    if total < K_ANONYMITY_THRESHOLD:
+        result = {
+            "province_code": province_code,
+            "total_screened": 0,
+            "suppressed": True,
+            "reason": f"k-anonymity: n < {K_ANONYMITY_THRESHOLD}",
+            "by_disease": [],
+        }
+        cache_set(cache_key, result, TTL_T2_AGGREGATE)
+        return result
+
+    disease_map = [
+        ("diabetes",       "risk_dm_count"),
+        ("hypertension",   "risk_hpt_count"),
+        ("cardiovascular", "risk_cvd_count"),
+        ("obesity",        "risk_bmi_count"),
+        ("dyslipidemia",   "found_dyslipidemia_count"),
+        ("stroke",         "found_stroke_count"),
+    ]
+    by_disease = []
+    for key, col in disease_map:
+        cnt = int(row.get(col) or 0)
+        by_disease.append({
+            "disease_key": key,
+            "total_at_risk": cnt,
+            "pct": round(100.0 * cnt / total, 2) if total else 0,
+        })
+
+    # Lab aggregates
+    lab_rows = execute_query("""
+        SELECT
+          COUNT(DISTINCT l.patient_id) AS total_lab_patients,
+          AVG(l.fbs)          AS avg_fbs,
+          AVG(l.cholesterol)  AS avg_cholesterol,
+          AVG(l.triglyceride) AS avg_triglyceride,
+          AVG(l.hdl)          AS avg_hdl,
+          AVG(l.ldl)          AS avg_ldl,
+          AVG(l.creatinine)   AS avg_creatinine,
+          AVG(l.egfr)         AS avg_egfr,
+          AVG(l.hemoglobin)   AS avg_hemoglobin
+        FROM raw_vitalsigns v
+        JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
+        JOIN raw_lab_results l ON l.patient_id = v.patient_id
+          AND l.cancel_status IS DISTINCT FROM 1
+        WHERE v.cancel_status IS DISTINCT FROM 1
+          AND hv.home_province = %s
+    """, (province_code,)) or []
+    lab_row = lab_rows[0] if lab_rows else {}
+
+    # No-exercise rate
+    hh_rows = execute_query("""
+        SELECT
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE h.exercise = 0) AS no_exercise_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE h.exercise IS NOT NULL) AS exercise_answered
+        FROM raw_vitalsigns v
+        JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
+        LEFT JOIN raw_homehealth h ON h.patient_id = v.patient_id
+          AND h.cancel_status IS DISTINCT FROM 1
+        WHERE v.cancel_status IS DISTINCT FROM 1
+          AND hv.home_province = %s
+    """, (province_code,)) or []
+    hh_row = hh_rows[0] if hh_rows else {}
+
+    def _f(v):
+        return float(v) if v is not None else None
+
+    smoking_count = int(row.get("smoking_count") or 0)
+    smoking_answered = int(row.get("smoking_answered") or 0)
+    smoking_rate = round(100.0 * smoking_count / smoking_answered, 2) if smoking_answered else 0
+
+    no_ex = int(hh_row.get("no_exercise_count") or 0)
+    ex_answered = int(hh_row.get("exercise_answered") or 0)
+    no_exercise_rate = round(100.0 * no_ex / ex_answered, 2) if ex_answered else 0
+
+    result = {
+        "province_code": province_code,
+        "total_screened": total,
+        "smoking_rate": smoking_rate,
+        "no_exercise_rate": no_exercise_rate,
+        "last_updated": str(row.get("last_visit")) if row.get("last_visit") else None,
+        "by_disease": by_disease,
+        "physical": {
+            "avg_sbp":       _f(row.get("avg_sbp")),
+            "avg_dbp":       _f(row.get("avg_dbp")),
+            "avg_weight_kg": _f(row.get("avg_weight_kg")),
+            "avg_waist_cm":  _f(row.get("avg_waist_cm")),
+            "avg_bmi":       _f(row.get("avg_bmi")),
+        },
+        "lab": {
+            "total_lab_patients": int(lab_row.get("total_lab_patients") or 0),
+            "avg_fbs":          _f(lab_row.get("avg_fbs")),
+            "avg_cholesterol":  _f(lab_row.get("avg_cholesterol")),
+            "avg_triglyceride": _f(lab_row.get("avg_triglyceride")),
+            "avg_hdl":          _f(lab_row.get("avg_hdl")),
+            "avg_ldl":          _f(lab_row.get("avg_ldl")),
+            "avg_creatinine":   _f(lab_row.get("avg_creatinine")),
+            "avg_egfr":         _f(lab_row.get("avg_egfr")),
+            "avg_hemoglobin":   _f(lab_row.get("avg_hemoglobin")),
+        },
+    }
+    cache_set(cache_key, result, TTL_T2_AGGREGATE)
     return result
