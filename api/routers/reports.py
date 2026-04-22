@@ -127,10 +127,29 @@ async def download_adaptive_report(filename: str):
     return FileResponse(cache_path, media_type="application/pdf", filename=filename)
 
 
+_ZONE_CODE_RE = re.compile(r'^[1-8]$')
+_LANG_RE = re.compile(r'^(th|en)$')
+
+
 @router.get("/zone/{zone_code}/{lang}")
 async def download_zone_report(zone_code: str, lang: str = "th"):
     """Download a zone-specific report PDF."""
-    cache_path = REPORTS_DIR / "zone" / f"zone{zone_code}_{lang}.pdf"
+    # Validate inputs strictly — both end up in a filesystem path, so any
+    # `..` or `/` would be a path-traversal vulnerability.
+    if not _ZONE_CODE_RE.match(zone_code):
+        raise HTTPException(status_code=400, detail="Invalid zone_code (must be 1-8)")
+    if not _LANG_RE.match(lang):
+        raise HTTPException(status_code=400, detail="Invalid lang (must be th or en)")
+
+    cache_dir = (REPORTS_DIR / "zone").resolve()
+    cache_path = (cache_dir / f"zone{zone_code}_{lang}.pdf").resolve()
+    # Defence in depth: even after regex validation, confirm the resolved
+    # path stays inside cache_dir (rejects symlink escapes, etc.).
+    try:
+        cache_path.relative_to(cache_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
     if not cache_path.exists():
         try:
             from services.zone_report_generator import generate_zone_report
@@ -147,6 +166,8 @@ async def download_zone_report(zone_code: str, lang: str = "th"):
 @router.get("/msd/{lang}")
 async def download_msd_comprehensive(lang: str = "th"):
     """Download the comprehensive MSD report (100+ pages)."""
+    if not _LANG_RE.match(lang):
+        raise HTTPException(status_code=400, detail="Invalid lang (must be th or en)")
     cache_path = REPORTS_DIR / lang / "msd_comprehensive.pdf"
     if not cache_path.exists():
         try:
@@ -168,9 +189,31 @@ async def download_msd_comprehensive(lang: str = "th"):
     )
 
 
+@router.get("/repeat-screening/{lang}")
+async def download_repeat_screening_report(lang: str = "th"):
+    """Download the repeat-screening report PDF (single topic: คนตรวจซ้ำ)."""
+    if not _LANG_RE.match(lang):
+        raise HTTPException(status_code=400, detail="Invalid lang (must be th or en)")
+    cache_path = REPORTS_DIR / "repeat_screening" / f"repeat_screening_{lang}.pdf"
+    if not cache_path.exists():
+        try:
+            from services.repeat_screening_report import generate_repeat_screening_report
+            cache_path = generate_repeat_screening_report(lang)
+        except Exception as e:
+            logger.exception("Repeat-screening report generation failed")
+            raise HTTPException(status_code=500, detail=f"Report generation failed: {e}")
+    return FileResponse(
+        cache_path,
+        media_type="application/pdf",
+        filename=f"bma_health_repeat_screening_{lang}.pdf",
+    )
+
+
 @router.get("/public/{lang}")
 async def download_public_infographic(lang: str = "th"):
     """Download the public health infographic (1-page)."""
+    if not _LANG_RE.match(lang):
+        raise HTTPException(status_code=400, detail="Invalid lang (must be th or en)")
     cache_path = REPORTS_DIR / f"public_{lang}.pdf"
     if not cache_path.exists():
         raise HTTPException(
@@ -223,6 +266,14 @@ async def get_catalog():
             "id": "public", "label": "สำหรับประชาชน", "icon": "users",
             "reports": [
                 {"label": "สรุปสุขภาพ กทม. (TH)", "url": "/api/reports/public/th", **_check(base / "public_th.pdf")},
+            ],
+        },
+        {
+            "id": "repeat_screening", "label": "คนตรวจซ้ำ", "icon": "document",
+            "reports": [
+                {"label": "รายงานผู้เข้ารับการคัดกรองซ้ำ (TH)",
+                 "url": "/api/reports/repeat-screening/th",
+                 **_check(base / "repeat_screening" / "repeat_screening_th.pdf")},
             ],
         },
         {
@@ -318,6 +369,14 @@ async def get_dashboard():
             reports=[
                 ReportDashboardItem(label="สรุปสุขภาพ กทม. (TH)", url="/api/reports/public/th",
                                     **_check_with_mtime(base / "public_th.pdf")),
+            ],
+        ),
+        ReportCategory(
+            id="repeat_screening", label="คนตรวจซ้ำ", icon="document",
+            reports=[
+                ReportDashboardItem(label="รายงานผู้เข้ารับการคัดกรองซ้ำ (TH)",
+                                    url="/api/reports/repeat-screening/th",
+                                    **_check_with_mtime(base / "repeat_screening" / "repeat_screening_th.pdf")),
             ],
         ),
         ReportCategory(

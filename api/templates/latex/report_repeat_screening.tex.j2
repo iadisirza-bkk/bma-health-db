@@ -1,0 +1,186 @@
+% =============================================================================
+% BMA Health — Repeat Screening Report (คนตรวจซ้ำ)
+% Single-topic report: who comes back for more than one screening visit
+% =============================================================================
+\documentclass[aspectratio=169,11pt]{beamer}
+
+\newcommand{\bmaheaderleft}{คนตรวจซ้ำ}
+\newcommand{\bmaversion}{v1.0}
+\input{bma_beamer_preamble}
+
+\setmainfont{GoogleSans-Regular.ttf}[Path=assets/, BoldFont=GoogleSans-Bold.ttf]
+\setsansfont{GoogleSans-Regular.ttf}[Path=assets/, BoldFont=GoogleSans-Bold.ttf]
+\setdefaultlanguage{english}
+
+\begin{document}
+
+% ===== Title =====
+{
+\setbeamercolor{background canvas}{bg=bmagreen}
+\begin{frame}[plain]
+  \centering
+  \vspace{12pt}
+  \includegraphics[height=2cm]{assets/bma_logo.png}\hspace{1.5cm}%
+  \includegraphics[height=2cm]{assets/msd_logo.png}\\[16pt]
+  {\Huge\bfseries\color{white} รายงานผู้เข้ารับการคัดกรองซ้ำ}\\[6pt]
+  {\LARGE\color{white} Repeat Screening Report}\\[14pt]
+  {\large\color{white!80} โครงการคัดกรองสุขภาพประชาชน กรุงเทพมหานคร}\\[10pt]
+  {\normalsize\color{white!70} สำนักการแพทย์}\\[4pt]
+  {\small\color{white!50} สร้างเมื่อ << generated_date >>}
+  \vfill
+\end{frame}
+}
+
+% ===== Executive Summary =====
+\begin{frame}{บทสรุปสำหรับผู้บริหาร}
+  \begin{block}{สิ่งที่รายงานนี้ตอบ}
+    ในโครงการตรวจคัดกรองสุขภาพ มีผู้เข้ารับการตรวจ \textbf{ซ้ำ} (มากกว่า 1 ครั้ง)
+    กี่คน มาจากที่ไหน ช่วงห่างระหว่างครั้งเท่าไร และใครเป็นกลุ่มติดตามต่อเนื่องที่สุด
+  \end{block}
+
+  \vspace{6pt}
+  \begin{columns}[T]
+    \begin{column}{0.48\textwidth}
+      \metricbox{ผู้เข้ารับคัดกรองทั้งหมด}{<< total_patients >> คน}
+      \vspace{6pt}
+      \metricbox{ผู้ตรวจซ้ำ ($\geq 2$ ครั้ง)}{<< repeat_patients >> คน}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \metricbox{อัตราตรวจซ้ำ}{<< repeat_rate >>\%}
+      \vspace{6pt}
+      \metricbox{ช่วงห่างเฉลี่ย}{<< avg_days_between >> วัน}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ===== Visit Distribution =====
+\begin{frame}{การกระจายจำนวนครั้งที่คัดกรอง}
+  \begin{table}
+    \centering\small
+    \begin{tabular}{lrr}
+      \toprule
+      \textbf{จำนวนครั้งที่มาตรวจ} & \textbf{จำนวนผู้ป่วย} & \textbf{สัดส่วน} \\
+      \midrule
+      <% for row in visit_distribution %>
+      << row.label >> & << row.patients >> & << row.pct >>\% \\
+      <% endfor %>
+      \midrule
+      \textbf{รวม} & \textbf{<< total_patients >>} & \textbf{100\%} \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+
+  \vspace{6pt}
+  \begin{exampleblock}{ข้อสังเกต}
+    \small << distribution_insight >>
+  \end{exampleblock}
+\end{frame}
+
+% ===== Top Districts =====
+\begin{frame}{เขตที่มีอัตราตรวจซ้ำสูงสุด (Top 10)}
+  \begin{table}
+    \centering\small
+    \begin{tabular}{clrrr}
+      \toprule
+      \textbf{\#} & \textbf{เขต} & \textbf{ตรวจซ้ำ} & \textbf{คัดกรองทั้งหมด} & \textbf{อัตรา} \\
+      \midrule
+      <% for row in top_districts %>
+      << loop.index >> & << row.name >> & << row.repeat >> & << row.total >> & << row.rate >>\% \\
+      <% endfor %>
+      \bottomrule
+    \end{tabular}
+  \end{table}
+\end{frame}
+
+% ===== Top Facilities =====
+\begin{frame}{สถานพยาบาลที่มีอัตราตรวจซ้ำสูงสุด (Top 10)}
+  \begin{table}
+    \centering\small
+    \begin{tabular}{clrrr}
+      \toprule
+      \textbf{\#} & \textbf{สถานพยาบาล} & \textbf{ตรวจซ้ำ} & \textbf{คัดกรองทั้งหมด} & \textbf{อัตรา} \\
+      \midrule
+      <% for row in top_facilities %>
+      << loop.index >> & << row.name >> & << row.repeat >> & << row.total >> & << row.rate >>\% \\
+      <% endfor %>
+      \bottomrule
+    \end{tabular}
+  \end{table}
+\end{frame}
+
+% ===== Gap Analysis =====
+\begin{frame}{ช่วงห่างระหว่างการมาตรวจ}
+  \begin{columns}[T]
+    \begin{column}{0.45\textwidth}
+      \metricbox{เฉลี่ย}{<< avg_days_between >> วัน}
+      \vspace{4pt}
+      \metricbox{ค่ากลาง (Median)}{<< median_days_between >> วัน}
+    \end{column}
+    \begin{column}{0.45\textwidth}
+      \metricbox{น้อยที่สุด}{<< min_days_between >> วัน}
+      \vspace{4pt}
+      \metricbox{มากที่สุด}{<< max_days_between >> วัน}
+    \end{column}
+  \end{columns}
+
+  \vspace{8pt}
+  \begin{block}{การแบ่งช่วงการกลับมาตรวจ (n=<< total_pairs >> คู่การตรวจ)}
+    \small
+    \begin{tabular}{lrr}
+      ภายใน 3 เดือน & << gap_0_3m >> คน & << gap_0_3m_pct >>\% \\
+      3--6 เดือน    & << gap_3_6m >> คน & << gap_3_6m_pct >>\% \\
+      6--12 เดือน   & << gap_6_12m >> คน & << gap_6_12m_pct >>\% \\
+      1--2 ปี       & << gap_12_24m >> คน & << gap_12_24m_pct >>\% \\
+      มากกว่า 2 ปี   & << gap_24m_plus >> คน & << gap_24m_plus_pct >>\% \\
+    \end{tabular}
+  \end{block}
+\end{frame}
+
+% ===== Key Findings =====
+\begin{frame}{ข้อค้นพบสำคัญ}
+  \begin{enumerate}
+    <% for finding in key_findings %>
+    \item << finding >>
+    <% endfor %>
+  \end{enumerate}
+\end{frame}
+
+% ===== Recommendations =====
+\begin{frame}{ข้อเสนอแนะ}
+  \begin{alertblock}{แนวทางการส่งเสริมการตรวจติดตาม}
+    \small
+    \begin{itemize}
+      <% for rec in recommendations %>
+      \item << rec >>
+      <% endfor %>
+    \end{itemize}
+  \end{alertblock}
+\end{frame}
+
+% ===== Methodology =====
+\begin{frame}{หมายเหตุวิธีการ}
+  \small
+  \begin{itemize}
+    \item \textbf{แหล่งข้อมูล:} ตาราง \texttt{raw\_vitalsigns} โครงการตรวจคัดกรองสุขภาพ กทม.
+    \item \textbf{นิยาม "ตรวจซ้ำ":} ผู้ป่วยที่มี \texttt{patient\_id} เดียวกันปรากฏในตารางตรวจคัดกรอง
+    ตั้งแต่ 2 record ขึ้นไป โดยไม่นับ record ที่ถูกยกเลิก (\texttt{cancel\_status = 1})
+    \item \textbf{ช่วงห่างระหว่างครั้ง:} คำนวณจาก \texttt{visit\_date} ของ record ติดกันต่อ patient\_id
+    ด้วย SQL window function \texttt{LAG()}
+    \item \textbf{k-anonymity:} ข้อมูลสถานพยาบาล/เขตแสดงเฉพาะกลุ่มที่มีผู้ป่วย $\geq 100$ คนต่อสถานที่
+  \end{itemize}
+\end{frame}
+
+% ===== Thank You =====
+{
+\setbeamercolor{background canvas}{bg=bmagreen}
+\begin{frame}[plain]
+  \centering\vfill
+  {\Huge\bfseries\color{white} ขอบคุณครับ}\\[10pt]
+  {\large\color{white!80} รายงานผู้เข้ารับการคัดกรองซ้ำ}\\[6pt]
+  {\small\color{white!60} สำนักการแพทย์ กรุงเทพมหานคร}\\[2pt]
+  {\small\color{white!60} << generated_date >>}
+  \vfill
+\end{frame}
+}
+
+\end{document}
