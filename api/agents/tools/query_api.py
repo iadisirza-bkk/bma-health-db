@@ -91,7 +91,7 @@ def _overview() -> dict:
         GROUP BY d.zone_code ORDER BY d.zone_code
     """)
     total = sum(r.get("total_screened", 0) or 0 for r in rows)
-    return {"total_screened": total, "target": 1_600_000, "zones": rows}
+    return {"total_screened": total, "target": 1_000_000, "zones": rows}
 
 
 _DISEASE_TH = {
@@ -120,7 +120,7 @@ def _headline_kpi() -> dict:
     top = diseases[0] if diseases else {}
     return {
         "total_screened": total,
-        "coverage_pct": round(100.0 * total / 1_600_000, 2),
+        "coverage_pct": round(100.0 * total / 1_000_000, 2),
         "top_disease": top.get("name_th", top.get("disease")),
         "top_disease_count": top.get("at_risk"),
         "diseases": diseases,
@@ -172,7 +172,7 @@ def _moph_targets() -> dict:
     found_obesity = _scalar("SELECT SUM(found_obesity_count) FROM summary_district_disease") or 0
     t = max(total, 1)
     return {"kpis": [
-        {"code": "NCD-01", "name": "Coverage", "target_pct": 60, "actual_pct": round(100.0 * total / 1_600_000, 2), "status": "PASS" if total / 1_600_000 >= 0.6 else "FAIL"},
+        {"code": "NCD-01", "name": "Coverage", "target_pct": 60, "actual_pct": round(100.0 * total / 1_000_000, 2), "status": "PASS" if total / 1_000_000 >= 0.6 else "FAIL"},
         {"code": "NCD-02", "name": "DM detection", "target_pct": 5, "actual_pct": round(100.0 * risk_dm / t, 2), "status": "PASS" if risk_dm / t >= 0.05 else "FAIL"},
         {"code": "NCD-03", "name": "HPT detection", "target_pct": 10, "actual_pct": round(100.0 * risk_hpt / t, 2), "status": "PASS" if risk_hpt / t >= 0.10 else "FAIL"},
         {"code": "NCD-04", "name": "Obesity control", "target_pct": 30, "actual_pct": round(100.0 * found_obesity / t, 2), "status": "PASS" if found_obesity / t < 0.30 else "FAIL"},
@@ -282,8 +282,8 @@ def _cost_per_screening() -> dict:
         "cost_reference": {"screening_per_person_thb": cost_per_person, "source": "NHSO 2567"},
         "total_screened": total,
         "total_cost_thb": total * cost_per_person,
-        "remaining_to_target": 1_600_000 - total,
-        "remaining_cost_thb": (1_600_000 - total) * cost_per_person,
+        "remaining_to_target": 1_000_000 - total,
+        "remaining_cost_thb": (1_000_000 - total) * cost_per_person,
     }
 
 

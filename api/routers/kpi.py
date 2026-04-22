@@ -10,7 +10,7 @@ from security import enforce_k_anonymity, K_ANONYMITY_THRESHOLD
 
 router = APIRouter(prefix="/api/v2/kpi", tags=["KPI"])
 
-TARGET_SCREENED = 1_600_000
+TARGET_SCREENED = 1_000_000
 
 DISEASE_KEYS = {
     "diabetes":       {"risk": "risk_dm",  "found": "found_dm",            "pct": "pct_risk_dm"},
