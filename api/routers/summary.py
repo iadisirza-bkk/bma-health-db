@@ -20,16 +20,29 @@ TARGET_SCREENED = 1_000_000
 
 @router.get("/overview")
 def overview():
-    """Top-level screening overview with zone and disease breakdowns."""
+    """Top-level screening overview with zone and disease breakdowns.
+
+    NOTE: total_screened uses COUNT DISTINCT on raw_vitalsigns — NOT SUM on
+    summary_district_disease. The materialized view has a hidden data_source
+    dimension (app1/app2/portal) so SUMming double-counts patients who appear
+    in multiple sources. See the dashboard bug Apr 2026: the admin page
+    showed 837k (raw record count) while the public map showed 807k (inflated
+    SUM). Correct public number is ~782k unique patients with BKK dcode.
+    """
 
     # Cache check (TTL 15 min)
     hit = cache_get("summary:overview")
     if hit is not None:
         return hit
 
-    total = execute_scalar(
-        "SELECT COALESCE(SUM(total_screened), 0) FROM summary_district_disease"
-    ) or 0
+    # Total unique patients screened in Bangkok (dcode 1001-1050).
+    # Raw query — slower but correctly de-duplicates across data_source.
+    total = execute_scalar("""
+        SELECT COUNT(DISTINCT patient_id)
+        FROM raw_vitalsigns
+        WHERE cancel_status IS DISTINCT FROM 1
+          AND district_code BETWEEN '1001' AND '1050'
+    """) or 0
 
     zone_count = execute_scalar("SELECT COUNT(*) FROM ref_health_zones") or 0
     district_count = execute_scalar("SELECT COUNT(*) FROM ref_districts") or 0
@@ -38,27 +51,31 @@ def overview():
         "SELECT MAX(refreshed_at) FROM summary_district_disease"
     )
 
-    # By zone
+    # By zone — COUNT DISTINCT per zone (not SUM from the view)
     by_zone = execute_query("""
         SELECT z.zone_code, z.name_th,
-               COALESCE(SUM(s.total_screened), 0) AS total_screened
+               COUNT(DISTINCT v.patient_id) AS total_screened
         FROM ref_health_zones z
-        LEFT JOIN summary_district_disease s ON s.zone_code = z.zone_code
+        LEFT JOIN ref_districts d ON d.zone_code = z.zone_code
+        LEFT JOIN raw_vitalsigns v ON v.district_code = d.dcode
+          AND v.cancel_status IS DISTINCT FROM 1
         GROUP BY z.zone_code, z.name_th
         ORDER BY z.zone_code
     """)
 
-    # By disease (overall)
+    # By disease (overall) — COUNT DISTINCT with FILTER
     disease_rows = execute_query("""
         SELECT
-          SUM(total_screened)              AS total_screened,
-          SUM(risk_dm_count)              AS diabetes,
-          SUM(risk_hpt_count)             AS hypertension,
-          SUM(risk_cvd_count)             AS cardiovascular,
-          SUM(risk_bmi_count)             AS obesity,
-          SUM(found_dyslipidemia_count)   AS dyslipidemia,
-          SUM(found_stroke_count)         AS stroke
-        FROM summary_district_disease
+          COUNT(DISTINCT patient_id)                                  AS total_screened,
+          COUNT(DISTINCT patient_id) FILTER (WHERE risk_dm)           AS diabetes,
+          COUNT(DISTINCT patient_id) FILTER (WHERE risk_hpt)          AS hypertension,
+          COUNT(DISTINCT patient_id) FILTER (WHERE risk_cvd)          AS cardiovascular,
+          COUNT(DISTINCT patient_id) FILTER (WHERE risk_bmi)          AS obesity,
+          COUNT(DISTINCT patient_id) FILTER (WHERE found_dyslipidemia) AS dyslipidemia,
+          COUNT(DISTINCT patient_id) FILTER (WHERE found_stroke)      AS stroke
+        FROM raw_vitalsigns
+        WHERE cancel_status IS DISTINCT FROM 1
+          AND district_code BETWEEN '1001' AND '1050'
     """)
     d = disease_rows[0] if disease_rows else {}
     ts = d.get("total_screened") or 1

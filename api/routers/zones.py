@@ -15,20 +15,28 @@ router = APIRouter(tags=["Zones"])
 
 @router.get("/api/v2/summary/zones")
 def list_zones():
-    """All zones with screening totals and disease breakdown."""
+    """All zones with screening totals and disease breakdown.
+
+    NOTE: computes from raw_vitalsigns via COUNT DISTINCT — NOT SUM from
+    summary_district_disease. The view has a data_source dimension
+    (app1/app2/portal) so SUMming double-counts patients present in
+    multiple sources. See /overview for the same fix.
+    """
     rows = execute_query("""
         SELECT
           z.zone_code, z.name_th, z.name_en,
-          COUNT(DISTINCT s.district_code) AS district_count,
-          COALESCE(SUM(s.total_screened), 0) AS total_screened,
-          COALESCE(SUM(s.risk_dm_count), 0) AS diabetes,
-          COALESCE(SUM(s.risk_hpt_count), 0) AS hypertension,
-          COALESCE(SUM(s.risk_cvd_count), 0) AS cardiovascular,
-          COALESCE(SUM(s.risk_bmi_count), 0) AS obesity,
-          COALESCE(SUM(s.found_dyslipidemia_count), 0) AS dyslipidemia,
-          COALESCE(SUM(s.found_stroke_count), 0) AS stroke
+          COUNT(DISTINCT d.dcode) AS district_count,
+          COUNT(DISTINCT v.patient_id) AS total_screened,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_dm)             AS diabetes,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_hpt)            AS hypertension,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_cvd)            AS cardiovascular,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_bmi)            AS obesity,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_dyslipidemia)  AS dyslipidemia,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_stroke)        AS stroke
         FROM ref_health_zones z
-        LEFT JOIN summary_district_disease s ON s.zone_code = z.zone_code
+        LEFT JOIN ref_districts d ON d.zone_code = z.zone_code
+        LEFT JOIN raw_vitalsigns v ON v.district_code = d.dcode
+          AND v.cancel_status IS DISTINCT FROM 1
         GROUP BY z.zone_code, z.name_th, z.name_en
         ORDER BY z.zone_code
     """)

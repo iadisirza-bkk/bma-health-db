@@ -37,43 +37,43 @@ def _validate_disease_key(disease_key: str) -> None:
 @router.get("/districts")
 def list_districts(zone_code: Optional[str] = Query(None)):
     """List districts, optionally filtered by zone_code."""
-    # summary_district_disease has a data_source dimension (app1/app2/portal)
-    # producing 3 rows per district. We SUM across sources here so the response
-    # is 1 row per district — matches the /zones aggregate which also sums.
-    # pct_* values are recomputed from the summed counts to stay consistent
-    # with the counts in the same row.
+    # Compute from raw_vitalsigns using COUNT DISTINCT to deduplicate across
+    # the data_source dimension (app1/app2/portal). Summing the materialized
+    # view would double-count patients present in multiple sources.
     #
     # Obesity uses risk_bmi (BMI >= 25 Asian criterion, WHO + Thai NHES 6
     # standard). found_obesity is kept for backward compat but is a narrow
     # diagnostic flag — not the canonical metric.
     sql = """
         SELECT
-          s.district_code,
-          MAX(s.district_name)                         AS district_name,
-          MAX(s.zone_code)                             AS zone_code,
-          SUM(s.total_screened)::int                   AS total_screened,
-          SUM(s.risk_dm_count)::int                    AS risk_dm_count,
-          ROUND(100.0 * SUM(s.risk_dm_count)
-                      / NULLIF(SUM(s.total_screened), 0), 2) AS pct_risk_dm,
-          SUM(s.risk_hpt_count)::int                   AS risk_hpt_count,
-          ROUND(100.0 * SUM(s.risk_hpt_count)
-                      / NULLIF(SUM(s.total_screened), 0), 2) AS pct_risk_hpt,
-          SUM(s.risk_cvd_count)::int                   AS risk_cvd_count,
-          ROUND(100.0 * SUM(s.risk_cvd_count)
-                      / NULLIF(SUM(s.total_screened), 0), 2) AS pct_risk_cvd,
-          SUM(s.risk_bmi_count)::int                   AS risk_bmi_count,
-          ROUND(100.0 * SUM(s.risk_bmi_count)
-                      / NULLIF(SUM(s.total_screened), 0), 2) AS pct_risk_bmi,
-          SUM(s.found_obesity_count)::int              AS found_obesity_count,
-          SUM(s.found_dyslipidemia_count)::int         AS found_dyslipidemia_count,
-          SUM(s.found_stroke_count)::int               AS found_stroke_count
-        FROM summary_district_disease s
+          d.dcode                                                            AS district_code,
+          d.name_th                                                          AS district_name,
+          d.zone_code,
+          COUNT(DISTINCT v.patient_id)                                       AS total_screened,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_dm)              AS risk_dm_count,
+          ROUND(100.0 * COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_dm)
+                      / NULLIF(COUNT(DISTINCT v.patient_id), 0), 2)          AS pct_risk_dm,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_hpt)             AS risk_hpt_count,
+          ROUND(100.0 * COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_hpt)
+                      / NULLIF(COUNT(DISTINCT v.patient_id), 0), 2)          AS pct_risk_hpt,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_cvd)             AS risk_cvd_count,
+          ROUND(100.0 * COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_cvd)
+                      / NULLIF(COUNT(DISTINCT v.patient_id), 0), 2)          AS pct_risk_cvd,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_bmi)             AS risk_bmi_count,
+          ROUND(100.0 * COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_bmi)
+                      / NULLIF(COUNT(DISTINCT v.patient_id), 0), 2)          AS pct_risk_bmi,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_obesity)        AS found_obesity_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_dyslipidemia)   AS found_dyslipidemia_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_stroke)         AS found_stroke_count
+        FROM ref_districts d
+        LEFT JOIN raw_vitalsigns v ON v.district_code = d.dcode
+          AND v.cancel_status IS DISTINCT FROM 1
     """
     params: tuple = ()
     if zone_code:
-        sql += " WHERE s.zone_code = %s"
+        sql += " WHERE d.zone_code = %s"
         params = (zone_code,)
-    sql += " GROUP BY s.district_code ORDER BY s.district_code"
+    sql += " GROUP BY d.dcode, d.name_th, d.zone_code ORDER BY d.dcode"
     rows = execute_query(sql, params or None)
     rows = [r for r in rows if (r.get("total_screened") or 0) >= K_ANONYMITY_THRESHOLD]
     return rows
