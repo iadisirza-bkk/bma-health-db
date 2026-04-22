@@ -265,3 +265,114 @@ def demographics_summary(
 
     rows = [r for r in rows if (r.get("total_respondents") or 0) >= K_ANONYMITY_THRESHOLD]
     return rows
+
+
+# =========================================================================== #
+# Non-Bangkok overview
+# Aggregates screening records where the patient's district_code is outside
+# Bangkok (not in the 1001–1050 range). These are patients who self-reported
+# a home district outside BKK yet came for BMA screening.
+# =========================================================================== #
+
+@router.get("/non-bangkok-overview")
+def non_bangkok_overview():
+    """Aggregated health stats for patients whose home province is outside Bangkok.
+
+    The patient was screened at a BMA facility (district_code in 1001–1050) but
+    self-reported a home province other than Bangkok (home_province <> 10 in
+    raw_homevisit). This surfaces "outsiders" who use Bangkok health services.
+    """
+
+    # Cache check (TTL 15 min)
+    hit = cache_get("summary:non_bangkok_overview")
+    if hit is not None:
+        return hit
+
+    # Core aggregation: screenings for patients with non-Bangkok home province
+    rows = execute_query("""
+        SELECT
+          COUNT(DISTINCT v.patient_id)                                     AS total_screened,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_dm)            AS risk_dm_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_hpt)           AS risk_hpt_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_cvd)           AS risk_cvd_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_bmi)           AS risk_bmi_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_dm)           AS found_dm_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_hpt)          AS found_hpt_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_cvd)          AS found_cvd_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_obesity)      AS found_obesity_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_stroke)       AS found_stroke_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_dyslipidemia) AS found_dyslipidemia_count,
+          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.smoking = 1)        AS smoking_count,
+          MAX(v.visit_date)                                                 AS last_visit
+        FROM raw_vitalsigns v
+        JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
+        WHERE v.cancel_status IS DISTINCT FROM 1
+          AND hv.home_province IS NOT NULL
+          AND hv.home_province <> 10
+    """)
+
+    row = rows[0] if rows else {}
+    total = int(row.get("total_screened") or 0)
+
+    # k-anonymity guard: don't expose anything if too few patients
+    if total < K_ANONYMITY_THRESHOLD:
+        result = {
+            "total_screened": 0,
+            "suppressed": True,
+            "reason": f"k-anonymity: n < {K_ANONYMITY_THRESHOLD}",
+            "by_disease": [],
+            "by_home_province": [],
+            "last_updated": None,
+        }
+        cache_set("summary:non_bangkok_overview", result, TTL_T2_AGGREGATE)
+        return result
+
+    # Per-disease breakdown (mirrors /overview shape)
+    disease_map = [
+        ("diabetes",       "risk_dm_count"),
+        ("hypertension",   "risk_hpt_count"),
+        ("cardiovascular", "risk_cvd_count"),
+        ("obesity",        "risk_bmi_count"),
+        ("dyslipidemia",   "found_dyslipidemia_count"),
+        ("stroke",         "found_stroke_count"),
+    ]
+    by_disease = []
+    for key, col in disease_map:
+        cnt = int(row.get(col) or 0)
+        by_disease.append({
+            "disease_key": key,
+            "total_at_risk": cnt,
+            "pct": round(100.0 * cnt / total, 2) if total else 0,
+        })
+
+    # Top home-provinces (self-reported in raw_homevisit). k-anonymity per bucket.
+    by_home_province = execute_query("""
+        SELECT
+          hv.home_province AS province_code,
+          COUNT(DISTINCT v.patient_id) AS count
+        FROM raw_vitalsigns v
+        JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
+        WHERE v.cancel_status IS DISTINCT FROM 1
+          AND hv.home_province IS NOT NULL
+          AND hv.home_province <> 10
+        GROUP BY hv.home_province
+        HAVING COUNT(DISTINCT v.patient_id) >= %s
+        ORDER BY count DESC
+        LIMIT 15
+    """, (K_ANONYMITY_THRESHOLD,)) or []
+
+    # Smoking rate as a headline risk modifier
+    smoking_count = int(row.get("smoking_count") or 0)
+    smoking_rate = round(100.0 * smoking_count / total, 2) if total else 0
+
+    last_visit = row.get("last_visit")
+
+    result = {
+        "total_screened": total,
+        "smoking_rate": smoking_rate,
+        "last_updated": str(last_visit) if last_visit else None,
+        "by_disease": by_disease,
+        "by_home_province": by_home_province,
+    }
+    cache_set("summary:non_bangkok_overview", result, TTL_T2_AGGREGATE)
+    return result
