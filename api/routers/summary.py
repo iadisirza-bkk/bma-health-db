@@ -92,13 +92,77 @@ def overview():
 def filtered_summary(
     district: Optional[str] = Query(None),
     sex: Optional[int] = Query(None),
-    age_group: Optional[str] = Query(None),
+    age_group: Optional[str] = Query(None, description="Legacy Thai age-group string (e.g. 'สูงวัย')"),
+    age_min: Optional[int] = Query(None, ge=0, le=120, description="Minimum age (inclusive)"),
+    age_max: Optional[int] = Query(None, ge=0, le=120, description="Maximum age (inclusive)"),
     smoking: Optional[int] = Query(None),
     exercise: Optional[int] = Query(None),
 ):
-    """Query risk factor summary with filters. k-anonymity enforced."""
+    """Query risk factor summary with filters. k-anonymity enforced.
+
+    Age filtering supports two modes:
+    1. `age_group=<legacy-string>` — uses the pre-bucketed column on the view
+       (fast path). Legacy only; new clients should use age_min/age_max.
+    2. `age_min`/`age_max` — arbitrary numeric range. Computes age from
+       raw_patients.birth_year and joins to the view via district_code. Slower
+       than the legacy path but flexible per fact/age-groups.md.
+    """
+    # ─── Path 2: numeric age range → queries raw tables (birth_year based) ──
+    if age_min is not None or age_max is not None:
+        lo = age_min if age_min is not None else 0
+        hi = age_max if age_max is not None else 120
+        if lo > hi:
+            lo, hi = hi, lo
+        conditions = [
+            # (CURRENT_YEAR - birth_year) BETWEEN lo AND hi
+            "(EXTRACT(YEAR FROM CURRENT_DATE)::int - p.birth_year) BETWEEN %s AND %s",
+            "v.cancel_status IS DISTINCT FROM 1",
+            "p.birth_year IS NOT NULL",
+        ]
+        params: list = [lo, hi]
+        if district:
+            conditions.append("v.district_code = %s")
+            params.append(district)
+        if sex is not None:
+            conditions.append("p.sex = %s")
+            params.append(sex)
+        if smoking is not None:
+            conditions.append("v.smoking = %s")
+            params.append(smoking)
+        # Note: exercise lives in raw_homehealth; skipped in this path for perf.
+        where = "WHERE " + " AND ".join(conditions)
+
+        rows = execute_query(f"""
+            SELECT
+              v.district_code,
+              p.sex,
+              NULL::text AS age_group,
+              v.smoking,
+              NULL::int  AS exercise,
+              COUNT(DISTINCT v.patient_id)::int AS patient_count,
+              ROUND(AVG(v.sbp)::numeric, 1)          AS avg_sbp,
+              ROUND(AVG(v.dbp)::numeric, 1)          AS avg_dbp,
+              ROUND(AVG(v.weight_kg)::numeric, 1)    AS avg_weight_kg,
+              ROUND(AVG(v.waist_cm)::numeric, 1)     AS avg_waist_cm,
+              ROUND(AVG(CASE WHEN v.height_cm > 0
+                             THEN v.weight_kg / POWER(v.height_cm / 100.0, 2)
+                        END)::numeric, 1)            AS avg_bmi
+            FROM raw_vitalsigns v
+            JOIN raw_patients p ON p.id = v.patient_id
+            {where}
+            GROUP BY v.district_code, p.sex, v.smoking
+            ORDER BY v.district_code, p.sex
+        """, tuple(params))
+
+        rows = enforce_k_anonymity(rows, count_field="patient_count")
+        return {"filters_applied": {
+            "district": district, "sex": sex, "age_min": lo, "age_max": hi,
+            "smoking": smoking, "exercise": exercise,
+        }, "k_anonymity_threshold": K_ANONYMITY_THRESHOLD, "data": rows}
+
+    # ─── Path 1: legacy categorical filter → uses materialized view ─────────
     conditions = []
-    params: list = []
+    params = []
 
     if district:
         conditions.append("district_code = %s")
