@@ -288,7 +288,41 @@ def non_bangkok_overview():
     if hit is not None:
         return hit
 
+    # Step 1: Find k-anonymity-safe provinces (n >= threshold). All overall
+    # aggregates below restrict to these provinces so every number on every
+    # UI level (overall, region, province) stays mathematically consistent —
+    # i.e. sum of provinces = sum of regions = overall.
+    safe_provinces_rows = execute_query("""
+        SELECT hv.home_province AS pc
+        FROM raw_vitalsigns v
+        JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
+        WHERE v.cancel_status IS DISTINCT FROM 1
+          AND hv.home_province IS NOT NULL
+          AND hv.home_province <> 10
+        GROUP BY hv.home_province
+        HAVING COUNT(DISTINCT v.patient_id) >= %s
+    """, (K_ANONYMITY_THRESHOLD,)) or []
+    safe_provinces = [r["pc"] for r in safe_provinces_rows]
+
+    # Short-circuit: if no province meets k-anon, whole payload is suppressed
+    if not safe_provinces:
+        result = {
+            "total_screened": 0,
+            "suppressed": True,
+            "reason": f"k-anonymity: no province with n >= {K_ANONYMITY_THRESHOLD}",
+            "by_disease": [],
+            "by_home_province": [],
+            "disease_counts": {},
+            "physical": {},
+            "lab": {},
+            "mental": {},
+            "last_updated": None,
+        }
+        cache_set("summary:non_bangkok_overview", result, TTL_T2_AGGREGATE)
+        return result
+
     # Core aggregation: screenings + physical vitals for non-Bangkok residents
+    # (restricted to k-anonymity-safe provinces)
     rows = execute_query("""
         SELECT
           COUNT(DISTINCT v.patient_id)                                     AS total_screened,
@@ -304,7 +338,6 @@ def non_bangkok_overview():
           COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_dyslipidemia) AS found_dyslipidemia_count,
           COUNT(DISTINCT v.patient_id) FILTER (WHERE v.smoking = 1)        AS smoking_count,
           COUNT(DISTINCT v.patient_id) FILTER (WHERE v.smoking IS NOT NULL) AS smoking_answered,
-          -- physical vitals (used by lab-factor display when a disease is active)
           AVG(v.sbp)        AS avg_sbp,
           AVG(v.dbp)        AS avg_dbp,
           AVG(v.weight_kg)  AS avg_weight_kg,
@@ -314,9 +347,8 @@ def non_bangkok_overview():
         FROM raw_vitalsigns v
         JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
         WHERE v.cancel_status IS DISTINCT FROM 1
-          AND hv.home_province IS NOT NULL
-          AND hv.home_province <> 10
-    """)
+          AND hv.home_province = ANY(%s)
+    """, (safe_provinces,))
 
     row = rows[0] if rows else {}
     total = int(row.get("total_screened") or 0)
@@ -352,7 +384,9 @@ def non_bangkok_overview():
             "pct": round(100.0 * cnt / total, 2) if total else 0,
         })
 
-    # Top home-provinces with per-disease breakdown. k-anonymity per bucket.
+    # Top home-provinces with per-disease breakdown. Uses the same k-anon
+    # safe_provinces set as the overall aggregates so sum(province.count)
+    # == overall.total_screened.
     by_home_province_rows = execute_query("""
         SELECT
           hv.home_province AS province_code,
@@ -366,12 +400,10 @@ def non_bangkok_overview():
         FROM raw_vitalsigns v
         JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
         WHERE v.cancel_status IS DISTINCT FROM 1
-          AND hv.home_province IS NOT NULL
-          AND hv.home_province <> 10
+          AND hv.home_province = ANY(%s)
         GROUP BY hv.home_province
-        HAVING COUNT(DISTINCT v.patient_id) >= %s
         ORDER BY count DESC
-    """, (K_ANONYMITY_THRESHOLD,)) or []
+    """, (safe_provinces,)) or []
 
     def _disease_breakdown(r: dict) -> dict:
         n = int(r.get("count") or 0)
@@ -398,7 +430,7 @@ def non_bangkok_overview():
         for r in by_home_province_rows
     ]
 
-    # Lab aggregates (avg lab values) — same shape as /summary/lab per-district
+    # Lab aggregates — same k-anon safe set
     lab_rows = execute_query("""
         SELECT
           COUNT(DISTINCT l.patient_id) AS total_lab_patients,
@@ -423,12 +455,11 @@ def non_bangkok_overview():
         JOIN raw_lab_results l ON l.patient_id = v.patient_id
           AND l.cancel_status IS DISTINCT FROM 1
         WHERE v.cancel_status IS DISTINCT FROM 1
-          AND hv.home_province IS NOT NULL
-          AND hv.home_province <> 10
-    """) or []
+          AND hv.home_province = ANY(%s)
+    """, (safe_provinces,)) or []
     lab_row = lab_rows[0] if lab_rows else {}
 
-    # Exercise / lifestyle (no-exercise rate from raw_homehealth.exercise == 0)
+    # Exercise / lifestyle — same k-anon safe set
     hh_rows = execute_query("""
         SELECT
           COUNT(DISTINCT v.patient_id) FILTER (WHERE h.exercise = 0) AS no_exercise_count,
@@ -438,12 +469,11 @@ def non_bangkok_overview():
         LEFT JOIN raw_homehealth h ON h.patient_id = v.patient_id
           AND h.cancel_status IS DISTINCT FROM 1
         WHERE v.cancel_status IS DISTINCT FROM 1
-          AND hv.home_province IS NOT NULL
-          AND hv.home_province <> 10
-    """) or []
+          AND hv.home_province = ANY(%s)
+    """, (safe_provinces,)) or []
     hh_row = hh_rows[0] if hh_rows else {}
 
-    # Mental health percentages (same computation as summary_district_mental)
+    # Mental health percentages — same k-anon safe set
     mental_rows = execute_query("""
         SELECT
           ROUND(100.0 * COUNT(DISTINCT v.patient_id) FILTER (
@@ -461,9 +491,8 @@ def non_bangkok_overview():
         FROM raw_vitalsigns v
         JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
         WHERE v.cancel_status IS DISTINCT FROM 1
-          AND hv.home_province IS NOT NULL
-          AND hv.home_province <> 10
-    """) or []
+          AND hv.home_province = ANY(%s)
+    """, (safe_provinces,)) or []
     mental_row = mental_rows[0] if mental_rows else {}
 
     # Rates
