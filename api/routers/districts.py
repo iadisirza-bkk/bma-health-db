@@ -37,22 +37,43 @@ def _validate_disease_key(disease_key: str) -> None:
 @router.get("/districts")
 def list_districts(zone_code: Optional[str] = Query(None)):
     """List districts, optionally filtered by zone_code."""
+    # summary_district_disease has a data_source dimension (app1/app2/portal)
+    # producing 3 rows per district. We SUM across sources here so the response
+    # is 1 row per district — matches the /zones aggregate which also sums.
+    # pct_* values are recomputed from the summed counts to stay consistent
+    # with the counts in the same row.
+    #
+    # Obesity uses risk_bmi (BMI >= 25 Asian criterion, WHO + Thai NHES 6
+    # standard). found_obesity is kept for backward compat but is a narrow
+    # diagnostic flag — not the canonical metric.
     sql = """
         SELECT
-          s.district_code, s.district_name, s.zone_code, s.total_screened,
-          s.risk_dm_count, s.pct_risk_dm,
-          s.risk_hpt_count, s.pct_risk_hpt,
-          s.risk_cvd_count, s.pct_risk_cvd,
-          s.found_obesity_count,
-          s.found_dyslipidemia_count,
-          s.found_stroke_count
+          s.district_code,
+          MAX(s.district_name)                         AS district_name,
+          MAX(s.zone_code)                             AS zone_code,
+          SUM(s.total_screened)::int                   AS total_screened,
+          SUM(s.risk_dm_count)::int                    AS risk_dm_count,
+          ROUND(100.0 * SUM(s.risk_dm_count)
+                      / NULLIF(SUM(s.total_screened), 0), 2) AS pct_risk_dm,
+          SUM(s.risk_hpt_count)::int                   AS risk_hpt_count,
+          ROUND(100.0 * SUM(s.risk_hpt_count)
+                      / NULLIF(SUM(s.total_screened), 0), 2) AS pct_risk_hpt,
+          SUM(s.risk_cvd_count)::int                   AS risk_cvd_count,
+          ROUND(100.0 * SUM(s.risk_cvd_count)
+                      / NULLIF(SUM(s.total_screened), 0), 2) AS pct_risk_cvd,
+          SUM(s.risk_bmi_count)::int                   AS risk_bmi_count,
+          ROUND(100.0 * SUM(s.risk_bmi_count)
+                      / NULLIF(SUM(s.total_screened), 0), 2) AS pct_risk_bmi,
+          SUM(s.found_obesity_count)::int              AS found_obesity_count,
+          SUM(s.found_dyslipidemia_count)::int         AS found_dyslipidemia_count,
+          SUM(s.found_stroke_count)::int               AS found_stroke_count
         FROM summary_district_disease s
     """
     params: tuple = ()
     if zone_code:
         sql += " WHERE s.zone_code = %s"
         params = (zone_code,)
-    sql += " ORDER BY s.district_code"
+    sql += " GROUP BY s.district_code ORDER BY s.district_code"
     rows = execute_query(sql, params or None)
     rows = [r for r in rows if (r.get("total_screened") or 0) >= K_ANONYMITY_THRESHOLD]
     return rows
