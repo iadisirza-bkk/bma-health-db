@@ -153,31 +153,38 @@ def screening_yield(
 
 @router.get("/control-rates")
 def control_rates(disease: str = Query("diabetes")):
-    """Disease control rates (e.g., HbA1c < 7% for DM, BP < 140/90 for HPT)."""
-    # Control rates require lab follow-up data
-    # Check if we have lab data
-    lab_count = execute_scalar("SELECT COUNT(*) FROM raw_lab_results WHERE cancel_status IS DISTINCT FROM 1 AND fbs IS NOT NULL") or 0
+    """Disease control rates (e.g., FBS < 126 for DM, BP < 140/90 for HPT).
+
+    Reads from summary_disease_control (migration 016) — pre-aggregated per
+    district, refreshed after every ETL. O(50) lookup instead of full scans
+    of raw_vitalsigns + raw_lab_results.
+    """
+    # One row per district + sum across — single fast query.
+    totals = execute_query("""
+        SELECT COALESCE(SUM(lab_patients), 0)   AS lab_patients,
+               COALESCE(SUM(dm_with_lab), 0)    AS dm_with_lab,
+               COALESCE(SUM(dm_controlled), 0)  AS dm_controlled,
+               COALESCE(SUM(hpt_with_bp), 0)    AS hpt_with_bp,
+               COALESCE(SUM(hpt_controlled), 0) AS hpt_controlled
+        FROM summary_disease_control
+    """)
+    t = totals[0] if totals else {}
+    lab_count = int(t.get("lab_patients") or 0)
 
     if disease == "diabetes" and lab_count > 0:
-        # FBS < 126 as a proxy for "controlled"
-        controlled = execute_scalar("""
-            SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE l.fbs < 126) / NULLIF(COUNT(*), 0), 1)
-            FROM raw_lab_results l
-            JOIN raw_vitalsigns v ON l.patient_id = v.patient_id
-            WHERE v.found_dm AND l.fbs IS NOT NULL AND l.cancel_status IS DISTINCT FROM 1
-        """)
+        denom = int(t.get("dm_with_lab") or 0)
+        num = int(t.get("dm_controlled") or 0)
+        pct = round(100.0 * num / denom, 1) if denom > 0 else 0
         return {"disease": disease, "control_metric": "FBS < 126 mg/dL",
-                "control_rate_pct": controlled or 0, "lab_patients": lab_count,
+                "control_rate_pct": pct, "lab_patients": lab_count,
                 "note": "Proxy metric. HbA1c not available in current dataset."}
 
     if disease == "hypertension":
-        controlled = execute_scalar("""
-            SELECT ROUND(100.0 * COUNT(*) FILTER (WHERE v.sbp < 140 AND v.dbp < 90) / NULLIF(COUNT(*), 0), 1)
-            FROM raw_vitalsigns v
-            WHERE v.found_hpt AND v.sbp IS NOT NULL AND v.cancel_status IS DISTINCT FROM 1
-        """)
+        denom = int(t.get("hpt_with_bp") or 0)
+        num = int(t.get("hpt_controlled") or 0)
+        pct = round(100.0 * num / denom, 1) if denom > 0 else 0
         return {"disease": disease, "control_metric": "BP < 140/90 mmHg",
-                "control_rate_pct": controlled or 0}
+                "control_rate_pct": pct}
 
     return {"data_available": False, "message": f"ไม่มี control rate metric สำหรับ {disease} — ต้องรอข้อมูล lab เพิ่มเติม"}
 

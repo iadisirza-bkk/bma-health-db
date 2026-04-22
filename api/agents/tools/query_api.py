@@ -128,6 +128,10 @@ def _headline_kpi() -> dict:
 
 
 def _yoy_comparison() -> dict:
+    # k-anonymity guard: only return quarters with >= K patients screened.
+    # Citywide quarterly counts are typically 100K+ so this is a safety net,
+    # not the primary defence — but we enforce it everywhere on principle.
+    from security import K_ANONYMITY_THRESHOLD
     rows = _query("""
         SELECT DATE_TRUNC('quarter', v.visit_date)::date AS quarter,
                COUNT(DISTINCT v.patient_id) AS screened,
@@ -139,8 +143,9 @@ def _yoy_comparison() -> dict:
           AND v.visit_date IS NOT NULL
           AND v.visit_date >= '2024-01-01'
         GROUP BY DATE_TRUNC('quarter', v.visit_date)
+        HAVING COUNT(DISTINCT v.patient_id) >= %s
         ORDER BY quarter
-    """)
+    """, (K_ANONYMITY_THRESHOLD,))
     # Format as readable text so synthesizer can summarize
     lines = ["เปรียบเทียบรายไตรมาส (2024-ปัจจุบัน):"]
     for r in rows:
@@ -361,6 +366,9 @@ def _comorbidity_matrix() -> dict:
 
 
 def _repeat_screening() -> dict:
+    # k-anonymity guard: suppress visit-count buckets with fewer than K
+    # patients (a power-user with 50 visits could otherwise be re-identified).
+    from security import K_ANONYMITY_THRESHOLD
     rows = _query("""
         SELECT visit_count, COUNT(*) AS patient_count
         FROM (
@@ -369,8 +377,10 @@ def _repeat_screening() -> dict:
             WHERE cancel_status IS DISTINCT FROM 1
             GROUP BY patient_id
         ) sub
-        GROUP BY visit_count ORDER BY visit_count
-    """)
+        GROUP BY visit_count
+        HAVING COUNT(*) >= %s
+        ORDER BY visit_count
+    """, (K_ANONYMITY_THRESHOLD,))
     return {"visit_distribution": rows}
 
 
