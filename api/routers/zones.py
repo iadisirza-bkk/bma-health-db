@@ -27,6 +27,7 @@ def list_zones():
           z.zone_code, z.name_th, z.name_en,
           COUNT(DISTINCT d.dcode) AS district_count,
           COUNT(DISTINCT v.patient_id) AS total_screened,
+          COUNT(v.id) AS total_visits,
           COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_dm)             AS diabetes,
           COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_hpt)            AS hypertension,
           COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_cvd)            AS cardiovascular,

@@ -50,6 +50,7 @@ def list_districts(zone_code: Optional[str] = Query(None)):
           d.name_th                                                          AS district_name,
           d.zone_code,
           COUNT(DISTINCT v.patient_id)                                       AS total_screened,
+          COUNT(v.id)                                                        AS total_visits,
           COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_dm)              AS risk_dm_count,
           ROUND(100.0 * COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_dm)
                       / NULLIF(COUNT(DISTINCT v.patient_id), 0), 2)          AS pct_risk_dm,

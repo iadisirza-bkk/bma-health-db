@@ -35,14 +35,20 @@ def overview():
     if hit is not None:
         return hit
 
-    # Total unique patients screened in Bangkok (dcode 1001-1050).
-    # Raw query — slower but correctly de-duplicates across data_source.
-    total = execute_scalar("""
-        SELECT COUNT(DISTINCT patient_id)
+    # Both patient-level and visit-level totals — BKK dcode only.
+    # • total_screened = COUNT DISTINCT patient_id (จำนวนคน)
+    # • total_visits   = COUNT(*) screening records (จำนวนครั้ง)
+    # Typical ratio is ~1.15 visits per patient (repeat-screening program).
+    totals_row = execute_query("""
+        SELECT
+          COUNT(DISTINCT patient_id) AS total_screened,
+          COUNT(*)                   AS total_visits
         FROM raw_vitalsigns
         WHERE cancel_status IS DISTINCT FROM 1
           AND district_code BETWEEN '1001' AND '1050'
-    """) or 0
+    """) or [{}]
+    total = int(totals_row[0].get("total_screened") or 0)
+    total_visits = int(totals_row[0].get("total_visits") or 0)
 
     zone_count = execute_scalar("SELECT COUNT(*) FROM ref_health_zones") or 0
     district_count = execute_scalar("SELECT COUNT(*) FROM ref_districts") or 0
@@ -54,7 +60,8 @@ def overview():
     # By zone — COUNT DISTINCT per zone (not SUM from the view)
     by_zone = execute_query("""
         SELECT z.zone_code, z.name_th,
-               COUNT(DISTINCT v.patient_id) AS total_screened
+               COUNT(DISTINCT v.patient_id) AS total_screened,
+               COUNT(v.id)                  AS total_visits
         FROM ref_health_zones z
         LEFT JOIN ref_districts d ON d.zone_code = z.zone_code
         LEFT JOIN raw_vitalsigns v ON v.district_code = d.dcode
@@ -67,6 +74,7 @@ def overview():
     disease_rows = execute_query("""
         SELECT
           COUNT(DISTINCT patient_id)                                  AS total_screened,
+          COUNT(*)                                                    AS total_visits,
           COUNT(DISTINCT patient_id) FILTER (WHERE risk_dm)           AS diabetes,
           COUNT(DISTINCT patient_id) FILTER (WHERE risk_hpt)          AS hypertension,
           COUNT(DISTINCT patient_id) FILTER (WHERE risk_cvd)          AS cardiovascular,
@@ -90,6 +98,7 @@ def overview():
 
     result = {
         "total_screened": total,
+        "total_visits": total_visits,
         "target": TARGET_SCREENED,
         "zones_count": zone_count,
         "districts_count": district_count,
