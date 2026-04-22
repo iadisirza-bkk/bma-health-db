@@ -95,31 +95,63 @@ def filtered_summary(
     age_group: Optional[str] = Query(None, description="Legacy Thai age-group string (e.g. 'สูงวัย')"),
     age_min: Optional[int] = Query(None, ge=0, le=120, description="Minimum age (inclusive)"),
     age_max: Optional[int] = Query(None, ge=0, le=120, description="Maximum age (inclusive)"),
+    fiscal_year: Optional[int] = Query(None, ge=2550, le=2700,
+        description="Thai fiscal year (BE). FY 2569 = Oct 2025–Sep 2026."),
+    date_from: Optional[str] = Query(None, description="Custom range start (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(None, description="Custom range end (YYYY-MM-DD)"),
     smoking: Optional[int] = Query(None),
     exercise: Optional[int] = Query(None),
 ):
     """Query risk factor summary with filters. k-anonymity enforced.
 
-    Age filtering supports two modes:
-    1. `age_group=<legacy-string>` — uses the pre-bucketed column on the view
-       (fast path). Legacy only; new clients should use age_min/age_max.
-    2. `age_min`/`age_max` — arbitrary numeric range. Computes age from
-       raw_patients.birth_year and joins to the view via district_code. Slower
-       than the legacy path but flexible per fact/age-groups.md.
+    Filter paths:
+    - `age_group=<legacy-string>` alone → fast materialized-view path.
+    - `age_min/age_max`, `fiscal_year`, or `date_from/date_to` → raw-tables
+      path that computes age from raw_patients.birth_year and/or filters by
+      raw_vitalsigns.visit_date. Slower but flexible — per
+      fact/age-groups.md and fact/fiscal-years.md.
     """
-    # ─── Path 2: numeric age range → queries raw tables (birth_year based) ──
-    if age_min is not None or age_max is not None:
+    # Resolve fiscal_year → date range. Thai FY X = Oct 1 (X-544) → Sep 30 (X-543).
+    fy_date_from: Optional[str] = None
+    fy_date_to: Optional[str] = None
+    if fiscal_year is not None:
+        fy_start_year = fiscal_year - 544  # e.g. FY 2569 → 2025
+        fy_end_year = fiscal_year - 543    # e.g. FY 2569 → 2026
+        fy_date_from = f"{fy_start_year}-10-01"
+        fy_date_to = f"{fy_end_year}-09-30"
+
+    needs_raw = (
+        age_min is not None or age_max is not None
+        or fiscal_year is not None
+        or date_from is not None or date_to is not None
+    )
+
+    # ─── Raw-tables path: supports age range + time range filters ───────────
+    if needs_raw:
         lo = age_min if age_min is not None else 0
         hi = age_max if age_max is not None else 120
         if lo > hi:
             lo, hi = hi, lo
         conditions = [
-            # (CURRENT_YEAR - birth_year) BETWEEN lo AND hi
-            "(EXTRACT(YEAR FROM CURRENT_DATE)::int - p.birth_year) BETWEEN %s AND %s",
             "v.cancel_status IS DISTINCT FROM 1",
-            "p.birth_year IS NOT NULL",
         ]
-        params: list = [lo, hi]
+        params: list = []
+        # Age filter (optional — only when age_min/age_max provided)
+        if age_min is not None or age_max is not None:
+            conditions.append("p.birth_year IS NOT NULL")
+            conditions.append(
+                "(EXTRACT(YEAR FROM CURRENT_DATE)::int - p.birth_year) BETWEEN %s AND %s"
+            )
+            params.extend([lo, hi])
+        # Time filter — explicit date_from/date_to take precedence over fiscal_year
+        effective_from = date_from or fy_date_from
+        effective_to = date_to or fy_date_to
+        if effective_from:
+            conditions.append("v.visit_date >= %s")
+            params.append(effective_from)
+        if effective_to:
+            conditions.append("v.visit_date <= %s")
+            params.append(effective_to)
         if district:
             conditions.append("v.district_code = %s")
             params.append(district)
@@ -165,7 +197,12 @@ def filtered_summary(
 
         rows = enforce_k_anonymity(rows, count_field="patient_count")
         return {"filters_applied": {
-            "district": district, "sex": sex, "age_min": lo, "age_max": hi,
+            "district": district, "sex": sex,
+            "age_min": lo if (age_min is not None or age_max is not None) else None,
+            "age_max": hi if (age_min is not None or age_max is not None) else None,
+            "fiscal_year": fiscal_year,
+            "date_from": effective_from,
+            "date_to": effective_to,
             "smoking": smoking, "exercise": exercise,
         }, "k_anonymity_threshold": K_ANONYMITY_THRESHOLD, "data": rows}
 
@@ -784,4 +821,63 @@ def non_bangkok_province(
         },
     }
     cache_set(cache_key, result, TTL_T2_AGGREGATE)
+    return result
+
+
+# =========================================================================== #
+# Fiscal year catalog
+# =========================================================================== #
+
+@router.get("/fiscal-years")
+def list_fiscal_years(min_records: int = Query(100, ge=0, description="Suppress FYs with fewer than N records")):
+    """List Thai fiscal years present in raw_vitalsigns with record counts.
+
+    Thai FY X starts Oct 1 (Buddhist year X - 544 → Gregorian X - 544) and
+    ends Sep 30 (Buddhist year X - 543). Used by the frontend timeline filter
+    to enumerate selectable periods.
+
+    k-anonymity: suppresses FYs with < min_records entries (default 100).
+    """
+    hit = cache_get(f"summary:fiscal_years:{min_records}")
+    if hit is not None:
+        return hit
+
+    rows = execute_query("""
+        WITH fy AS (
+          SELECT
+            (EXTRACT(YEAR FROM visit_date)::int + 543 +
+              CASE WHEN EXTRACT(MONTH FROM visit_date) >= 10 THEN 1 ELSE 0 END
+            ) AS fiscal_year,
+            patient_id,
+            visit_date
+          FROM raw_vitalsigns
+          WHERE cancel_status IS DISTINCT FROM 1
+            AND visit_date IS NOT NULL
+        )
+        SELECT
+          fiscal_year,
+          COUNT(*)::int                         AS records,
+          COUNT(DISTINCT patient_id)::int       AS unique_patients,
+          MIN(visit_date)::date                 AS first_visit,
+          MAX(visit_date)::date                 AS last_visit
+        FROM fy
+        GROUP BY fiscal_year
+        HAVING COUNT(*) >= %s
+        ORDER BY fiscal_year DESC
+    """, (min_records,)) or []
+
+    result = [
+        {
+            "fiscal_year": int(r["fiscal_year"]),
+            "records": int(r["records"]),
+            "unique_patients": int(r["unique_patients"]),
+            "first_visit": str(r["first_visit"]) if r["first_visit"] else None,
+            "last_visit": str(r["last_visit"]) if r["last_visit"] else None,
+            # ISO date range of the FY (for frontend labels)
+            "fy_start": f"{int(r['fiscal_year']) - 544}-10-01",
+            "fy_end":   f"{int(r['fiscal_year']) - 543}-09-30",
+        }
+        for r in rows
+    ]
+    cache_set(f"summary:fiscal_years:{min_records}", result, TTL_T4_STATIC)
     return result
