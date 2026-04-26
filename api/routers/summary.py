@@ -35,17 +35,22 @@ def overview():
     if hit is not None:
         return hit
 
-    # Both patient-level and visit-level totals — BKK dcode only.
-    # • total_screened = COUNT DISTINCT patient_id (จำนวนคน)
-    # • total_visits   = COUNT(*) screening records (จำนวนครั้ง)
-    # Typical ratio is ~1.15 visits per patient (repeat-screening program).
+    # ⚠ Aggregation base = HOME district (where the patient lives), NOT
+    # screening location. This matches what BMA officials report — the
+    # question "บ้านอยู่ที่ไหน" matters for population-health planning,
+    # not "ตรวจที่ ศบส. ไหน". See fact/aggregation-base.md.
+    #
+    # Base table: raw_homevisit (has home_district per patient)
+    # Vitals/disease flags: raw_vitalsigns (LEFT JOIN by patient_id)
+    # • total_screened = unique residents (COUNT DISTINCT patient_id)
+    # • total_visits   = total homevisit records (COUNT *)
     totals_row = execute_query("""
         SELECT
-          COUNT(DISTINCT patient_id) AS total_screened,
-          COUNT(*)                   AS total_visits
-        FROM raw_vitalsigns
-        WHERE cancel_status IS DISTINCT FROM 1
-          AND district_code BETWEEN '1001' AND '1050'
+          COUNT(DISTINCT hv.patient_id) AS total_screened,
+          COUNT(*)                       AS total_visits
+        FROM raw_homevisit hv
+        WHERE hv.cancel_status IS DISTINCT FROM 1
+          AND hv.home_district BETWEEN 1001 AND 1050
     """) or [{}]
     total = int(totals_row[0].get("total_screened") or 0)
     total_visits = int(totals_row[0].get("total_visits") or 0)
@@ -57,33 +62,35 @@ def overview():
         "SELECT MAX(refreshed_at) FROM summary_district_disease"
     )
 
-    # By zone — COUNT DISTINCT per zone (not SUM from the view)
+    # By zone — group residents by their home district's zone
     by_zone = execute_query("""
         SELECT z.zone_code, z.name_th,
-               COUNT(DISTINCT v.patient_id) AS total_screened,
-               COUNT(v.id)                  AS total_visits
+               COUNT(DISTINCT hv.patient_id) AS total_screened,
+               COUNT(hv.id)                   AS total_visits
         FROM ref_health_zones z
         LEFT JOIN ref_districts d ON d.zone_code = z.zone_code
-        LEFT JOIN raw_vitalsigns v ON v.district_code = d.dcode
-          AND v.cancel_status IS DISTINCT FROM 1
+        LEFT JOIN raw_homevisit hv ON hv.home_district::text = d.dcode
+          AND hv.cancel_status IS DISTINCT FROM 1
         GROUP BY z.zone_code, z.name_th
         ORDER BY z.zone_code
     """)
 
-    # By disease (overall) — COUNT DISTINCT with FILTER
+    # By disease (overall) — count residents flagged with each NCD
     disease_rows = execute_query("""
         SELECT
-          COUNT(DISTINCT patient_id)                                  AS total_screened,
-          COUNT(*)                                                    AS total_visits,
-          COUNT(DISTINCT patient_id) FILTER (WHERE risk_dm)           AS diabetes,
-          COUNT(DISTINCT patient_id) FILTER (WHERE risk_hpt)          AS hypertension,
-          COUNT(DISTINCT patient_id) FILTER (WHERE risk_cvd)          AS cardiovascular,
-          COUNT(DISTINCT patient_id) FILTER (WHERE risk_bmi)          AS obesity,
-          COUNT(DISTINCT patient_id) FILTER (WHERE found_dyslipidemia) AS dyslipidemia,
-          COUNT(DISTINCT patient_id) FILTER (WHERE found_stroke)      AS stroke
-        FROM raw_vitalsigns
-        WHERE cancel_status IS DISTINCT FROM 1
-          AND district_code BETWEEN '1001' AND '1050'
+          COUNT(DISTINCT hv.patient_id) AS total_screened,
+          COUNT(hv.id)                  AS total_visits,
+          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_dm)            AS diabetes,
+          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_hpt)           AS hypertension,
+          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_cvd)           AS cardiovascular,
+          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_bmi)           AS obesity,
+          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.found_dyslipidemia) AS dyslipidemia,
+          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.found_stroke)       AS stroke
+        FROM raw_homevisit hv
+        LEFT JOIN raw_vitalsigns v ON v.patient_id = hv.patient_id
+          AND v.cancel_status IS DISTINCT FROM 1
+        WHERE hv.cancel_status IS DISTINCT FROM 1
+          AND hv.home_district BETWEEN 1001 AND 1050
     """)
     d = disease_rows[0] if disease_rows else {}
     ts = d.get("total_screened") or 1

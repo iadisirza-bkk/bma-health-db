@@ -37,37 +37,39 @@ def _validate_disease_key(disease_key: str) -> None:
 @router.get("/districts")
 def list_districts(zone_code: Optional[str] = Query(None)):
     """List districts, optionally filtered by zone_code."""
-    # Compute from raw_vitalsigns using COUNT DISTINCT to deduplicate across
-    # the data_source dimension (app1/app2/portal). Summing the materialized
-    # view would double-count patients present in multiple sources.
+    # Aggregation base = HOME district from raw_homevisit (where the patient
+    # lives), NOT screening location. Vitals/disease flags come from
+    # raw_vitalsigns via JOIN by patient_id.
+    # See fact/aggregation-base.md for the rationale.
     #
-    # Obesity uses risk_bmi (BMI >= 25 Asian criterion, WHO + Thai NHES 6
-    # standard). found_obesity is kept for backward compat but is a narrow
-    # diagnostic flag — not the canonical metric.
+    # Obesity uses risk_bmi (BMI >= 25 Asian criterion, WHO + Thai NHES 6).
+    # found_obesity is kept for backward compat but not canonical.
     sql = """
         SELECT
-          d.dcode                                                            AS district_code,
-          d.name_th                                                          AS district_name,
+          d.dcode                                                              AS district_code,
+          d.name_th                                                            AS district_name,
           d.zone_code,
-          COUNT(DISTINCT v.patient_id)                                       AS total_screened,
-          COUNT(v.id)                                                        AS total_visits,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_dm)              AS risk_dm_count,
-          ROUND(100.0 * COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_dm)
-                      / NULLIF(COUNT(DISTINCT v.patient_id), 0), 2)          AS pct_risk_dm,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_hpt)             AS risk_hpt_count,
-          ROUND(100.0 * COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_hpt)
-                      / NULLIF(COUNT(DISTINCT v.patient_id), 0), 2)          AS pct_risk_hpt,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_cvd)             AS risk_cvd_count,
-          ROUND(100.0 * COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_cvd)
-                      / NULLIF(COUNT(DISTINCT v.patient_id), 0), 2)          AS pct_risk_cvd,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_bmi)             AS risk_bmi_count,
-          ROUND(100.0 * COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_bmi)
-                      / NULLIF(COUNT(DISTINCT v.patient_id), 0), 2)          AS pct_risk_bmi,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_obesity)        AS found_obesity_count,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_dyslipidemia)   AS found_dyslipidemia_count,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_stroke)         AS found_stroke_count
+          COUNT(DISTINCT hv.patient_id)                                        AS total_screened,
+          COUNT(hv.id)                                                         AS total_visits,
+          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_dm)               AS risk_dm_count,
+          ROUND(100.0 * COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_dm)
+                      / NULLIF(COUNT(DISTINCT hv.patient_id), 0), 2)           AS pct_risk_dm,
+          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_hpt)              AS risk_hpt_count,
+          ROUND(100.0 * COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_hpt)
+                      / NULLIF(COUNT(DISTINCT hv.patient_id), 0), 2)           AS pct_risk_hpt,
+          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_cvd)              AS risk_cvd_count,
+          ROUND(100.0 * COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_cvd)
+                      / NULLIF(COUNT(DISTINCT hv.patient_id), 0), 2)           AS pct_risk_cvd,
+          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_bmi)              AS risk_bmi_count,
+          ROUND(100.0 * COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_bmi)
+                      / NULLIF(COUNT(DISTINCT hv.patient_id), 0), 2)           AS pct_risk_bmi,
+          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.found_obesity)         AS found_obesity_count,
+          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.found_dyslipidemia)    AS found_dyslipidemia_count,
+          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.found_stroke)          AS found_stroke_count
         FROM ref_districts d
-        LEFT JOIN raw_vitalsigns v ON v.district_code = d.dcode
+        LEFT JOIN raw_homevisit hv ON hv.home_district::text = d.dcode
+          AND hv.cancel_status IS DISTINCT FROM 1
+        LEFT JOIN raw_vitalsigns v ON v.patient_id = hv.patient_id
           AND v.cancel_status IS DISTINCT FROM 1
     """
     params: tuple = ()

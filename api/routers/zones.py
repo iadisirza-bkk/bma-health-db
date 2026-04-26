@@ -17,26 +17,27 @@ router = APIRouter(tags=["Zones"])
 def list_zones():
     """All zones with screening totals and disease breakdown.
 
-    NOTE: computes from raw_vitalsigns via COUNT DISTINCT — NOT SUM from
-    summary_district_disease. The view has a data_source dimension
-    (app1/app2/portal) so SUMming double-counts patients present in
-    multiple sources. See /overview for the same fix.
+    Aggregation base = HOME district from raw_homevisit (where the patient
+    lives), NOT screening district. See fact/aggregation-base.md for why.
+    Vitals/disease flags come from raw_vitalsigns via JOIN by patient_id.
     """
     rows = execute_query("""
         SELECT
           z.zone_code, z.name_th, z.name_en,
           COUNT(DISTINCT d.dcode) AS district_count,
-          COUNT(DISTINCT v.patient_id) AS total_screened,
-          COUNT(v.id) AS total_visits,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_dm)             AS diabetes,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_hpt)            AS hypertension,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_cvd)            AS cardiovascular,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_bmi)            AS obesity,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_dyslipidemia)  AS dyslipidemia,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_stroke)        AS stroke
+          COUNT(DISTINCT hv.patient_id) AS total_screened,
+          COUNT(hv.id) AS total_visits,
+          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_dm)            AS diabetes,
+          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_hpt)           AS hypertension,
+          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_cvd)           AS cardiovascular,
+          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_bmi)           AS obesity,
+          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.found_dyslipidemia) AS dyslipidemia,
+          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.found_stroke)       AS stroke
         FROM ref_health_zones z
         LEFT JOIN ref_districts d ON d.zone_code = z.zone_code
-        LEFT JOIN raw_vitalsigns v ON v.district_code = d.dcode
+        LEFT JOIN raw_homevisit hv ON hv.home_district::text = d.dcode
+          AND hv.cancel_status IS DISTINCT FROM 1
+        LEFT JOIN raw_vitalsigns v ON v.patient_id = hv.patient_id
           AND v.cancel_status IS DISTINCT FROM 1
         GROUP BY z.zone_code, z.name_th, z.name_en
         ORDER BY z.zone_code
