@@ -74,6 +74,37 @@ def _load_etl():
         logger.info("Loaded etl/import_csv.py (mtime=%s)", _etl_mtime)
     return _etl_mod
 
+
+# v3 ETL loader — same lazy-mtime pattern, separate module.
+_etl_v3_mod = None
+_etl_v3_mtime = None
+
+
+def _load_etl_v3():
+    """Lazy-load etl/import_csv_v3.py by absolute path.
+
+    Avoids `from etl import …` which fails because uvicorn runs from api/
+    and etl/ is a sibling without __init__.py — adding sys.path manipulation
+    would be brittle.
+    """
+    global _etl_v3_mod, _etl_v3_mtime
+    etl_path = os.path.join(ETL_DIR, "import_csv_v3.py")
+    try:
+        current_mtime = os.path.getmtime(etl_path)
+    except OSError:
+        current_mtime = None
+
+    if _etl_v3_mod is not None and current_mtime == _etl_v3_mtime:
+        return _etl_v3_mod
+
+    spec = importlib.util.spec_from_file_location("etl_import_v3", etl_path)
+    _etl_v3_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(_etl_v3_mod)
+    _etl_v3_mtime = current_mtime
+    if _etl_v3_mtime is not None:
+        logger.info("Loaded etl/import_csv_v3.py (mtime=%s)", _etl_v3_mtime)
+    return _etl_v3_mod
+
 CURRENT_YEAR = int(os.getenv("CURRENT_YEAR", str(datetime.now().year)))
 
 # --------------------------------------------------------------------------- #
@@ -623,7 +654,9 @@ def _run_import(upload_id: str, history_id: int):
         df = data["df"]
 
         # ─── ETL v3 dispatch — writes to private.* (EAV) ────────────────
-        from etl import import_csv_v3 as etlv3
+        # Use _load_etl_v3() (file-path import) — same pattern as _load_etl()
+        # because uvicorn runs from api/ and etl/ has no __init__.py
+        etlv3 = _load_etl_v3()
 
         # Create import_batch row for audit
         cur.execute("""
