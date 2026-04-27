@@ -9,8 +9,47 @@
     <!-- Page Header -->
     <div>
         <h1 class="text-lg font-bold text-gray-900">อัปโหลดไฟล์ CSV</h1>
-        <p class="text-xs text-gray-500 mt-1">เลือกประเภทไฟล์และอัปโหลดเพื่อนำเข้าข้อมูล</p>
+        <p class="text-xs text-gray-500 mt-1">
+            Schema v3 — EAV-based, two-schema (private/public).
+            ข้อมูลดิบ (raw rows) จะลง <code class="text-blue-600">private.*</code> ที่ Frontend เข้าไม่ได้;
+            Aggregate ที่ k-anonymized แล้วจะอยู่ที่ <code class="text-green-600">public.mv_*</code>.
+        </p>
     </div>
+
+    <!-- v3 Schema info card -->
+    {% if not preview %}
+    <div class="bg-gradient-to-br from-blue-50 to-purple-50 border border-blue-200 rounded-xl p-4">
+        <div class="flex items-start gap-3">
+            <span class="text-xl">📚</span>
+            <div class="flex-1">
+                <div class="text-xs font-semibold text-blue-900 mb-1">Schema v3 — Variable-Driven ETL</div>
+                <div class="text-[11px] text-gray-700 leading-relaxed">
+                    ETL อ่าน <code class="text-blue-700">private.variable_definition</code> (579 ตัวแปร × 3 sources) เพื่อ map
+                    CSV column → variable_id → ลงตาราง <code class="text-blue-700">private.visit_measurement</code> (EAV).
+                    การเพิ่มตัวแปรใหม่ = INSERT 1 row ใน <code>variable_definition</code> ไม่ต้อง ALTER TABLE.
+                </div>
+                <div class="flex flex-wrap gap-3 mt-2 text-[10px]">
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-white border border-gray-200 rounded">
+                        <span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                        <code>private.patient</code> ↔ <code>patient_alias</code>
+                    </span>
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-white border border-gray-200 rounded">
+                        <span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
+                        <code>private.visit_event</code> ↔ <code>visit_measurement</code> (EAV)
+                    </span>
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-white border border-gray-200 rounded">
+                        <span class="w-1.5 h-1.5 rounded-full bg-purple-500"></span>
+                        <code>private.patient_address</code> (SCD Type 2)
+                    </span>
+                    <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-white border border-gray-200 rounded">
+                        <span class="w-1.5 h-1.5 rounded-full bg-green-500"></span>
+                        <code>public.mv_*</code> (k-anon ≥ 5)
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
 
     {% if not preview %}
     <!-- Upload Form -->
@@ -107,7 +146,11 @@
                     <p class="text-sm font-medium text-gray-900">{{ preview.filename }}</p>
                 </div>
                 <div>
-                    <span class="text-xs font-semibold uppercase tracking-wider text-gray-500">ประเภท</span>
+                    <span class="text-xs font-semibold uppercase tracking-wider text-gray-500">แหล่งข้อมูล</span>
+                    <p class="text-sm font-bold text-blue-700">{{ preview.source_code|upper if preview.source_code else '—' }}</p>
+                </div>
+                <div>
+                    <span class="text-xs font-semibold uppercase tracking-wider text-gray-500">ประเภทไฟล์</span>
                     <p class="text-sm font-medium text-gray-900">{{ preview.file_type or 'auto-detect' }}</p>
                 </div>
                 <div>
@@ -115,10 +158,95 @@
                     <p class="text-sm font-bold text-bma-green">{{ "{:,}".format(preview.total_rows) }}</p>
                 </div>
                 <div>
-                    <span class="text-xs font-semibold uppercase tracking-wider text-gray-500">คอลัมน์</span>
-                    <p class="text-sm font-bold text-bma-green">{{ preview.columns|length }}</p>
+                    <span class="text-xs font-semibold uppercase tracking-wider text-gray-500">คอลัมน์ทั้งหมด</span>
+                    <p class="text-sm font-bold text-bma-green">{{ preview.total_columns }}</p>
                 </div>
             </div>
+        </div>
+
+        <!-- v3: Schema target + Variable mapping coverage -->
+        <div class="px-6 py-4 border-b border-gray-200 bg-blue-50">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- Target schema -->
+                <div>
+                    <div class="text-[11px] font-semibold uppercase tracking-wider text-gray-500 mb-1.5">
+                        จะลงตารางใน <span class="font-mono text-blue-700">private.*</span>
+                    </div>
+                    <div class="text-sm text-gray-800 font-mono">{{ preview.table_name }}</div>
+                    <p class="text-[11px] text-gray-500 mt-1">
+                        ตารางที่ <code>private.*</code> Frontend เข้าไม่ได้ — ต้องผ่าน Materialized View ใน <code>public.mv_*</code> ที่ refresh ทุกวัน 03:00
+                    </p>
+                </div>
+
+                <!-- Variable mapping coverage (v3) -->
+                {% if preview.coverage %}
+                <div>
+                    <div class="text-[11px] font-semibold uppercase tracking-wider text-gray-500 mb-1.5">
+                        Variable Mapping Coverage
+                        <span class="text-[10px] text-gray-400 ml-1">(จาก private.variable_definition)</span>
+                    </div>
+                    <div class="flex items-center gap-3 text-sm">
+                        <span class="inline-flex items-center gap-1">
+                            <span class="w-2 h-2 rounded-full bg-green-500"></span>
+                            <span class="font-bold text-green-700">{{ preview.coverage.matched }}</span>
+                            <span class="text-gray-600">matched</span>
+                        </span>
+                        {% if preview.coverage.address > 0 %}
+                        <span class="inline-flex items-center gap-1">
+                            <span class="w-2 h-2 rounded-full bg-purple-500"></span>
+                            <span class="font-bold text-purple-700">{{ preview.coverage.address }}</span>
+                            <span class="text-gray-600">→ patient_address (SCD)</span>
+                        </span>
+                        {% endif %}
+                        {% if preview.coverage.unmatched > 0 %}
+                        <span class="inline-flex items-center gap-1">
+                            <span class="w-2 h-2 rounded-full bg-amber-500"></span>
+                            <span class="font-bold text-amber-700">{{ preview.coverage.unmatched }}</span>
+                            <span class="text-gray-600">unmatched (จะถูก skip)</span>
+                        </span>
+                        {% endif %}
+                    </div>
+                    {% if preview.coverage.unmatched_columns and preview.coverage.unmatched_columns|length > 0 %}
+                    <details class="mt-1.5">
+                        <summary class="text-[11px] text-amber-700 cursor-pointer hover:text-amber-900">
+                            ดูคอลัมน์ที่ไม่ตรง variable_definition ({{ preview.coverage.unmatched_columns|length }})
+                        </summary>
+                        <div class="text-[10px] font-mono text-gray-600 mt-1 leading-relaxed">
+                            {{ preview.coverage.unmatched_columns|join(', ') }}
+                        </div>
+                        <p class="text-[10px] text-gray-500 mt-1">
+                            หากต้องการ map คอลัมน์เหล่านี้ → INSERT ลง <code>private.variable_definition</code>
+                        </p>
+                    </details>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- v3: ETL flow visualization -->
+        <div class="px-6 py-3 border-b border-gray-200 bg-white">
+            <div class="text-[11px] font-semibold uppercase tracking-wider text-gray-500 mb-2">ขั้นตอน ETL ที่จะรัน</div>
+            <ol class="text-[12px] text-gray-700 space-y-1 list-decimal list-inside">
+                {% if preview.file_type == 'pt' %}
+                <li>Hash IDCARD → upsert <code class="text-blue-700">private.patient</code> (deduplicated)</li>
+                <li>Insert <code class="text-blue-700">private.patient_alias</code> ((source, source_pid) → patient_id)</li>
+                {% elif preview.file_type == 'app2' %}
+                <li>Auto-split combined CSV → patient + visit + measurements</li>
+                <li>Upsert <code class="text-blue-700">private.patient + patient_alias</code></li>
+                <li>Insert <code class="text-blue-700">private.visit_event</code></li>
+                <li>Pivot ทุก non-null column → <code class="text-blue-700">private.visit_measurement</code></li>
+                {% else %}
+                <li>Resolve patient_id from <code class="text-blue-700">private.patient_alias</code> (must upload pt.csv first)</li>
+                <li>Insert <code class="text-blue-700">private.visit_event</code> (1 row per PID + VSTDATE)</li>
+                <li>Pivot ทุก non-null column → <code class="text-blue-700">private.visit_measurement</code> (EAV)</li>
+                {% if preview.coverage and preview.coverage.address > 0 %}
+                <li>Address columns → <code class="text-purple-700">private.patient_address</code> (SCD Type 2)</li>
+                {% endif %}
+                {% endif %}
+                <li>Refresh <code class="text-green-700">public.mv_*</code> (k-anonymized aggregates)</li>
+                <li>Frontend จะเห็นข้อมูลใหม่ภายใน 10 นาที (React Query staleTime)</li>
+            </ol>
         </div>
 
         <!-- Preview Table -->

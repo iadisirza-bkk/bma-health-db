@@ -328,23 +328,88 @@ _PREVIEW_PII_COLUMNS = {
 
 
 def _detect_file_type(columns: List[str]) -> Optional[str]:
-    """Auto-detect CSV file type from column headers."""
+    """Auto-detect CSV file type from column headers.
+
+    Order matters: more specific signatures first.
+    """
     cols = {c.upper() for c in columns}
-    if "IDCARD" in cols:
+
+    # App2 combined CSV — has _NAME/_SORT suffixed pre-computed columns
+    app2_signals = sum(1 for c in cols if c.endswith("_NAME") or c.endswith("_SORT"))
+    if app2_signals >= 5 and "PID" in cols:
+        return "app2"
+
+    # Patient master (Portal IDCARD or App1/Portal pt)
+    if "IDCARD" in cols and "BIRTHDATE" in cols:
         return "pt"
+    if {"PID", "MALE"} <= cols and "BRTHDATE" in cols:
+        return "pt"  # App1 pt.csv
+
+    # Portal pthistory (religion/lgbtq are unique markers)
     if "RLGN" in cols or "LGBTQ" in cols:
         return "pthistory"
-    if "HBPN" in cols or "RISKDM" in cols:
+
+    # Vital signs — strong markers
+    if "HBPN" in cols or "RISKDM" in cols or "SCN9Q1" in cols:
         return "vitalsignslf"
-    if "SELFOUR" in cols or "DISTYPE1" in cols:
-        return "homevisit"
-    if "EXCERCISE" in cols or "CGTDS" in cols:
-        return "homehealth"
-    if "CBCRS" in cols or "HMGB" in cols:
-        return "labhealth"
-    if "SCRRES01" in cols or "PTGRIGHT" in cols:
+
+    # Lab extended (Portal-only)
+    if "PTGRIGHT" in cols or "PTGLEFT" in cols or "PAINHEAD" in cols:
         return "labhealthext"
+
+    # Lab basic
+    if "CBCRS" in cols or "HMGB" in cols or "HEMOGLOBIN" in cols or "FBS" in cols:
+        return "labhealth"
+
+    # Home visit (address + occupation)
+    if "SELFOUR" in cols or "DISTYPE1" in cols or {"HDISTRICT", "DISTRICT"} & cols:
+        return "homevisit"
+
+    # Home health (lifestyle)
+    if "EXCERCISE" in cols or "CGTDS" in cols or "FOOD" in cols:
+        return "homehealth"
+
     return None
+
+
+def _coverage_report(df_columns: list, source_code: str, file_type: str) -> dict:
+    """Return mapping coverage: how many CSV columns match variable_definition.
+
+    Used by /admin/upload preview to inform user before commit.
+    """
+    if not source_code or source_code not in ("portal", "app1", "app2"):
+        return {"matched": 0, "unmatched": 0, "address": 0, "total": len(df_columns)}
+
+    upper_cols = {c.upper() for c in df_columns}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT csv_column_name, domain
+                    FROM private.variable_definition
+                    WHERE source_code = %s AND deprecated_at IS NULL
+                """, (source_code,))
+                known = {row[0].upper(): row[1] for row in cur.fetchall()}
+    except Exception:
+        return {"matched": 0, "unmatched": len(df_columns), "address": 0,
+                "total": len(df_columns)}
+
+    matched = upper_cols & set(known.keys())
+    address_cols = {c for c in matched if known.get(c) == 'address'}
+    unmatched = upper_cols - set(known.keys())
+
+    # Skip visit-meta columns from "unmatched" warning
+    visit_meta = {"PID", "IDCARD", "VSTDATE", "VSTTIME", "HPTCODE", "CANCELST",
+                  "VST_ID", "HD"}
+    unmatched_significant = unmatched - visit_meta
+
+    return {
+        "matched": len(matched),
+        "unmatched": len(unmatched_significant),
+        "address": len(address_cols),
+        "total": len(df_columns),
+        "unmatched_columns": sorted(unmatched_significant)[:20],  # show first 20
+    }
 
 # --------------------------------------------------------------------------- #
 # In-memory upload cache (keyed by upload_id)
@@ -1171,14 +1236,20 @@ async def upload_csv(
     safe_columns = [c for c in df.columns if c.upper() not in _PREVIEW_PII_COLUMNS]
     safe_df = df[safe_columns]
 
+    # v3: variable mapping coverage report
+    coverage = _coverage_report(list(df.columns), source_code, detected_type)
+
     preview_data = {
         "upload_id": upload_id,
         "filename": file.filename,
         "file_type": detected_type,
+        "source_code": source_code,
         "table_name": file_info["table"],
         "total_rows": len(df),
         "columns": safe_columns,
+        "total_columns": len(df.columns),
         "sample_rows": safe_df.head(10).fillna("").to_dict(orient="records"),
+        "coverage": coverage,
     }
 
     return templates.TemplateResponse(
