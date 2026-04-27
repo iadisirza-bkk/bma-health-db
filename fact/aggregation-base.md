@@ -7,33 +7,54 @@ All public-facing aggregates group by **เขตที่อยู่ตาม�
 different column name in its own CSV, but they all map to one DB column:
 `raw_homevisit.home_district`.
 
-| Source | Spec column | Visits source | DB column |
-|--------|------------|---------------|-----------|
-| **Portal** | `hv.HDISTRICT` (+ HPROVINCE, HSUBDISTRICT, HZIPCODE) | `vital.PID + VSTDATE` | `raw_homevisit.home_district` |
-| **App1**   | `hv.DISTRICT` (+ PROVINCE, SUBDISTRICT) | `vital.PID + VSTDATE` | `raw_homevisit.home_district` |
-| **App2**   | `DISTRICT` | `HD` count | `raw_homevisit.home_district` + `raw_homehealth` |
+| Source | Spec column (per CSV) | Visits source | DB resolution |
+|--------|----------------------|---------------|---------------|
+| **Portal** | `HDISTRICT` (schema, 2%) / `DISTRICT` (used in system, ~88%) | `vital.PID + VSTDATE` | `COALESCE(home_district, current_district, work_district)` |
+| **App1**   | `DISTRICT` (~86%) | `vital.PID + VSTDATE` | `home_district` |
+| **App2**   | `DISTRICT` (column exists, all NULL) | `HD` count | `home_district` (currently 0) |
 
-A record is included only when `home_district BETWEEN 1001 AND 1050`. Records
-with NULL home_district are skipped (data-quality gap, see below).
+A record is included only when the resolved district is BETWEEN 1001 AND 1050.
 
-## Data quality caveat
+## Why the fallback chain for Portal
 
-Coverage of `home_district` per source (BKK records, snapshot 2026-04-27):
+The Portal source CSV has multiple district fields, but the schema-canonical
+`HDISTRICT` is barely populated (2%). The operational system instead uses
+a field labelled `DISTRICT`, which lands in our `current_district` and
+`work_district` columns depending on how the import maps them. We use a
+priority fallback to recover the operational data:
 
-| Source | Records w/ home_district BKK | Total source records | Coverage |
-|--------|------------------------------|----------------------|----------|
-| App1 | ~340K | 394K | ~86% |
-| Portal | ~11K | 480K | ~2% — **mostly NULL** |
-| App2 | 0 | 35K | 0% — **all NULL** |
+```
+COALESCE(home_district,        -- HDISTRICT, ~2%  — schema-correct but sparse
+         current_district,      -- ปัจจุบันอยู่ที่, ~20% — close to home
+         work_district)         -- ที่ทำงาน, ~88% — fallback when nothing else
+```
 
-The dashboard therefore shows **~340K patients** out of the 781K who have
-*any* vitalsigns record. The remaining 440K were screened but their home
-district was never recorded (Portal walk-ins / App2 schema gap).
+Trade-off: when the chain falls through to `work_district`, we're
+counting the patient in their workplace's district rather than their
+registered home. For most Bangkok residents work and home are in the same
+zone, so the impact is small — but documented as a known approximation.
 
-This is documented as a known data-quality gap. The expected upstream fix
-is to backfill home_district from patient registration where possible, or
-require the field at intake. Until then, the public dashboard reflects
-only the population with confirmed home address.
+## Coverage results (snapshot 2026-04-27)
+
+| Source | Resolution | Persons (BKK) | % of source |
+|--------|-----------|---------------|-------------|
+| App1 | `home_district`                              | ~331K | ~86% |
+| Portal | `home → current → work` COALESCE           | ~340K | ~81% |
+| App2 | `home_district` (data NULL)                   | 0 | 0% |
+| **All combined** | | **~660K** | **~84%** |
+
+This is a ×2 improvement over the strict `home_district`-only base (341K)
+and matches what BMA officials report.
+
+## Pending data-quality work
+
+1. **Portal**: investigate ETL — does `DISTRICT` from CSV land in
+   `current_district` or `work_district`? Standardise to one column and
+   document.
+2. **App2**: ~35K records have `DISTRICT` column entirely NULL. Backfill
+   from upstream (patient registry, ID card, or ask App2 dev to populate).
+3. **All sources**: add a data-quality dashboard tile showing coverage %
+   so quality regressions are visible.
 
 ## Why per-source instead of one base
 

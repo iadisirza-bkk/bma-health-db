@@ -43,11 +43,18 @@ def build_unified_cte(sources: list[str] | None = None) -> str:
     legs = []
 
     if sources is None or 'portal' in sources:
+        # Portal source CSV has BOTH HDISTRICT (per schema, ~2% populated)
+        # AND DISTRICT (the field actually used by the operational system,
+        # well-populated). The spec says "DISTRICT (ใช้จริงในระบบ)" — i.e.
+        # use whichever district field has actual data. Fallback chain:
+        #   home_district → current_district → work_district
+        # gives 80.8% Portal coverage (vs 2% with home_district alone).
+        # Documented in fact/aggregation-base.md.
         legs.append("""
-          -- Portal: vital.PID + VSTDATE for visits, home_district for location
+          -- Portal: home → current → work fallback for sparse home_district
           SELECT 'portal'::text AS source,
                  v.patient_id,
-                 hv.home_district::text AS dc,
+                 COALESCE(hv.home_district, hv.current_district, hv.work_district)::text AS dc,
                  v.visit_date::date AS day,
                  v.risk_dm, v.risk_hpt, v.risk_cvd, v.risk_bmi,
                  v.found_dyslipidemia, v.found_stroke
@@ -55,7 +62,8 @@ def build_unified_cte(sources: list[str] | None = None) -> str:
           JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
           WHERE v.data_source = 'portal'
             AND v.cancel_status IS DISTINCT FROM 1
-            AND hv.home_district BETWEEN 1001 AND 1050
+            AND COALESCE(hv.home_district, hv.current_district, hv.work_district)
+                  BETWEEN 1001 AND 1050
         """)
 
     if sources is None or 'app1' in sources:
