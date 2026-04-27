@@ -265,9 +265,21 @@ class TestStatisticsAPI:
     async def test_stats_compare(self, client):
         resp = await client.get("/api/v2/summary/districts")
         districts = resp.json()
-        if len(districts) < 2:
-            pytest.skip("Need at least 2 districts")
-        d1, d2 = districts[0]["district_code"], districts[1]["district_code"]
+        # Multi-source data (migration 011) means a district can appear once
+        # per data_source — dedupe by district_code so we always pick two
+        # genuinely-different districts to compare.
+        unique_codes = []
+        seen = set()
+        for d in districts:
+            dc = d["district_code"]
+            if dc not in seen:
+                seen.add(dc)
+                unique_codes.append(dc)
+            if len(unique_codes) >= 2:
+                break
+        if len(unique_codes) < 2:
+            pytest.skip("Need at least 2 distinct districts")
+        d1, d2 = unique_codes[0], unique_codes[1]
         resp = await client.get(f"/api/stats/compare?district1={d1}&district2={d2}")
         assert resp.status_code == 200
 
@@ -431,45 +443,33 @@ class TestAdminAPI:
         assert resp.status_code in (401, 403)
 
     @pytest.mark.anyio
-    async def test_admin_data_status_with_auth(self, client):
-        resp = await client.get(
-            "/api/admin/data-status",
-            headers={"Authorization": "Bearer admin"},
-        )
+    async def test_admin_data_status_with_auth(self, client, admin_auth_header):
+        resp = await client.get("/api/admin/data-status", headers=admin_auth_header)
         assert resp.status_code == 200
 
     @pytest.mark.anyio
-    async def test_admin_excel_template(self, client):
-        resp = await client.get(
-            "/api/admin/excel-template",
-            headers={"Authorization": "Bearer admin"},
-        )
+    async def test_admin_excel_template(self, client, admin_auth_header):
+        resp = await client.get("/api/admin/excel-template", headers=admin_auth_header)
         assert resp.status_code == 200
         ct = resp.headers.get("content-type", "")
         assert "spreadsheet" in ct or "octet" in ct
 
     @pytest.mark.anyio
-    async def test_admin_audit_log(self, client):
-        resp = await client.get(
-            "/api/admin/audit-log",
-            headers={"Authorization": "Bearer admin"},
-        )
+    async def test_admin_audit_log(self, client, admin_auth_header):
+        resp = await client.get("/api/admin/audit-log", headers=admin_auth_header)
         assert resp.status_code == 200
 
     @pytest.mark.anyio
-    async def test_admin_invalidate_cache(self, client):
-        resp = await client.post(
-            "/api/admin/invalidate-cache",
-            headers={"Authorization": "Bearer admin"},
-        )
+    async def test_admin_invalidate_cache(self, client, admin_auth_header):
+        resp = await client.post("/api/admin/invalidate-cache", headers=admin_auth_header)
         assert resp.status_code == 200
 
     @pytest.mark.anyio
-    async def test_admin_upload_screening_empty(self, client):
+    async def test_admin_upload_screening_empty(self, client, admin_auth_header):
         """Upload empty data should be rejected or handled."""
         resp = await client.post(
             "/api/admin/upload-screening",
-            headers={"Authorization": "Bearer admin"},
+            headers=admin_auth_header,
             json={"data": {}},
         )
         assert resp.status_code in (200, 400, 422)

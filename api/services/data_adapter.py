@@ -177,17 +177,36 @@ def _build_disease_entry(district_row: dict, disease_key: str, lab_row: dict, ri
 # DB queries (replace HTTP SummaryAPIClient)
 # ---------------------------------------------------------------------------
 def _fetch_districts() -> list:
-    """Fetch all districts from summary_district_disease view."""
+    """Fetch all districts from summary_district_disease view.
+
+    NOTE: summary_district_disease has 3 rows per district (one per
+    data_source: app1/app2/portal). Aggregate by district_code so totals
+    match the production /api/v2/summary/overview endpoint, otherwise the
+    agent reports only the alphabetically-last source ("portal").
+    """
     return execute_query("""
-        SELECT d.district_code, d.zone_code, d.total_screened,
-               d.risk_dm_count, d.risk_hpt_count, d.risk_cvd_count, d.risk_bmi_count,
-               d.pct_risk_dm, d.pct_risk_hpt, d.pct_risk_cvd,
-               d.found_dm_count, d.found_hpt_count, d.found_cvd_count,
-               d.found_stroke_count, d.found_obesity_count, d.found_dyslipidemia_count,
-               COALESCE(rd.name_th, d.district_code) AS district_name,
-               COALESCE(rd.name_en, d.district_code) AS district_name_en
+        SELECT d.district_code,
+               MAX(d.zone_code) AS zone_code,
+               SUM(d.total_screened) AS total_screened,
+               SUM(d.risk_dm_count) AS risk_dm_count,
+               SUM(d.risk_hpt_count) AS risk_hpt_count,
+               SUM(d.risk_cvd_count) AS risk_cvd_count,
+               SUM(d.risk_bmi_count) AS risk_bmi_count,
+               -- Recompute % from summed counts (weighted, k-anonymous-safe)
+               ROUND(100.0 * SUM(d.risk_dm_count)::numeric  / NULLIF(SUM(d.total_screened), 0), 2) AS pct_risk_dm,
+               ROUND(100.0 * SUM(d.risk_hpt_count)::numeric / NULLIF(SUM(d.total_screened), 0), 2) AS pct_risk_hpt,
+               ROUND(100.0 * SUM(d.risk_cvd_count)::numeric / NULLIF(SUM(d.total_screened), 0), 2) AS pct_risk_cvd,
+               SUM(d.found_dm_count) AS found_dm_count,
+               SUM(d.found_hpt_count) AS found_hpt_count,
+               SUM(d.found_cvd_count) AS found_cvd_count,
+               SUM(d.found_stroke_count) AS found_stroke_count,
+               SUM(d.found_obesity_count) AS found_obesity_count,
+               SUM(d.found_dyslipidemia_count) AS found_dyslipidemia_count,
+               COALESCE(MAX(rd.name_th), d.district_code) AS district_name,
+               COALESCE(MAX(rd.name_en), d.district_code) AS district_name_en
         FROM summary_district_disease d
         LEFT JOIN ref_districts rd ON rd.dcode = d.district_code
+        GROUP BY d.district_code
         ORDER BY d.district_code
     """)
 

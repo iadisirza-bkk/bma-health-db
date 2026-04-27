@@ -159,7 +159,7 @@ def correlation_matrix():
         FROM ref_districts d
         LEFT JOIN summary_district_disease s ON d.dcode = s.district_code
         LEFT JOIN summary_district_lab l ON d.dcode = l.district_code
-        LEFT JOIN summary_bmi_waist b ON d.dcode = b.district_code AND b.sex = -1
+        LEFT JOIN summary_bmi_waist b ON d.dcode = b.district_code AND b.sex = 'all'
         WHERE COALESCE(s.total_screened, 0) >= 5
         ORDER BY d.dcode
     """)
@@ -236,3 +236,65 @@ def research_export(
 
     return {"format": "json", "type": "aggregate_district_level",
             "k_anonymity": 5, "records": len(districts), "data": districts}
+
+
+# ------------------------------------------------------------------ #
+# GET /api/v2/research/ncd-diagnostic-report
+# ------------------------------------------------------------------ #
+
+@router.get("/ncd-diagnostic-report")
+def ncd_diagnostic_report():
+    """NCD diagnostic-axis report (clinical dashboard).
+
+    For each of 11 NCDs, return 4 metrics:
+      - at_risk         : screening risk flag (RISKDM/RISKHPT/...)
+      - sick_clinical   : confirmed/self-reported (FOUND_*)
+      - new_clinical    : found_* AND lab not abnormal
+                          → clinically detected (lab didn't catch)
+      - new_from_lab    : lab criterion met AND NOT found_*
+                          → lab caught what self-report missed
+
+    Lab thresholds per ราชวิทยาลัย/MOPH:
+      DM           FBS ≥ 126 mg/dL
+      HPT          SBP ≥ 140 OR DBP ≥ 90 mmHg
+      Dyslipidemia Cholesterol ≥ 200 mg/dL
+      Obesity      BMI ≥ 23 kg/m²
+      CKD          eGFR < 60 mL/min/1.73m²
+      Liver        SGOT ≥ 120 OR SGPT ≥ 120 U/L
+      Anemia       Hemoglobin < 13 (M) / < 12 (F) g/dL
+
+    Reads from `mv_ncd_diagnostic_report` (refreshed by refresh_all_mvs after
+    each ETL import; ~5ms response).
+    """
+    rows = execute_query("""
+        SELECT disease_key, disease_name_th, lab_threshold,
+               at_risk, sick_clinical, new_clinical, new_from_lab,
+               has_lab_threshold
+        FROM public.mv_ncd_diagnostic_report
+        ORDER BY
+          CASE disease_key
+            WHEN 'diabetes' THEN 1 WHEN 'hypertension' THEN 2
+            WHEN 'dyslipidemia' THEN 3 WHEN 'obesity' THEN 4
+            WHEN 'kidney' THEN 5 WHEN 'liver' THEN 6
+            WHEN 'anemia' THEN 7 WHEN 'cardiovascular' THEN 8
+            WHEN 'stroke' THEN 9 WHEN 'cervical_cancer' THEN 10
+            WHEN 'colorectal_cancer' THEN 11 END
+    """)
+
+    total_screened = execute_scalar("""
+        SELECT COUNT(DISTINCT patient_id)
+        FROM public.mv_visit_resolved
+        WHERE bucket = 'bkk' AND is_dedup_kept
+    """) or 0
+
+    return {
+        "total_screened": int(total_screened),
+        "methodology": {
+            "at_risk": "RISKDM/RISKHPT/etc. screening criteria flagged TRUE",
+            "sick_clinical": "FOUND_* flag — clinically confirmed or self-reported during screening",
+            "new_clinical": "FOUND_* TRUE AND lab not over threshold (clinical only)",
+            "new_from_lab": "Lab over threshold AND NOT FOUND_* (lab caught what self-report missed)",
+            "k_anonymity": K_ANONYMITY_THRESHOLD,
+        },
+        "data": rows,
+    }

@@ -24,7 +24,28 @@ def list_zones(sources: Optional[str] = Query(None, description="Comma-separated
     (fact/aggregation-base.md). Optional `sources=` filter restricts to a
     subset (e.g. ?sources=portal).
     """
-    cte = build_unified_cte(parse_sources(sources))
+    parsed_sources = parse_sources(sources)
+
+    # Fast path: no source filter → read pre-aggregated mv_summary_zones (~33s → <50ms)
+    if parsed_sources is None:
+        rows = execute_query("""
+            SELECT zone_code, name_th, name_en, district_count, total_screened, total_visits,
+                   diabetes, hypertension, cardiovascular, obesity, dyslipidemia, stroke
+            FROM public.mv_summary_zones ORDER BY zone_code
+        """)
+        result = []
+        for r in rows:
+            ts = r["total_screened"] or 1
+            diseases = {}
+            for dk in ("diabetes", "hypertension", "cardiovascular", "obesity", "dyslipidemia", "stroke"):
+                cnt = r.pop(dk, 0) or 0
+                diseases[dk] = {"count": cnt, "pct": round(100.0 * cnt / ts, 2)}
+            r["diseases"] = diseases
+            result.append(r)
+        return result
+
+    # Slow path: source-filtered queries fall back to the unified CTE.
+    cte = build_unified_cte(parsed_sources)
     # total_visits sourced from `unified_visits` (>30-day dedup applied).
     # See services/unified_screening.py. Subquery scans the small per-zone
     # district set — fast even at 8 zones.

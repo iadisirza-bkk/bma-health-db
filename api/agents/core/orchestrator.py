@@ -25,6 +25,42 @@ from agents.sse import format_sse
 
 logger = logging.getLogger(__name__)
 
+
+# Thai sentence terminators (most common in user/LLM messages)
+# `\u0e2f` = ฯ (paiyannoi)  | `\u0e46` = ๆ (maiyamok)
+_THAI_SENTENCE_ENDS = (
+    "\n\n", "\n",
+    "ครับ ", "ค่ะ ", "นะคะ ", "นะครับ ",
+    "ครับ.", "ค่ะ.", "ครับ\n", "ค่ะ\n",
+    ". ", "? ", "! ", ".\n", "?\n", "!\n",
+    "\u0e2f ", "\u0e2f\n",
+)
+
+
+def _truncate_thai(text: str, max_chars: int = 400) -> str:
+    """Truncate `text` to roughly max_chars without cutting mid-sentence.
+
+    Strategy:
+      1. Anything <= max_chars: return as-is.
+      2. Find the latest sentence terminator before max_chars and cut there.
+      3. If no terminator is found in the last 60% of the window, fall
+         through to a hard slice + ellipsis (better than cutting mid-word).
+    """
+    if not text or len(text) <= max_chars:
+        return text
+    window = text[:max_chars]
+    soft_floor = int(max_chars * 0.4)  # don't cut earlier than 40% of budget
+    best_idx = -1
+    for term in _THAI_SENTENCE_ENDS:
+        idx = window.rfind(term)
+        if idx > soft_floor and idx > best_idx:
+            best_idx = idx + len(term)
+    if best_idx > 0:
+        return text[:best_idx].rstrip()
+    # No sentence terminator — fall back to word boundary if possible.
+    # Thai doesn't use spaces between words, so just hard-slice with ellipsis.
+    return text[:max_chars].rstrip() + "\u2026"
+
 # Load system prompt from skill guide
 _SKILL_PATH = Path(__file__).parent.parent / "prompts" / "health_assistant_skill.md"
 try:
@@ -48,12 +84,18 @@ _ON_TOPIC_KEYWORDS = {
     "สูบบุหรี่", "เหล้า", "แอลกอฮอล์", "ออกกำลังกาย", "พฤติกรรม",
     "ซึมเศร้า", "สุขภาพจิต", "PHQ", "ความเครียด",
     "รพ.", "โรงพยาบาล", "1555", "คำแนะนำ",
+    # New insight-tool terms (province / facility / cascade / profile)
+    "ตจว", "ต่างจังหวัด", "นอกกทม", "นอก กทม", "จังหวัด", "ภูมิภาค", "ภาค",
+    "คลินิก", "ร้านยา", "facility", "สถานพยาบาล", "หน่วยบริการ",
+    "cascade", "เส้นทาง", "ขั้นตอน", "ผ่าน",
+    "โปรไฟล์", "profile", "ลักษณะ", "อันดับ", "สูงสุด", "ต่ำสุด", "ranking",
     # Time/context terms (allow follow-up corrections)
     "ปี", "ปีนี้", "ปีที่แล้ว", "เดือน", "ไตรมาส", "2024", "2025", "2026",
     # English health terms
     "health", "screening", "diabetes", "hypertension", "obesity", "disease",
     "risk", "district", "zone", "bangkok", "report", "chart", "compare",
     "prevalence", "lab", "cholesterol", "bmi", "blood", "year", "trend",
+    "province", "region", "monthly", "quarter", "phq", "phq-9", "stress",
 }
 
 _REFUSAL_RESPONSE = (
@@ -184,19 +226,15 @@ class OpenMultiAgent:
             analyst = team.get_agent("analyst")
             synthesizer = team.get_agent("synthesizer")
 
-            # Build messages with trimmed history (3 turns, 200 chars max)
+            # Build messages with trimmed history (last 4 turns, ~400 chars each)
             messages = [{"role": "system", "content": SYSTEM_PROMPT}]
             if conv_history:
                 for m in conv_history[-4:]:
                     if m.get("role") in ("user", "assistant") and m.get("content"):
-                        text = m["content"][:400]
-                        if len(m["content"]) > 400:
-                            for end in ["\n", "ครับ", "ค่ะ", ". "]:
-                                idx = text.rfind(end)
-                                if idx > 100:
-                                    text = text[:idx + len(end)]
-                                    break
-                        messages.append({"role": m["role"], "content": text})
+                        messages.append({
+                            "role": m["role"],
+                            "content": _truncate_thai(m["content"], max_chars=400),
+                        })
             messages.append({"role": "user", "content": user_message})
 
             # ===== Check: Report from history (no tools needed) =====
@@ -277,10 +315,27 @@ class OpenMultiAgent:
 
             for tc in response.tool_calls:
                 fn_name = tc["function"]["name"]
+                raw_args = tc["function"]["arguments"]
+                args_malformed = False
                 try:
-                    fn_args = json.loads(tc["function"]["arguments"]) if isinstance(tc["function"]["arguments"], str) else tc["function"]["arguments"]
-                except (json.JSONDecodeError, TypeError):
+                    fn_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                    if not isinstance(fn_args, dict):
+                        # LLM returned valid JSON but not an object (e.g., a list or string)
+                        raise TypeError(f"tool args must be an object, got {type(fn_args).__name__}")
+                except (json.JSONDecodeError, TypeError) as e:
                     fn_args = {}
+                    args_malformed = True
+                    # Surface the failure in logs + downstream tool result so a
+                    # debugging operator can see the LLM's bad output verbatim.
+                    raw_preview = (raw_args if isinstance(raw_args, str) else str(raw_args))[:200]
+                    logger.warning(
+                        "Tool %s called with malformed args (%s): %r",
+                        fn_name, type(e).__name__, raw_preview,
+                    )
+                    yield format_sse({
+                        "type": "warning",
+                        "message": f"LLM ส่ง argument ที่ parse ไม่ได้ให้ tool `{fn_name}` — ใช้ค่าเริ่มต้นแทน",
+                    })
 
                 # Clarification stops pipeline
                 if fn_name == "ask_clarification":

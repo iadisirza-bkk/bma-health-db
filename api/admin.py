@@ -79,13 +79,14 @@ _etl_mtime: Optional[float] = None
 
 
 def _load_etl():
-    """Lazy-load ETL module; reload automatically when import_csv.py changes.
+    """Lazy-load the legacy MV-refresh helper (etl/refresh_legacy_summaries.py).
 
-    Uses file mtime to detect edits, so changes to etl/import_csv.py take
-    effect on the next import without restarting the API server.
+    All v1 ETL logic has been removed; only `refresh_all_summaries(cur)` is
+    still called from /admin/refresh and /admin/erasure. Uses mtime to reload
+    on edits without restarting the API server, mirroring _load_etl_v3.
     """
     global _etl_mod, _etl_mtime
-    etl_path = os.path.join(ETL_DIR, "import_csv.py")
+    etl_path = os.path.join(ETL_DIR, "refresh_legacy_summaries.py")
     try:
         current_mtime = os.path.getmtime(etl_path)
     except OSError:
@@ -94,12 +95,12 @@ def _load_etl():
     if _etl_mod is not None and current_mtime == _etl_mtime:
         return _etl_mod
 
-    spec = importlib.util.spec_from_file_location("etl_import", etl_path)
+    spec = importlib.util.spec_from_file_location("etl_refresh_legacy", etl_path)
     _etl_mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(_etl_mod)
     _etl_mtime = current_mtime
     if _etl_mtime is not None:
-        logger.info("Loaded etl/import_csv.py (mtime=%s)", _etl_mtime)
+        logger.info("Loaded etl/refresh_legacy_summaries.py (mtime=%s)", _etl_mtime)
     return _etl_mod
 
 
@@ -134,6 +135,49 @@ def _load_etl_v3():
     return _etl_v3_mod
 
 CURRENT_YEAR = int(os.getenv("CURRENT_YEAR", str(datetime.now().year)))
+
+
+# --------------------------------------------------------------------------- #
+# v3 schema migration banner — for pages whose queries pre-date migration 105
+# --------------------------------------------------------------------------- #
+# Migration 105 dropped the legacy `raw_*` MVs and the four analytical pages
+# (data-quality, cleansing-report, cross-stats, agreement) still query the
+# old `raw_patients / raw_visits / raw_vitalsigns / raw_lab_results / …`
+# tables. On a v3-only deployment the queries either return empty results
+# (legacy compat tables exist but are empty) or fail outright.
+#
+# Until the pages are rewritten against `private.*` + `public.mv_*`,
+# render a banner so the operator isn't fooled by silent zeros. We treat
+# the page as "pending v3 rewrite" when EVERY raw_* canonical table has
+# zero rows (i.e. no legacy data is present).
+# --------------------------------------------------------------------------- #
+
+_RAW_LEGACY_TABLES = (
+    "raw_patients", "raw_visits", "raw_vitalsigns",
+    "raw_homevisit", "raw_homehealth",
+    "raw_lab_results", "raw_lab_extended",
+)
+
+
+def _legacy_raw_has_data() -> bool:
+    """True iff at least ONE raw_* canonical table has rows.
+
+    On a v3-only DB these tables exist as empty compat shells (see
+    db/migrations/105_*) but never see new inserts. If no raw_* table has
+    data, the four analytical pages cannot produce meaningful output and
+    the page should render the "v3 migration pending" banner.
+    """
+    for tbl in _RAW_LEGACY_TABLES:
+        try:
+            n = execute_scalar(f'SELECT 1 FROM "{tbl}" LIMIT 1')
+            if n is not None:
+                return True
+        except Exception:
+            # Table doesn't exist (deeper-v3 deploy where migration 105 was
+            # extended to drop raw_*). Treat as no data.
+            continue
+    return False
+
 
 # --------------------------------------------------------------------------- #
 # Import concurrency lock
@@ -207,26 +251,44 @@ def _delete_for_sources(cur, sources: List[str]) -> str:
     placeholders = ",".join(["%s"] * len(sources))
     params = tuple(sources)
 
-    # Delete visit/lab events for these sources (cascades to measurements)
+    # ── Bulk-delete child measurement tables FIRST, then events ──
+    # The FK from visit_measurement → visit_event has ON DELETE CASCADE, so a
+    # naive DELETE on visit_event triggers per-row cascade (slow at scale —
+    # ~150s for portal source which fans out to ~49M visit_measurement rows
+    # across 16 hash partitions × 4 indexes each). A manual bulk DELETE on
+    # the child first lets Postgres use a single hash semi-join (~30-40s) and
+    # the parent DELETE then has nothing to cascade.
+    cur.execute(f"""
+        DELETE FROM private.visit_measurement vm
+         USING private.visit_event ve
+         WHERE vm.visit_id = ve.id
+           AND ve.source_code IN ({placeholders})
+    """, params)
+    cur.execute(f"""
+        DELETE FROM private.lab_measurement lm
+         USING private.lab_event le
+         WHERE lm.lab_id = le.id
+           AND le.source_code IN ({placeholders})
+    """, params)
     cur.execute(f"DELETE FROM private.visit_event WHERE source_code IN ({placeholders})", params)
     cur.execute(f"DELETE FROM private.lab_event   WHERE source_code IN ({placeholders})", params)
 
-    # Find patients EXCLUSIVELY in these sources (not in any other source)
-    cur.execute(f"""
-        WITH only_in_sources AS (
-          SELECT pa.patient_id
-          FROM private.patient_alias pa
-          GROUP BY pa.patient_id
-          HAVING bool_and(pa.source_code IN ({placeholders}))
-        )
-        DELETE FROM private.patient_alias
-        WHERE source_code IN ({placeholders})
-    """, params + params)
+    # Drop patient_alias rows for the targeted sources. The CTE used to be
+    # required to identify "exclusively in these sources" — but the orphan
+    # cleanup below handles that more directly, so the simple DELETE suffices.
+    cur.execute(
+        f"DELETE FROM private.patient_alias WHERE source_code IN ({placeholders})",
+        params,
+    )
 
-    # Delete patients now alias-orphaned (no remaining alias)
+    # Delete patients now alias-orphaned (no remaining alias).
+    # NOT EXISTS is safer + faster than NOT IN (no NULL-semantics quirks; PG
+    # plans this as a hash anti-join in one pass).
     cur.execute("""
-        DELETE FROM private.patient
-        WHERE id NOT IN (SELECT patient_id FROM private.patient_alias)
+        DELETE FROM private.patient p
+         WHERE NOT EXISTS (
+           SELECT 1 FROM private.patient_alias pa WHERE pa.patient_id = p.id
+         )
     """)
 
     return "delete " + ",".join(sources)
@@ -961,9 +1023,32 @@ async def dashboard(request: Request, source: str = "all"):
     Query params:
       source: all | portal | app1 | app2 (default: all) — filters raw table
               counts and materialized view row counts per data_source.
+
+    Uses a 5-minute Redis cache for the heavy COUNT queries on partitioned
+    private.* tables (visit_measurement is 28M rows). Bundle-import explicitly
+    calls cache_flush_all() at the end so this never serves stale data after
+    a real upload.
     """
     _require_auth(request)
     source = _normalize_source(source)
+
+    # ── Cache: dashboard contents per source. ──
+    # 5-min TTL is safe because cache_flush_all is called after every import.
+    from cache import cache_get, cache_set
+    _dashboard_cache_key = f"admin:dashboard:{source}"
+    _cached_ctx = cache_get(_dashboard_cache_key)
+    if _cached_ctx is not None:
+        csrf_token = _generate_csrf_token(request)
+        response = templates.TemplateResponse(
+            "admin/dashboard.html",
+            {**_cached_ctx,
+             "request": request,
+             "messages": _get_flash(request),
+             "csrf_token": csrf_token},
+        )
+        response.set_cookie("csrf_token", csrf_token, httponly=True,
+                            samesite="strict", max_age=86400)
+        return response
 
     db_available = True
     raw_tables = []
@@ -1011,18 +1096,29 @@ async def dashboard(request: Request, source: str = "all"):
              """SELECT COUNT(*) AS n_records,
                        COUNT(DISTINCT patient_id) AS n_people
                 FROM private.patient_address{src_addr}"""),
+            # homehealth/lab_extended: avoid the expensive JOIN-back-to-event by
+            # using pg_class partition-row estimates for n_records (instant) and
+            # reusing visit/lab event distinct-patient count for n_people.
+            # `JOIN visit_event` over 28M visit_measurement rows costs ~28s; this
+            # pre-aggregated path costs <50ms.
             ("private.visit_measurement",  "homehealth",
-             """SELECT COUNT(*) AS n_records,
-                       COUNT(DISTINCT ve.patient_id) AS n_people
-                FROM private.visit_measurement vm
-                JOIN private.visit_event ve ON ve.id = vm.visit_id
-                WHERE 1=1{src_visit_v}"""),
+             """SELECT
+                  (SELECT COALESCE(SUM(c.reltuples)::bigint, 0)
+                   FROM pg_class c
+                   JOIN pg_inherits i ON i.inhrelid = c.oid
+                   JOIN pg_class p ON p.oid = i.inhparent
+                   WHERE p.relname = 'visit_measurement') AS n_records,
+                  (SELECT COUNT(DISTINCT patient_id)
+                   FROM private.visit_event WHERE cancel_status = 0{src_visit}) AS n_people"""),
             ("private.lab_measurement",    "lab_extended",
-             """SELECT COUNT(*) AS n_records,
-                       COUNT(DISTINCT le.patient_id) AS n_people
-                FROM private.lab_measurement lm
-                JOIN private.lab_event le ON le.id = lm.lab_id
-                WHERE 1=1{src_lab_l}"""),
+             """SELECT
+                  (SELECT COALESCE(SUM(c.reltuples)::bigint, 0)
+                   FROM pg_class c
+                   JOIN pg_inherits i ON i.inhrelid = c.oid
+                   JOIN pg_class p ON p.oid = i.inhparent
+                   WHERE p.relname = 'lab_measurement') AS n_records,
+                  (SELECT COUNT(DISTINCT patient_id)
+                   FROM private.lab_event WHERE cancel_status = 0{src_lab}) AS n_people"""),
         ]
         # Source filter substitutions
         v_src       = " AND source_code = %s" if source != "all" else ""
@@ -1157,21 +1253,28 @@ async def dashboard(request: Request, source: str = "all"):
         people_counts = {}
 
     csrf_token = _generate_csrf_token(request)
+    # Cacheable subset of the template context. Excludes request/messages/csrf
+    # which are per-request and must be regenerated on every hit.
+    ctx_cacheable = {
+        "table_counts": table_counts,
+        "people_counts": people_counts if db_available else {},
+        "raw_tables": raw_tables,
+        "view_info": view_info,
+        "source": source,
+        "source_values": _SOURCE_VALUES,
+        "source_breakdown": source_breakdown,
+        "coverage_stats": coverage_stats,
+    }
+    if db_available:
+        # 5-minute TTL — invalidated on next bundle import via cache_flush_all
+        cache_set(_dashboard_cache_key, ctx_cacheable, 300)
+
     response = templates.TemplateResponse(
         "admin/dashboard.html",
-        {
-            "request": request,
-            "table_counts": table_counts,
-            "people_counts": people_counts if db_available else {},
-            "raw_tables": raw_tables,
-            "view_info": view_info,
-            "messages": messages,
-            "csrf_token": csrf_token,
-            "source": source,
-            "source_values": _SOURCE_VALUES,
-            "source_breakdown": source_breakdown,
-            "coverage_stats": coverage_stats,
-        },
+        {**ctx_cacheable,
+         "request": request,
+         "messages": messages,
+         "csrf_token": csrf_token},
     )
     # Clear flash cookie after reading
     response.delete_cookie("flash_message")
@@ -1447,13 +1550,21 @@ async def refresh_views(request: Request):
         raise HTTPException(status_code=403, detail="CSRF validation failed")
 
     try:
-        etl = _load_etl()
+        # v3: refresh public.mv_* via the SQL function. Returns one row per
+        # view: (view_name, status). Status='ok' on success, otherwise the
+        # error short-text. (The legacy etl.refresh_all_summaries() helper
+        # only knew how to refresh the dropped summary_district_disease MV.)
         with get_conn() as conn:
             cur = conn.cursor()
-            etl.refresh_all_summaries(cur)
+            cur.execute("SELECT view_name, status FROM public.refresh_all_mvs()")
+            results = cur.fetchall()
             conn.commit()
 
-        # Flush Redis cache after view refresh
+        ok = [r[0] for r in results if r[1] == "ok"]
+        failed = [(r[0], r[1]) for r in results if r[1] != "ok"]
+
+        # Flush Redis cache after view refresh — the data downstream of the
+        # MVs is what the API/frontend serve, so caches must drop too.
         try:
             from cache import cache_flush_all
             cache_flush_all()
@@ -1461,7 +1572,18 @@ async def refresh_views(request: Request):
             pass
 
         response = RedirectResponse(url="/admin/dashboard", status_code=303)
-        _set_flash(response, "success", "Materialized views refreshed successfully. Cache flushed.")
+        if failed:
+            details = ", ".join(f"{n}: {s}" for n, s in failed)
+            _set_flash(
+                response, "warning",
+                f"Refreshed {len(ok)} MVs OK, {len(failed)} failed — {details}",
+            )
+        else:
+            names = ", ".join(ok) if ok else "(no MVs found)"
+            _set_flash(
+                response, "success",
+                f"Materialized views refreshed: {len(ok)} OK ({names}). Cache flushed.",
+            )
     except Exception as exc:
         logger.exception("Failed to refresh materialized views")
         response = RedirectResponse(url="/admin/dashboard", status_code=303)
@@ -1628,10 +1750,16 @@ async def data_quality_page(request: Request):
     # Fetch data quality info
     data_quality = {}
     cleansing = {}
+    # Migration 105 dropped the legacy raw_* MVs; the queries below still
+    # target the legacy compat tables. If no raw_* table has data (v3-only
+    # deployment), short-circuit and let the template render a banner.
+    v3_pending = not _legacy_raw_has_data()
     try:
         # Query data quality directly (same logic as the API endpoint)
         tables = ["raw_patients", "raw_visits", "raw_vitalsigns", "raw_homevisit",
                   "raw_homehealth", "raw_lab_results", "raw_lab_extended"]
+        if v3_pending:
+            tables = []  # skip queries entirely on v3-only DB
         for table in tables:
             total = execute_scalar(f'SELECT COUNT(*) FROM "{table}"') or 0
             if total == 0:
@@ -1676,6 +1804,7 @@ async def data_quality_page(request: Request):
             "request": request,
             "data_quality": data_quality,
             "cleansing": cleansing,
+            "v3_pending": v3_pending,
             "messages": _get_flash(request),
         },
     )
@@ -2102,29 +2231,39 @@ async def agreement_page(request: Request, pair: str = "portal-app1"):
                 "all_pairs": [("portal", "app1"), ("portal", "app2"), ("app1", "app2")],
                 "report": None,
                 "load_error": _sanitize_error(exc),
+                "v3_pending": False,
                 "messages": _get_flash(request),
             },
         )
 
     source_a, source_b = normalize_pair(pair)
 
-    # Fast path — skip heavy compute if either source has 0 rows
-    present_q = execute_query(
-        "SELECT data_source, COUNT(*) AS n FROM raw_patients GROUP BY data_source"
-    ) or []
-    present = {r["data_source"]: r["n"] for r in present_q if r["n"] > 0}
-    sources_present = set(present.keys())
-
+    # Fast path — skip heavy compute if either source has 0 rows.
+    # Note: agreement_service still reads from `raw_patients` etc.; until it
+    # is rewritten against private.* the page can only render against legacy
+    # data. Treat absence of raw_* rows as v3_pending so the user gets a
+    # clear banner instead of a misleading "ไม่สามารถวิเคราะห์ได้" screen.
+    v3_pending = not _legacy_raw_has_data()
+    sources_present: set = set()
     report = None
-    if source_a in sources_present and source_b in sources_present:
+    if not v3_pending:
         try:
-            report = build_agreement_report(source_a, source_b, with_plots=True)
-        except Exception as exc:
-            logger.exception("build_agreement_report failed")
-            report = {"error": _sanitize_error(exc),
-                      "source_a": source_a, "source_b": source_b,
-                      "n_common_patients": 0,
-                      "continuous": [], "categorical": []}
+            present_q = execute_query(
+                "SELECT data_source, COUNT(*) AS n FROM raw_patients GROUP BY data_source"
+            ) or []
+            sources_present = {r["data_source"] for r in present_q if r["n"] > 0}
+        except Exception:
+            sources_present = set()
+
+        if source_a in sources_present and source_b in sources_present:
+            try:
+                report = build_agreement_report(source_a, source_b, with_plots=True)
+            except Exception as exc:
+                logger.exception("build_agreement_report failed")
+                report = {"error": _sanitize_error(exc),
+                          "source_a": source_a, "source_b": source_b,
+                          "n_common_patients": 0,
+                          "continuous": [], "categorical": []}
 
     return templates.TemplateResponse(
         "admin/agreement.html",
@@ -2135,6 +2274,7 @@ async def agreement_page(request: Request, pair: str = "portal-app1"):
             "sources_present": sources_present,
             "report": report,
             "load_error": None,
+            "v3_pending": v3_pending,
             "messages": _get_flash(request),
         },
     )
@@ -2166,26 +2306,33 @@ async def cleansing_report_page(request: Request):
 
     sources = ("portal", "app1", "app2")
     rows_per_source: Dict[str, Dict[str, int]] = {}
+    # INCLUSION_CRITERIA still references legacy raw_* tables. On a v3-only
+    # deployment there's no data to count → skip the queries and let the
+    # template render the v3-pending banner.
+    v3_pending = not _legacy_raw_has_data()
     # Source totals — for the denominator
-    try:
-        for tbl in by_table.keys():
-            rows_per_source[tbl] = {}
-            for src in sources:
-                n = execute_scalar(
-                    f'SELECT COUNT(*) FROM "{tbl}" WHERE data_source = %s',
-                    (src,),
-                ) or 0
-                rows_per_source[tbl][src] = int(n)
-    except Exception as exc:
-        logger.warning("cleansing-report totals failed: %s", exc)
+    if not v3_pending:
+        try:
+            for tbl in by_table.keys():
+                rows_per_source[tbl] = {}
+                for src in sources:
+                    n = execute_scalar(
+                        f'SELECT COUNT(*) FROM "{tbl}" WHERE data_source = %s',
+                        (src,),
+                    ) or 0
+                    rows_per_source[tbl][src] = int(n)
+        except Exception as exc:
+            logger.warning("cleansing-report totals failed: %s", exc)
 
     # Per-field non-null counts in 1 query per (table, source) using
     # COUNT(col1), COUNT(col2), ...
+    # On v3-only DB this loop is skipped via `not by_table` guard below;
+    # every (table, column) falls through to an `applicable: False` placeholder.
     field_stats: Dict[str, Dict] = {}   # key = (table, column) → {portal: {non_null,pct}, app1: ..., app2: ...}
     try:
         from database import get_conn
         import psycopg2.extras
-        for tbl, entries in by_table.items():
+        for tbl, entries in (by_table.items() if not v3_pending else []):
             cols = [e["column"] for e in entries]
             # filter out columns that don't exist in DB (e.g. typos)
             db_cols = set(_table_columns(tbl))
@@ -2264,6 +2411,7 @@ async def cleansing_report_page(request: Request):
             "sources": list(sources),
             "rows_per_source": rows_per_source,
             "csrf_token": csrf_token,
+            "v3_pending": v3_pending,
             "messages": _get_flash(request),
         },
     )
@@ -2283,11 +2431,33 @@ async def cross_stats_page(request: Request, tab: str = "coverage"):
     if tab not in ("coverage", "distribution", "quality"):
         tab = "coverage"
 
-    # Which sources actually have data (to show "no data yet" notices)
-    presence = execute_query(
-        "SELECT data_source, COUNT(*) AS n FROM raw_patients GROUP BY data_source"
-    ) or []
-    sources_present = {r["data_source"] for r in presence if r["n"] > 0}
+    # Coverage + distribution still work — they query summary_district_disease
+    # which is a v3 compat view (migration 105 preserved it). Only the quality
+    # tab depends on legacy raw_* tables. The "sources_present" probe also
+    # hits raw_patients; if that's empty, derive presence from the v3 view
+    # instead so the coverage tab still labels its sources correctly.
+    legacy_has_data = _legacy_raw_has_data()
+    v3_pending = not legacy_has_data  # quality tab cannot render without raw_*
+
+    sources_present: set = set()
+    if legacy_has_data:
+        try:
+            presence = execute_query(
+                "SELECT data_source, COUNT(*) AS n FROM raw_patients GROUP BY data_source"
+            ) or []
+            sources_present = {r["data_source"] for r in presence if r["n"] > 0}
+        except Exception:
+            sources_present = set()
+    else:
+        # v3-only: probe summary_district_disease (compat view) for presence
+        try:
+            presence = execute_query(
+                "SELECT data_source, SUM(total_screened)::int AS n "
+                "FROM summary_district_disease GROUP BY data_source"
+            ) or []
+            sources_present = {r["data_source"] for r in presence if (r["n"] or 0) > 0}
+        except Exception:
+            sources_present = set()
 
     coverage: List[Dict] = []
     distribution: Dict = {}
@@ -2296,7 +2466,9 @@ async def cross_stats_page(request: Request, tab: str = "coverage"):
     try:
         coverage     = _coverage_matrix()
         distribution = _distribution_comparison()
-        quality      = _data_quality_per_source()
+        # _data_quality_per_source reads raw_* — skip on v3-only DBs
+        if legacy_has_data:
+            quality  = _data_quality_per_source()
     except Exception as exc:
         logger.exception("cross-stats failed: %s", exc)
 
@@ -2317,6 +2489,8 @@ async def cross_stats_page(request: Request, tab: str = "coverage"):
             "coverage_max": max_n or 1,
             "distribution": distribution,
             "quality": quality,
+            # quality tab is the only one that depends on legacy raw_* tables
+            "v3_pending_quality_tab": v3_pending,
             "messages": _get_flash(request),
         },
     )
@@ -2632,6 +2806,76 @@ def _detect_file_type_from_name(name: str) -> Optional[str]:
     return None
 
 
+# --------------------------------------------------------------------------- #
+# Facility bootstrap — one-time seed of private.facility from clinic_latlong.xls
+# --------------------------------------------------------------------------- #
+# v3 ETL `etl/import_csv_v3.py:_validate_facility` queries `private.facility`.
+# When that table is empty, every visit's `facility_code` is silently NULLed
+# and facility-level KPIs / map pins return zero data. This helper seeds the
+# table from the bundled XLS so a fresh deployment Just Works.
+
+_FACILITY_XLS = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "fact", "clinic_latlong.xls"
+)
+
+
+def _ensure_facilities_seeded(conn) -> Optional[Dict]:
+    """If private.facility is empty, run etl/import_facilities.py on the
+    bundled XLS. Returns import stats or None when no action was taken.
+
+    Idempotent: skips entirely when the table has any rows.
+    """
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM private.facility")
+    n = cur.fetchone()[0]
+    cur.close()
+    if n > 0:
+        return None  # already seeded — nothing to do
+
+    if not os.path.exists(_FACILITY_XLS):
+        logger.warning(
+            "Facility seed skipped: %s not found", _FACILITY_XLS
+        )
+        return {"skipped": True, "reason": "xls_missing"}
+
+    # Lazy-load etl/import_facilities.py via spec_from_file_location to
+    # match the existing v1/v3 ETL loader pattern.
+    spec = importlib.util.spec_from_file_location(
+        "etl_import_facilities",
+        os.path.join(ETL_DIR, "import_facilities.py"),
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    df = mod.load_xls(_FACILITY_XLS)
+    stats = mod.import_facilities(conn, df)
+    logger.info(
+        "Facility seed: ref_facilities=%d, private.facility=%d (%s)",
+        stats.get("inserted", 0), stats.get("v3_inserted", 0),
+        "v3 schema present" if not stats.get("v3_skipped")
+        else "v3 schema not present (skipped)",
+    )
+
+    # Geocode facilities: lat/lng → district_code + zone_code via point-in-polygon.
+    # Without this, gis/facilities can't filter by zone and the choropleth
+    # zone-summary aggregations miss facility counts. Non-fatal.
+    try:
+        geo_spec = importlib.util.spec_from_file_location(
+            "etl_geocode_facilities",
+            os.path.join(ETL_DIR, "geocode_facilities.py"),
+        )
+        geo_mod = importlib.util.module_from_spec(geo_spec)
+        geo_spec.loader.exec_module(geo_mod)
+        matched = geo_mod.geocode(dry_run=False)
+        stats["geocoded"] = matched
+        logger.info("Facility geocode: matched=%d", matched)
+    except Exception as exc:
+        logger.warning("Facility geocode skipped (non-fatal): %s", exc)
+        stats["geocoded"] = 0
+
+    return stats
+
+
 def _run_bundle_import(manifest: List[Dict], history_id: int):
     """Import all CSV files in the manifest in correct order.
 
@@ -2672,6 +2916,33 @@ def _run_bundle_import(manifest: List[Dict], history_id: int):
         _update_progress(history_id, "delete prior data", 1)
         delete_label = _delete_for_sources(cur, sources_in_bundle)
         logger.info("Bundle import: %s", delete_label)
+
+        # Ensure private.facility has rows BEFORE we insert visits (the v3 ETL
+        # silently NULLs `facility_code` when the FK target is missing). This
+        # is a one-time seed: idempotent skip when the table is non-empty.
+        _update_progress(history_id, "seed facilities (if empty)", 3)
+        try:
+            seed_stats = _ensure_facilities_seeded(conn)
+            if seed_stats and not seed_stats.get("skipped"):
+                steps_done.append(
+                    f"facility-seed:{seed_stats.get('v3_inserted', 0)}"
+                )
+        except Exception as exc:
+            # Non-fatal: log and continue. The visits will still import (they
+            # just won't have facility_code linked) — better than failing the
+            # whole bundle for a missing optional XLS.
+            logger.warning("Facility seed failed (non-fatal): %s", exc)
+            conn.rollback()
+            # Re-acquire the lock since rollback released it
+            if not _try_acquire_import_lock(cur):
+                _update_history(
+                    history_id, "error", 0, 0,
+                    "Failed to re-acquire import lock after facility seed rollback",
+                    time.time() - start,
+                )
+                return
+            # Re-do the per-source delete in the fresh transaction
+            _delete_for_sources(cur, sources_in_bundle)
 
         # Estimate total work
         total_files = sum(len(v) for v in by_source.values())
@@ -2980,6 +3251,44 @@ async def upload_bundle_submit(request: Request):
     if not manifest:
         response = RedirectResponse(url="/admin/upload-bundle", status_code=303)
         _set_flash(response, "error", "ไม่พบไฟล์ CSV ที่ตรวจจับประเภทได้")
+        return response
+
+    # ─── Pre-flight: variable_definition coverage ───────────────────────
+    # v3 ETL maps each CSV column → variable_id via private.variable_definition.
+    # If a source has zero variable_definition rows, the EAV insert produces
+    # zero measurements (silent partial success). Warn the operator BEFORE
+    # the long-running import starts. (Auto-bootstrapping is risky because
+    # the bootstrap script TRUNCATEs variable_code_value+variable_definition
+    # — we let the operator decide.)
+    sources_in_bundle = sorted({m["source"] for m in manifest})
+    preflight_warnings: List[str] = []
+    try:
+        for src in sources_in_bundle:
+            n = execute_scalar(
+                "SELECT COUNT(*) FROM private.variable_definition "
+                "WHERE source_code = %s AND deprecated_at IS NULL",
+                (src,),
+            ) or 0
+            if int(n) == 0:
+                preflight_warnings.append(
+                    f"private.variable_definition ว่างสำหรับ source={src} — "
+                    "EAV measurements จะไม่ถูก insert. รัน "
+                    "`python etl/bootstrap_variable_definitions.py --xlsx /path/all_var.xlsx` "
+                    "ก่อนแล้วค่อย retry."
+                )
+    except Exception as exc:
+        logger.warning("variable_definition preflight failed: %s", exc)
+
+    if preflight_warnings:
+        # Clean up any tempfiles since we abort the import
+        for m in manifest:
+            try:
+                os.unlink(m["tmp_path"])
+            except OSError:
+                pass
+        response = RedirectResponse(url="/admin/upload-bundle", status_code=303)
+        _set_flash(response, "error",
+                   "Preflight ล้มเหลว: " + " | ".join(preflight_warnings))
         return response
 
     # Build summary for flash message

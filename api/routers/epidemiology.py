@@ -153,12 +153,19 @@ def age_pyramid(
         params.append(zone_code)
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
+    # Exclude the 'all' rollup row from the pyramid (it would double-count).
+    extra_where = "s.sex <> 'all'"
+    if where:
+        full_where = where + " AND " + extra_where
+    else:
+        full_where = "WHERE " + extra_where
+
     rows = execute_query(f"""
         SELECT s.age_group, s.sex,
                SUM(s.total_screened) AS count
         FROM summary_disease_age_sex s
         JOIN ref_districts d ON s.district_code = d.dcode
-        {where}
+        {full_where}
         GROUP BY s.age_group, s.sex
         ORDER BY s.age_group, s.sex
     """, tuple(params) or None)
@@ -171,10 +178,13 @@ def age_pyramid(
             age_map[ag] = {"age_group": ag, "male_count": 0, "female_count": 0}
         sex = r.get("sex")
         cnt = r.get("count") or 0
-        if sex == 1:
+        # summary_disease_age_sex.sex is 'M'/'F'/'unknown' (varchar). Legacy
+        # callers also passed integer 1/2 — keep both for compatibility.
+        if sex in ("M", "1", 1):
             age_map[ag]["male_count"] = int(cnt)
-        elif sex == 2:
+        elif sex in ("F", "2", 2):
             age_map[ag]["female_count"] = int(cnt)
+        # 'unknown' rows fall through silently — k-anon filter below handles them
 
     result = list(age_map.values())
     # Enforce k-anonymity: suppress rows where both counts are below threshold

@@ -1,6 +1,10 @@
 """
-ETL script to load clinic_latlong.xls into ref_facilities.
-Loads 14,092 facility records from the BMA facility registry.
+ETL script to load clinic_latlong.xls into ref_facilities AND private.facility.
+
+Loads 14,092 facility records from the BMA facility registry. Migration 100
+introduced `private.facility` as the v3 canonical table — this script writes
+to BOTH so legacy (ref_facilities) and v3 (private.facility) consumers stay
+in sync.
 
 Usage:
     python etl/import_facilities.py [--xls PATH] [--db DATABASE_URL]
@@ -56,8 +60,15 @@ def load_xls(path: str) -> pd.DataFrame:
 
 
 def import_facilities(conn, df: pd.DataFrame) -> dict:
-    """Insert/update facilities into ref_facilities using batch insert."""
-    stats = {"inserted": 0, "skipped": 0, "total": len(df)}
+    """Insert/update facilities into ref_facilities AND private.facility.
+
+    The two tables overlap on (code, name_th, facility_type, latitude,
+    longitude, address, telephone, ct_id, ct_name) — both are populated
+    in the same transaction so v3 ETL (`etl/import_csv_v3.py:_validate_facility`)
+    sees a non-empty FK target.
+    """
+    stats = {"inserted": 0, "skipped": 0, "total": len(df),
+             "v3_inserted": 0, "v3_skipped": False}
 
     rows_to_insert = []
     seen_codes = set()
@@ -94,9 +105,14 @@ def import_facilities(conn, df: pd.DataFrame) -> dict:
         ct_id = int(row["ct_id"]) if pd.notna(row["ct_id"]) else None
         ct_name = str(row["ct_name"])[:100] if pd.notna(row["ct_name"]) else None
 
-        rows_to_insert.append((code, name_th, ct_name, lat, lng, address, telephone, ct_id, ct_name))
+        # facility_type column is VARCHAR(20) on ref_facilities and VARCHAR(40)
+        # on private.facility — derive from ct_name truncated. Pass full ct_name
+        # separately so v3 still keeps the long form.
+        facility_type = ct_name[:20] if ct_name else None
+        rows_to_insert.append((code, name_th, facility_type, lat, lng, address, telephone, ct_id, ct_name))
 
     cur = conn.cursor()
+    # ─── Legacy: ref_facilities ──────────────────────────────────────────
     psycopg2.extras.execute_batch(cur, """
         INSERT INTO ref_facilities (code, name_th, facility_type, latitude, longitude, address, telephone, ct_id, ct_name)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -109,8 +125,61 @@ def import_facilities(conn, df: pd.DataFrame) -> dict:
             ct_id = EXCLUDED.ct_id,
             ct_name = EXCLUDED.ct_name
     """, rows_to_insert, page_size=500)
-    conn.commit()
     stats["inserted"] = len(rows_to_insert)
+
+    # ─── v3: private.facility (added migration 100) ──────────────────────
+    # `private.facility` has only `code` (PK) and `name_th` (NOT NULL) as
+    # required — district_code/zone_code are FKs but nullable, so we leave
+    # them NULL until a separate geo-coding step backfills them. truncating
+    # 10-char `code` matches the schema VARCHAR(10) constraint.
+    try:
+        cur.execute(
+            "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = 'private' AND table_name = 'facility')"
+        )
+        v3_exists = cur.fetchone()[0]
+    except Exception:
+        v3_exists = False
+        conn.rollback()
+
+    if v3_exists:
+        # private.facility allows facility_type up to 40 chars, so we re-derive
+        # from the original ct_name (r[8]) instead of the 20-char truncation
+        # we passed to ref_facilities.
+        v3_rows = [
+            (
+                r[0][:10],                                  # code (PK, VARCHAR(10))
+                r[1],                                        # name_th
+                (r[8][:40] if r[8] else None),               # facility_type from ct_name
+                r[3],                                        # latitude
+                r[4],                                        # longitude
+                r[5],                                        # address
+                r[6],                                        # telephone
+                r[7],                                        # ct_id
+                (r[8][:100] if r[8] else None),              # ct_name
+            )
+            for r in rows_to_insert
+        ]
+        psycopg2.extras.execute_batch(cur, """
+            INSERT INTO private.facility
+              (code, name_th, facility_type, latitude, longitude,
+               address, telephone, ct_id, ct_name)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (code) DO UPDATE SET
+                name_th = EXCLUDED.name_th,
+                facility_type = EXCLUDED.facility_type,
+                latitude = EXCLUDED.latitude,
+                longitude = EXCLUDED.longitude,
+                address = EXCLUDED.address,
+                telephone = EXCLUDED.telephone,
+                ct_id = EXCLUDED.ct_id,
+                ct_name = EXCLUDED.ct_name
+        """, v3_rows, page_size=500)
+        stats["v3_inserted"] = len(v3_rows)
+    else:
+        stats["v3_skipped"] = True
+
+    conn.commit()
     cur.close()
     return stats
 

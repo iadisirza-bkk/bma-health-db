@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% set active_page = "cleansing_report" %}
+
+{% block title %}Cleansing Report - BMA Health Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+    <!-- Header -->
+    <div>
+        <h1 class="text-lg font-bold text-gray-900">Cleansing Report — เกณฑ์ Inclusion / Exclusion</h1>
+        <p class="text-xs text-gray-500 mt-1">
+            สำหรับแต่ละ field: <b>เกณฑ์ที่ ETL ใช้</b> + <b>missing เท่าไหร่ต่อรวมเท่าไหร่</b> ต่อ source ·
+            "missing" รวม out-of-range (หลุดเกณฑ์) เพราะ ETL แปลง out-of-range → NULL
+        </p>
+    </div>
+
+    {% if v3_pending %}
+    <div class="rounded-xl border border-amber-300 bg-amber-50 px-5 py-4 flex items-start gap-3">
+        <svg class="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <div class="flex-1">
+            <p class="text-sm font-semibold text-amber-900">
+                ฟีเจอร์นี้กำลังย้ายไปใช้ schema v3 — ยังไม่พร้อม
+            </p>
+            <p class="text-xs text-amber-800 mt-1">
+                หน้านี้อ้างอิง <code>INCLUSION_CRITERIA</code> ที่ผูกกับตาราง <code>raw_*</code> เก่า
+                ซึ่ง migration 105 ปลดออกไปแล้ว v3 บังคับ rule ผ่าน
+                <code>etl/import_csv_v3.py</code> ลง <code>private.visit_measurement.value_num</code> แทน —
+                จะเขียนหน้านี้ใหม่ให้ดึงจาก <code>private.variable_definition.valid_min/valid_max</code> ในรอบถัดไป
+            </p>
+        </div>
+    </div>
+    {% endif %}
+
+    {% set src_meta = {
+        "portal": {"label": "Portal", "tx": "text-emerald-700", "bg": "bg-emerald-50", "border": "border-emerald-200", "bar": "bg-emerald-500"},
+        "app1":   {"label": "App1",   "tx": "text-sky-700",     "bg": "bg-sky-50",     "border": "border-sky-200",     "bar": "bg-sky-500"},
+        "app2":   {"label": "App2",   "tx": "text-amber-700",   "bg": "bg-amber-50",   "border": "border-amber-200",   "bar": "bg-amber-500"}
+    } %}
+
+    <!-- Quick navigation between categories -->
+    <div class="sticky top-16 z-10 bg-white/90 backdrop-blur rounded-xl shadow-sm border border-gray-200 px-4 py-2">
+        <div class="flex flex-wrap items-center gap-2 text-xs">
+            <span class="text-gray-500 font-medium mr-1">Jump:</span>
+            {% for cat_key, cat_label, _ in category_order %}
+            {% if by_category[cat_key] is defined and by_category[cat_key] | length > 0 %}
+            <a href="#cat-{{ cat_key }}"
+               class="px-2 py-1 rounded-md bg-gray-100 hover:bg-bma-green hover:text-white transition-colors">
+                {{ cat_label }}
+                <span class="opacity-60 font-mono">({{ by_category[cat_key] | length }})</span>
+            </a>
+            {% endif %}
+            {% endfor %}
+            <span class="ml-auto text-gray-400 text-[11px]">
+                รวม {{ by_category.values() | map('length') | sum }} fields ·
+                NULL = missing OR out-of-range (ETL แปลงให้)
+            </span>
+        </div>
+    </div>
+
+    <!-- Categories -->
+    {% for cat_key, cat_label, cat_sub in category_order %}
+    {% if by_category[cat_key] is defined and by_category[cat_key] | length > 0 %}
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200" id="cat-{{ cat_key }}">
+        <div class="px-6 py-4 border-b border-gray-200">
+            <h2 class="text-sm font-bold text-gray-900">{{ cat_label }}</h2>
+            <p class="text-xs text-gray-500 mt-0.5">{{ cat_sub }}</p>
+        </div>
+
+        <div class="overflow-x-auto">
+            <table class="w-full text-xs">
+                <thead>
+                    <tr class="bg-gray-50 text-left">
+                        <th class="px-3 py-2 font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap">DB column</th>
+                        <th class="px-3 py-2 font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap">Raw field</th>
+                        <th class="px-3 py-2 font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap">Inclusion rule</th>
+                        <th class="px-3 py-2 font-semibold uppercase tracking-wider text-gray-500 whitespace-nowrap">Unit</th>
+                        {% for src in sources %}
+                        <th class="px-3 py-2 font-semibold uppercase tracking-wider {{ src_meta[src].tx }} text-right whitespace-nowrap">
+                            {{ src_meta[src].label }}<br>
+                            <span class="font-normal text-[10px] opacity-70">missing / total</span>
+                        </th>
+                        {% endfor %}
+                        <th class="px-3 py-2 font-semibold uppercase tracking-wider text-gray-500">Rationale</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    {% for entry in by_category[cat_key] %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-3 py-2 font-mono text-gray-900 whitespace-nowrap">
+                            <div class="text-[10px] text-gray-400">{{ entry.table }}</div>
+                            <b>{{ entry.column }}</b>
+                        </td>
+                        <td class="px-3 py-2 font-mono text-gray-600 whitespace-nowrap">{{ entry.raw_field }}</td>
+                        <td class="px-3 py-2 font-mono text-bma-green">{{ entry.rule }}</td>
+                        <td class="px-3 py-2 text-gray-500 whitespace-nowrap">{{ entry.unit }}</td>
+
+                        {% for src in sources %}
+                        {% set s = entry.per_source.get(src, {}) %}
+                        <td class="px-3 py-2 text-right">
+                            {% if s.get('applicable') %}
+                                {% set pct = s.pct_missing or 0 %}
+                                <div class="flex flex-col items-end gap-0.5">
+                                    <span class="font-mono font-bold
+                                                 {% if pct >= 80 %}text-red-600
+                                                 {% elif pct >= 50 %}text-orange-600
+                                                 {% elif pct >= 20 %}text-amber-600
+                                                 {% else %}text-emerald-600{% endif %}">{{ pct }}%</span>
+                                    <span class="text-[10px] text-gray-400 font-mono">{{ "{:,}".format(s.missing) }} / {{ "{:,}".format(s.n) }}</span>
+                                    <!-- mini bar: red part = missing, green part = filled -->
+                                    <div class="w-16 h-1 bg-emerald-200 rounded-full overflow-hidden">
+                                        <div class="h-full {% if pct >= 80 %}bg-red-500
+                                                            {% elif pct >= 50 %}bg-orange-500
+                                                            {% elif pct >= 20 %}bg-amber-500
+                                                            {% else %}bg-emerald-500{% endif %}"
+                                             style="width: {{ pct }}%"></div>
+                                    </div>
+                                </div>
+                            {% else %}
+                                <span class="text-gray-300 text-xs" title="ไม่มีข้อมูลจาก {{ src }} ในตารางนี้">—</span>
+                            {% endif %}
+                        </td>
+                        {% endfor %}
+
+                        <td class="px-3 py-2 text-gray-600 leading-snug max-w-md">{{ entry.rationale }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+    {% endfor %}
+
+    <!-- Source totals footer -->
+    <div class="bg-gray-50 rounded-xl border border-gray-200 px-5 py-4">
+        <h3 class="text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">Source row totals</h3>
+        <div class="grid grid-cols-3 gap-3 text-xs">
+            {% for src in sources %}
+            <div class="rounded-lg {{ src_meta[src].bg }} {{ src_meta[src].border }} border px-3 py-2">
+                <div class="font-bold {{ src_meta[src].tx }}">{{ src_meta[src].label }}</div>
+                <ul class="mt-1 space-y-0.5 font-mono text-[11px] text-gray-700">
+                    {% for tbl in rows_per_source.keys() %}
+                    <li class="flex justify-between gap-2">
+                        <span class="opacity-70">{{ tbl }}</span>
+                        <span class="font-bold">{{ "{:,}".format(rows_per_source[tbl].get(src, 0)) }}</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Methodology footer -->
+    <div class="bg-blue-50 rounded-xl border border-blue-200 px-5 py-4 text-xs text-blue-900 space-y-1.5">
+        <div class="font-semibold">วิธีการอ่าน</div>
+        <ul class="list-disc pl-5 space-y-1">
+            <li><b>missing</b> = NULL ในฐานข้อมูล — ครอบคลุมทั้ง <b>"ไม่ได้บันทึก"</b> + <b>"บันทึกแต่หลุดเกณฑ์"</b>
+                (ETL แปลง out-of-range → NULL) → ไม่สามารถแยกได้ที่ระดับ DB</li>
+            <li><b>Inclusion rule</b> = เกณฑ์ที่ <code>safe_int / safe_float</code> ใน <code>etl/import_csv.py</code> ใช้ —
+                ค่าอยู่ในช่วงนี้ถึงจะเก็บ ไม่งั้นแปลง NULL</li>
+            <li><b>—</b> ในเซลล์ source หมายถึง "source นี้ไม่มี data ในตารางนี้เลย"
+                (เช่น <code>raw_visits</code>, <code>raw_lab_extended</code> มีแต่ portal)</li>
+            <li>สี: <span class="text-emerald-600 font-bold">&lt;20%</span> ดี ·
+                <span class="text-amber-600 font-bold">20-50%</span> ปานกลาง ·
+                <span class="text-orange-600 font-bold">50-80%</span> เกือบขาด ·
+                <span class="text-red-600 font-bold">≥80%</span> ขาดเกือบทั้งหมด (อาจเป็น field ที่ source ไม่กรอกเลย)</li>
+        </ul>
+    </div>
+
+</div>
+{% endblock %}

@@ -219,5 +219,30 @@ def get_total_screened(data: dict) -> int:
     return sum(d["total_screened"] for d in data.values())
 
 
+MODIFIER_CAP_PCT = 95.0  # Hard ceiling for modifier-derived rates
+
+
 def apply_modifier(base: float, modifier: float) -> float:
-    return min(round(base * modifier, 1), 95.0)
+    """Apply a multiplicative modifier to a base rate, capped at 95%.
+
+    Returns a single number (back-compat). For callers that need to know
+    whether the cap was hit, use `apply_modifier_with_meta()`.
+    """
+    return apply_modifier_with_meta(base, modifier)[0]
+
+
+def apply_modifier_with_meta(base: float, modifier: float) -> tuple[float, dict]:
+    """Same as apply_modifier but also returns a metadata dict.
+
+    Metadata fields:
+      - `raw_pct`     : un-capped result (for debugging / disclosure)
+      - `capped`      : True iff the result was clamped at MODIFIER_CAP_PCT
+      - `cap_pct`     : the cap value (95.0)
+
+    Use this in any user-facing tool output so the LLM can disclose
+    "estimated 75% but capped at 95%" rather than silently presenting 95%.
+    """
+    raw = round(base * modifier, 1)
+    capped = raw > MODIFIER_CAP_PCT
+    final = MODIFIER_CAP_PCT if capped else raw
+    return final, {"raw_pct": raw, "capped": capped, "cap_pct": MODIFIER_CAP_PCT}

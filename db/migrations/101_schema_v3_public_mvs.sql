@@ -316,13 +316,19 @@ DECLARE
   v_start TIMESTAMP;
   v_err TEXT;
 BEGIN
-  -- Refresh in dependency order: visit_resolved first
+  -- mv_visit_resolved is the source for several other MVs.
+  -- Refresh it FIRST, then refresh the rest alphabetically.
+  -- Parentheses around each SELECT prevent the trailing ORDER BY from
+  -- sorting the entire UNION (which would push mv_visit_resolved to the end
+  -- alphabetically and cause downstream MVs to read stale data).
   FOR v_name IN
-    SELECT 'mv_visit_resolved' UNION ALL
-    SELECT mv.matviewname
-      FROM pg_matviews mv
-      WHERE mv.schemaname = 'public' AND mv.matviewname != 'mv_visit_resolved'
-      ORDER BY 1
+    (SELECT 'mv_visit_resolved' AS n)
+    UNION ALL
+    (SELECT mv.matviewname
+       FROM pg_matviews mv
+      WHERE mv.schemaname = 'public'
+        AND mv.matviewname <> 'mv_visit_resolved'
+      ORDER BY mv.matviewname)
   LOOP
     v_start := clock_timestamp();
     BEGIN

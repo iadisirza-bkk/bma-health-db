@@ -84,8 +84,9 @@ db/
 - **PII**: `database.py` auto-strips `idcard_hash`, `patient_id`, `staff_code` from ALL query results
 - **k-anonymity**: Groups < 5 people are suppressed. Threshold in `security.py:K_ANONYMITY_THRESHOLD`
 - **Zone mapping**: `api/data/facts.py:HEALTH_ZONES` dcodes MUST match `ref_districts` in DB. If they diverge, reports/API/frontend show different numbers
+- **District codes are OFFICIAL HRSI / BMA**: same numbering as `bma-health/frontend/public/vectors/bangkok-districts.geojson` (the truth source). District NAME is the unambiguous identifier — if you need a code for a new district, look it up in the geojson, never invent one. Migration 014 historically remapped 20 dcodes (1031..1050) from a non-official ad-hoc system to the official one. Source data ingested before that migration was translated in-place.
 - **SQL injection**: Use parameterized queries (`%s` placeholders) everywhere. For table/column identifiers, use `psycopg2.sql.Identifier()`
-- **ETL caching**: `admin.py:_load_etl()` caches the ETL module. Changes to `etl/import_csv.py` require server restart (uvicorn --reload only watches `api/`)
+- **ETL caching**: `admin.py:_load_etl()` caches the ETL module by mtime. Edits to `etl/import_csv.py` are picked up on the next import without restart
 - **LLM guardrails**: Two layers — input keyword filter (`_is_on_topic`) rejects off-topic before calling LLM; system prompt enforces scope. If LLM skips tools, orchestrator forces the top-priority tool from router
 - **Tool output format**: LLM tools must return readable Thai text, not raw JSON. The synthesizer cannot summarize large JSON blobs
 

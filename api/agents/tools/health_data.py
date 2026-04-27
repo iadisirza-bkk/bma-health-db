@@ -38,7 +38,10 @@ class QueryHealthDataTool(BaseTool):
         group_by = args.get("group_by", "disease")
         disease = normalize_disease(args.get("disease"))
         filters = args.get("filters", {})
-        top_n = args.get("top_n", 10)
+        # Default top_n: 50 for district (return all BKK districts), 8 for zone,
+        # 10 for everything else.
+        default_top_n = 50 if group_by == "district" else (8 if group_by == "zone" else 10)
+        top_n = args.get("top_n", default_top_n)
 
         base_rates = get_base_rates(data)
         total = get_total_screened(data)

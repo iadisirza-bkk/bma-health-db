@@ -12,14 +12,18 @@ from __future__ import annotations
 # ──────────────────────────────────────────────────────────────────────
 
 HEALTH_ZONES: dict[str, dict] = {
-    # dcodes MUST match ref_districts.dcode + zone_code in the database
+    # dcodes are the OFFICIAL HRSI / BMA codes — same numbering as
+    # frontend/public/vectors/bangkok-districts.geojson. These MUST match
+    # ref_districts.dcode in the database. Do NOT renumber by hand; if you
+    # need a code for a new district, look it up in the geojson.
+    # See migration 014 for the historical remap.
     "1": {
         "name_th": "โซน 1",
         "name_en": "Zone 1",
         "facilitator": "โรงพยาบาลราชพิพัฒน์",
         "sub_facilitators": ["โรงพยาบาลหลวงพ่อทวีศักดิ์ ชุตินฺธโร อุทิศ"],
         "districts": ["ตลิ่งชัน", "ภาษีเจริญ", "หนองแขม", "บางแค", "ทวีวัฒนา", "บางบอน"],
-        "dcodes": ["1019", "1022", "1023", "1036", "1044", "1046"],
+        "dcodes": ["1019", "1022", "1023", "1040", "1048", "1050"],
         "area_manager_count": 15,
     },
     "2": {
@@ -28,7 +32,7 @@ HEALTH_ZONES: dict[str, dict] = {
         "facilitator": "โรงพยาบาลตากสิน",
         "sub_facilitators": ["โรงพยาบาลศิริราช", "โรงพยาบาลผู้สูงอายุบางขุนเทียน"],
         "districts": ["ธนบุรี", "บางกอกใหญ่", "คลองสาน", "บางกอกน้อย", "บางขุนเทียน", "จอมทอง"],
-        "dcodes": ["1015", "1016", "1018", "1020", "1021", "1031"],
+        "dcodes": ["1015", "1016", "1018", "1020", "1021", "1035"],
         "area_manager_count": 17,
     },
     "3": {
@@ -37,7 +41,7 @@ HEALTH_ZONES: dict[str, dict] = {
         "facilitator": "โรงพยาบาลเจริญกรุงประชารักษ์",
         "sub_facilitators": ["โรงพยาบาลเลิดสิน", "โรงพยาบาลจุฬาลงกรณ์"],
         "districts": ["บางรัก", "ปทุมวัน", "พระโขนง", "ยานนาวา", "ราษฎร์บูรณะ", "สาทร", "วัฒนา", "ทุ่งครุ", "คลองเตย", "บางคอแหลม"],
-        "dcodes": ["1004", "1007", "1009", "1012", "1024", "1028", "1035", "1045", "1047", "1050"],
+        "dcodes": ["1004", "1007", "1009", "1012", "1024", "1028", "1031", "1033", "1039", "1049"],
         "area_manager_count": 32,
     },
     "4": {
@@ -55,7 +59,7 @@ HEALTH_ZONES: dict[str, dict] = {
         "facilitator": "โรงพยาบาลกลาง",
         "sub_facilitators": ["โรงพยาบาลรามาธิบดี", "โรงพยาบาลราชวิถี"],
         "districts": ["ป้อมปราบศัตรูพ่าย", "สัมพันธวงศ์", "พญาไท", "ห้วยขวาง", "ดินแดง", "ราชเทวี", "วังทองหลาง"],
-        "dcodes": ["1008", "1013", "1014", "1017", "1026", "1033", "1041"],
+        "dcodes": ["1008", "1013", "1014", "1017", "1026", "1037", "1045"],
         "area_manager_count": 21,
     },
     "6": {
@@ -64,7 +68,7 @@ HEALTH_ZONES: dict[str, dict] = {
         "facilitator": "โรงพยาบาลกลาง",
         "sub_facilitators": ["โรงพยาบาลภูมิพลอดุลยเดช", "โรงพยาบาลมงกุฎวัฒนะ"],
         "districts": ["บางเขน", "จตุจักร", "ดอนเมือง", "ลาดพร้าว", "หลักสี่", "สายไหม"],
-        "dcodes": ["1005", "1030", "1032", "1034", "1037", "1038"],
+        "dcodes": ["1005", "1030", "1036", "1038", "1041", "1042"],
         "area_manager_count": 17,
     },
     "7": {
@@ -73,7 +77,7 @@ HEALTH_ZONES: dict[str, dict] = {
         "facilitator": "โรงพยาบาลสิรินธร",
         "sub_facilitators": ["โรงพยาบาลบางนา กรุงเทพมหานคร"],
         "districts": ["บางกะปิ", "ลาดกระบัง", "สะพานสูง", "บางนา", "ประเวศ", "สวนหลวง"],
-        "dcodes": ["1006", "1011", "1040", "1043", "1048", "1049"],
+        "dcodes": ["1006", "1011", "1032", "1034", "1044", "1047"],
         "area_manager_count": 18,
     },
     "8": {
@@ -82,7 +86,7 @@ HEALTH_ZONES: dict[str, dict] = {
         "facilitator": "โรงพยาบาลเวชการุณย์รัศมิ์",
         "sub_facilitators": ["โรงพยาบาลนพรัตนราชธานี"],
         "districts": ["หนองจอก", "มีนบุรี", "บึงกุ่ม", "คันนายาว", "คลองสามวา"],
-        "dcodes": ["1003", "1010", "1027", "1039", "1042"],
+        "dcodes": ["1003", "1010", "1027", "1043", "1046"],
         "area_manager_count": 14,
     },
 }

@@ -1,0 +1,288 @@
+{% extends "base.html" %}
+{% set active_page = "agreement" %}
+
+{% block title %}Agreement - BMA Health Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+    <!-- Page Header -->
+    <div>
+        <h1 class="text-lg font-bold text-gray-900">Same-Person Agreement Analysis</h1>
+        <p class="text-xs text-gray-500 mt-1">
+            วัดความสอดคล้องของค่าที่บันทึกในคนเดียวกัน (match โดย <code>idcard_hash</code>) ระหว่าง 2 แหล่ง —
+            <b>Bland-Altman</b> สำหรับตัวเลข (BMI, Hb, ฯลฯ) และ <b>Cohen's κ</b> สำหรับ categorical (DM status, risk flags)
+        </p>
+    </div>
+
+    {% set src_meta = {
+        "portal": {"label": "Portal", "color": "bg-emerald-600 text-white", "border": "border-emerald-300", "light": "bg-emerald-50", "text": "text-emerald-700"},
+        "app1":   {"label": "App1",   "color": "bg-sky-600 text-white",     "border": "border-sky-300",     "light": "bg-sky-50",     "text": "text-sky-700"},
+        "app2":   {"label": "App2",   "color": "bg-amber-600 text-white",   "border": "border-amber-300",   "light": "bg-amber-50",   "text": "text-amber-700"}
+    } %}
+
+    {% if load_error %}
+    <div class="px-4 py-3 rounded-xl text-sm bg-red-50 text-red-800 border border-red-200">
+        Cannot load agreement service: {{ load_error }}
+    </div>
+    {% endif %}
+
+    {% if v3_pending %}
+    <div class="rounded-xl border border-amber-300 bg-amber-50 px-5 py-4 flex items-start gap-3">
+        <svg class="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <div class="flex-1">
+            <p class="text-sm font-semibold text-amber-900">
+                ฟีเจอร์นี้กำลังย้ายไปใช้ schema v3 — ยังไม่พร้อม
+            </p>
+            <p class="text-xs text-amber-800 mt-1">
+                <code>services/agreement_service</code> อ่านจากตาราง <code>raw_*</code> เก่า
+                ซึ่ง migration 105 ปลดออกไปแล้ว v3 ใช้ <code>private.visit_measurement</code> (EAV)
+                จึงยังจับคู่ Bland-Altman / Cohen's κ ไม่ได้ — กำลังเขียน service ใหม่ในรอบถัดไป
+            </p>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Pair selector (3 tabs: portal↔app1, portal↔app2, app1↔app2) -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-1.5">
+        <div class="grid grid-cols-3 gap-1">
+            {% for pa, pb in all_pairs %}
+            {% set is_active = (pa, pb) == pair %}
+            {% set pair_str = pa + '-' + pb %}
+            <a href="?pair={{ pair_str }}"
+               class="flex flex-col items-center gap-0.5 py-2.5 rounded-lg transition-colors
+                      {% if is_active %}bg-bma-green text-white shadow-sm
+                      {% else %}text-gray-700 hover:bg-gray-50{% endif %}">
+                <span class="text-sm font-semibold">{{ src_meta[pa].label }} ↔ {{ src_meta[pb].label }}</span>
+                <span class="text-[11px] {% if is_active %}text-white/80{% else %}text-gray-500{% endif %}">
+                    {% if pa in sources_present and pb in sources_present %}
+                    มีข้อมูลทั้ง 2 ระบบ
+                    {% else %}
+                    {% if pa not in sources_present %}ขาด {{ pa }}{% endif %}
+                    {% if pb not in sources_present %}{% if pa not in sources_present %} + {% endif %}ขาด {{ pb }}{% endif %}
+                    {% endif %}
+                </span>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+
+    {% if not report %}
+    <div class="px-4 py-10 text-center rounded-xl text-sm bg-amber-50 text-amber-800 border border-amber-200">
+        <svg class="w-10 h-10 mx-auto text-amber-500 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+        </svg>
+        <div class="font-semibold text-base">ไม่สามารถวิเคราะห์ได้ในคู่นี้</div>
+        <div class="mt-1">
+            ต้องมีข้อมูลทั้ง 2 source <b>{{ src_meta[pair[0]].label }}</b> และ <b>{{ src_meta[pair[1]].label }}</b> ในฐานข้อมูล <br>
+            ไปอัปโหลดได้ที่ <a href="/admin/upload-bundle" class="underline font-semibold">Bundle Upload</a>
+        </div>
+    </div>
+
+    {% elif report.error %}
+    <div class="px-4 py-3 rounded-xl text-sm bg-red-50 text-red-800 border border-red-200">
+        Failed: {{ report.error }}
+    </div>
+
+    {% else %}
+    <!-- Summary header -->
+    <div class="grid grid-cols-3 gap-3">
+        <div class="p-4 rounded-xl border {{ src_meta[pair[0]].border }} {{ src_meta[pair[0]].light }}">
+            <div class="text-xs font-semibold uppercase tracking-wider text-gray-500">Source A</div>
+            <div class="text-lg font-bold text-gray-900 mt-1">{{ src_meta[pair[0]].label }}</div>
+        </div>
+        <div class="p-4 rounded-xl border {{ src_meta[pair[1]].border }} {{ src_meta[pair[1]].light }}">
+            <div class="text-xs font-semibold uppercase tracking-wider text-gray-500">Source B</div>
+            <div class="text-lg font-bold text-gray-900 mt-1">{{ src_meta[pair[1]].label }}</div>
+        </div>
+        <div class="p-4 rounded-xl border border-gray-300 bg-gray-50">
+            <div class="text-xs font-semibold uppercase tracking-wider text-gray-500">ประชาชนที่อยู่ทั้ง 2 ระบบ</div>
+            <div class="text-2xl font-bold text-bma-green mt-1">{{ "{:,}".format(report.n_common_patients) }}</div>
+            <div class="text-[11px] text-gray-500 mt-0.5">matched via idcard_hash</div>
+        </div>
+    </div>
+
+    <!-- ================================================================= -->
+    <!-- Bland-Altman (continuous variables)                                -->
+    <!-- ================================================================= -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+        <div class="px-6 py-4 border-b border-gray-200">
+            <h2 class="text-sm font-bold text-gray-900">Bland-Altman — ตัวแปรต่อเนื่อง</h2>
+            <p class="text-xs text-gray-500 mt-0.5">
+                <b>Bias</b> = ค่าเฉลี่ยของส่วนต่าง ({{ src_meta[pair[0]].label }} − {{ src_meta[pair[1]].label }}) ·
+                <b>LoA</b> = Bias ± 1.96·SD (95% ของคู่ที่อยู่ในช่วงนี้) ·
+                <b>ICC</b> = intraclass correlation (≈ 1 = เห็นพ้องกันมาก)
+            </p>
+        </div>
+
+        <div class="divide-y divide-gray-200">
+            {% for m in report.continuous %}
+            <div class="px-6 py-5">
+                <div class="flex justify-between items-start gap-4 mb-3">
+                    <div>
+                        <h3 class="text-sm font-bold text-gray-900">{{ m.label }} <span class="text-gray-400 text-xs font-normal">({{ m.unit }})</span></h3>
+                        {% if m.applicable %}
+                        <p class="text-[11px] text-gray-500 mt-0.5">N = {{ "{:,}".format(m.n) }} คู่</p>
+                        {% else %}
+                        <p class="text-[11px] text-amber-600 mt-0.5">{{ m.reason }}</p>
+                        {% endif %}
+                    </div>
+
+                    {% if m.applicable %}
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-right text-xs">
+                        <div class="px-2 py-1.5 rounded bg-gray-50 border border-gray-200">
+                            <div class="text-[10px] text-gray-500 uppercase">Bias</div>
+                            <div class="font-bold text-gray-900 font-mono">{{ m.bias }}</div>
+                        </div>
+                        <div class="px-2 py-1.5 rounded bg-gray-50 border border-gray-200">
+                            <div class="text-[10px] text-gray-500 uppercase">SD</div>
+                            <div class="font-bold text-gray-900 font-mono">{{ m.sd }}</div>
+                        </div>
+                        <div class="px-2 py-1.5 rounded bg-red-50 border border-red-200">
+                            <div class="text-[10px] text-red-600 uppercase">LoA upper</div>
+                            <div class="font-bold text-red-700 font-mono">{{ m.loa_upper }}</div>
+                        </div>
+                        <div class="px-2 py-1.5 rounded bg-red-50 border border-red-200">
+                            <div class="text-[10px] text-red-600 uppercase">LoA lower</div>
+                            <div class="font-bold text-red-700 font-mono">{{ m.loa_lower }}</div>
+                        </div>
+                        <div class="px-2 py-1.5 rounded bg-bma-green-light border border-green-200">
+                            <div class="text-[10px] text-bma-green uppercase">Pearson r</div>
+                            <div class="font-bold text-bma-green font-mono">{{ m.pearson_r if m.pearson_r is not none else "—" }}</div>
+                        </div>
+                        <div class="px-2 py-1.5 rounded bg-bma-green-light border border-green-200">
+                            <div class="text-[10px] text-bma-green uppercase">ICC</div>
+                            <div class="font-bold text-bma-green font-mono">{{ "%.3f"|format(m.icc) if m.icc is not none else "—" }}</div>
+                        </div>
+                        <div class="px-2 py-1.5 rounded bg-gray-50 border border-gray-200">
+                            <div class="text-[10px] text-gray-500 uppercase">Mean {{ pair[0] }}</div>
+                            <div class="font-bold text-gray-900 font-mono">{{ m.mean_a }}</div>
+                        </div>
+                        <div class="px-2 py-1.5 rounded bg-gray-50 border border-gray-200">
+                            <div class="text-[10px] text-gray-500 uppercase">Mean {{ pair[1] }}</div>
+                            <div class="font-bold text-gray-900 font-mono">{{ m.mean_b }}</div>
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+
+                {% if m.plot %}
+                <div class="mt-3 flex justify-center">
+                    <img src="{{ m.plot }}" alt="Bland-Altman plot for {{ m.label }}"
+                         class="max-w-full rounded-lg border border-gray-200">
+                </div>
+                {% elif m.applicable and m.n < report.min_pairs_for_plot %}
+                <div class="mt-3 text-[11px] text-gray-400 italic">
+                    N = {{ m.n }} &lt; {{ report.min_pairs_for_plot }} — ข้ามการวาดกราฟ (ค่าสถิติยังคำนวณให้)
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- ================================================================= -->
+    <!-- Cohen's kappa (categorical)                                        -->
+    <!-- ================================================================= -->
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+        <div class="px-6 py-4 border-b border-gray-200">
+            <h2 class="text-sm font-bold text-gray-900">Cohen's κ — ตัวแปร categorical</h2>
+            <p class="text-xs text-gray-500 mt-0.5">
+                <b>κ</b> = ค่าเห็นพ้องหักเผื่อการสุ่ม · Landis & Koch: &lt;0.20=น้อย, 0.40=พอใช้, 0.60=ปานกลาง, 0.80=ดี, &gt;0.80=เกือบสมบูรณ์
+            </p>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="bg-gray-50 text-left">
+                        <th class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-gray-500">ตัวแปร</th>
+                        <th class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-gray-500 text-right">N pairs</th>
+                        <th class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-gray-500 text-right">% Agreement</th>
+                        <th class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-gray-500 text-right">κ (kappa)</th>
+                        <th class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-gray-500">การตีความ</th>
+                        <th class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-gray-500">Confusion matrix</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    {% for c in report.categorical %}
+                    <tr class="hover:bg-gray-50">
+                        <td class="px-4 py-3 font-medium text-gray-900 text-xs">{{ c.label }}</td>
+                        <td class="px-4 py-3 text-right font-mono text-xs">{{ "{:,}".format(c.n) if c.n else "—" }}</td>
+                        {% if c.applicable %}
+                        <td class="px-4 py-3 text-right font-mono text-xs">{{ c.pct_agreement }}%</td>
+                        <td class="px-4 py-3 text-right font-mono text-xs font-bold
+                                   {% if c.kappa >= 0.80 %}text-emerald-700
+                                   {% elif c.kappa >= 0.60 %}text-sky-700
+                                   {% elif c.kappa >= 0.40 %}text-amber-700
+                                   {% elif c.kappa >= 0.20 %}text-orange-700
+                                   {% else %}text-red-700{% endif %}">
+                            {{ c.kappa }}
+                        </td>
+                        <td class="px-4 py-3 text-xs">
+                            <span class="inline-flex items-center gap-1 text-xs font-semibold rounded-full px-2 py-0.5
+                                         {% if c.kappa >= 0.80 %}bg-emerald-100 text-emerald-700
+                                         {% elif c.kappa >= 0.60 %}bg-sky-100 text-sky-700
+                                         {% elif c.kappa >= 0.40 %}bg-amber-100 text-amber-700
+                                         {% elif c.kappa >= 0.20 %}bg-orange-100 text-orange-700
+                                         {% else %}bg-red-100 text-red-700{% endif %}">
+                                {{ c.interpretation }}
+                            </span>
+                        </td>
+                        <td class="px-4 py-3">
+                            <table class="text-[10px] font-mono border border-gray-200 rounded overflow-hidden">
+                                <thead>
+                                    <tr class="bg-gray-50">
+                                        <th class="px-1.5 py-0.5 border-b border-r border-gray-200 text-right text-gray-400">
+                                            {{ pair[0] }}↓ / {{ pair[1] }}→
+                                        </th>
+                                        {% for lbl in c.labels %}
+                                        <th class="px-1.5 py-0.5 border-b border-r border-gray-200 text-right text-gray-700">{{ lbl }}</th>
+                                        {% endfor %}
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for i in range(c.labels|length) %}
+                                    <tr>
+                                        <th class="px-1.5 py-0.5 border-r border-gray-200 text-right text-gray-700">{{ c.labels[i] }}</th>
+                                        {% for j in range(c.labels|length) %}
+                                        {% set cell = c.confusion[i][j] %}
+                                        <td class="px-1.5 py-0.5 border-r border-gray-200 text-right
+                                                   {% if i == j %}bg-bma-green-light font-bold text-bma-green{% else %}text-gray-600{% endif %}">
+                                            {{ cell }}
+                                        </td>
+                                        {% endfor %}
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </td>
+                        {% else %}
+                        <td colspan="4" class="px-4 py-3 text-xs text-amber-700 italic">{{ c.reason }}</td>
+                        {% endif %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="px-6 py-3 text-xs text-gray-500 border-t border-gray-200">
+            ค่า diagonal ใน confusion matrix (เน้นเขียว) = เห็นพ้องกัน · ค่าจ่ายกระจาย off-diagonal = ไม่เห็นพ้อง
+        </div>
+    </div>
+
+    <!-- Methodology footnote -->
+    <div class="bg-gray-50 rounded-xl border border-gray-200 px-5 py-4 text-xs text-gray-600 space-y-1.5">
+        <div class="font-semibold text-gray-700">วิธีจับคู่ (pairing)</div>
+        <ul class="list-disc pl-5 space-y-1">
+            <li>Match ผู้ป่วยข้าม source ด้วย <code>idcard_hash</code> (HMAC-SHA256 ของบัตร ปชช.)</li>
+            <li>สำหรับแต่ละคน เลือก <b>visit ล่าสุด</b> จากแต่ละ source (DISTINCT ON + ORDER BY visit_date DESC)</li>
+            <li>ถอด cancel_status=1 (record ถูกยกเลิก) ก่อนทำสถิติ</li>
+            <li>N ≥ {{ report.min_pairs_for_stats }} ถึงจะคำนวณสถิติ; N ≥ {{ report.min_pairs_for_plot }} ถึงจะวาด Bland-Altman plot</li>
+            <li>ตัวแปรที่เก็บเฉพาะบาง source (เช่น SBP/DBP ไม่มีใน App2) จะขึ้น "ไม่มี field" แทน</li>
+        </ul>
+    </div>
+    {% endif %}
+
+</div>
+{% endblock %}

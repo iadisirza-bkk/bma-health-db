@@ -256,8 +256,22 @@ def import_patients(cur, df: pd.DataFrame, source_code: str,
         if not h:
             continue
 
-        sex = str(r.get('MALE', '')).strip() or None
-        if sex and sex not in ('1', '2'):
+        # ─── sex normalisation ──────────────────────────────────────────────
+        # `private.patient.sex_code` is a 1-char code: 'M' | 'F' | NULL.
+        # Source CSVs use *several* representations for the MALE column:
+        #   Portal / App1 spreadsheet : '1' = ชาย, '2' = หญิง
+        #   App2 EAV (textual)        : '10' = ชาย, '20' = หญิง  (also raw text)
+        #   Already-normalised        : 'M' / 'F' (e.g. re-imports)
+        # Anything else (incl. 'LGBTQ+', NULL, blanks) → NULL so it doesn't
+        # collide with the constraint and so summary_bmi_waist's sex split
+        # can fall back to 'unknown'.
+        # See: ETL-TYPE-FIX-DESIGN.md §1 (sex code) and migration 107.
+        raw_sex = str(r.get('MALE', '')).strip()
+        if raw_sex in ('1', '10', 'M', 'ชาย'):
+            sex = 'M'
+        elif raw_sex in ('2', '20', 'F', 'หญิง'):
+            sex = 'F'
+        else:
             sex = None
 
         bdate = _parse_date(r.get('BIRTHDATE') or r.get('BRTHDATE'))

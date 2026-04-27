@@ -114,6 +114,11 @@ class AuditMiddleware(BaseHTTPMiddleware):
             return response
 
         client_ip = request.client.host if request.client else "unknown"
+        # Note: request.url.path excludes the query string by design — we never
+        # log raw query params because callers might pass small-cell identifiers
+        # (district + age + sex tuples) that are PII-adjacent. If you need to
+        # debug a specific request, instrument the route handler explicitly
+        # with whitelisted, sanitised parameter names.
         _audit_logger.info(
             "method=%s path=%s status=%d duration=%.3fs ip=%s",
             request.method, path, response.status_code, duration, client_ip,
@@ -140,6 +145,28 @@ async def lifespan(app: FastAPI):
     close_pool()
 
 
+# OpenAPI tag metadata — gives each domain group a description and
+# rendering order in /docs and /redoc.
+_OPENAPI_TAGS = [
+    {"name": "System", "description": "Health checks, dependency probes, and server-info endpoints."},
+    {"name": "Public", "description": "PDPA-safe endpoints for public consumption (no auth, k-anonymity >= 5)."},
+    {"name": "summary", "description": "Pre-aggregated summary tables — fast dashboard endpoints."},
+    {"name": "zones", "description": "8 BMA Health Zones — list, detail, and zone-level aggregates."},
+    {"name": "districts", "description": "50 Bangkok districts — list, detail, and district-level aggregates."},
+    {"name": "epidemiology", "description": "Disease prevalence, age-group analysis, comorbidity matrix."},
+    {"name": "trends", "description": "Time-series data: monthly/quarterly/yearly trends."},
+    {"name": "kpi", "description": "MOPH NCD KPI tracking — coverage, detection, control rates."},
+    {"name": "executive", "description": "Governor/exec dashboards: headline KPIs, alerts, year-over-year."},
+    {"name": "factors", "description": "Disease risk by demographic/behaviour factors (sex, age, occupation, smoking, etc.)."},
+    {"name": "Reports", "description": "PDF report generation (LaTeX/Tectonic). Cached, hash-validated."},
+    {"name": "GIS", "description": "Geographic data: facility locations, district boundaries, PM2.5 overlay."},
+    {"name": "stats", "description": "Statistical tests: chi-square, Welch's t-test, ranking, comparison."},
+    {"name": "chat", "description": "LLM chat (SSE streaming). Powered by LMStudio + Gemma."},
+    {"name": "Admin", "description": "Admin web UI: CSV upload, ETL, dashboard, history."},
+    {"name": "Admin API", "description": "JSON admin endpoints: data status, audit log, Excel upload."},
+    {"name": "Monitoring", "description": "Data quality, ETL status, query performance."},
+]
+
 app = FastAPI(
     title="BMA Health One-Stop Backend API",
     version="4.0.0",
@@ -157,6 +184,7 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
+    openapi_tags=_OPENAPI_TAGS,
 )
 
 # Middleware order: CORS -> Rate Limit -> API Key -> Audit
@@ -207,7 +235,21 @@ if os.path.isdir(_static_dir):
 
 
 @app.get("/health", tags=["System"])
-def health_check():
+def health_check(deep: bool = False):
+    """Liveness probe.
+
+    Default response is fast: only checks the DB (the one truly required
+    dependency). Pass `?deep=1` for a full readiness probe that also pings
+    Redis, LMStudio and Tectonic — useful for load balancers / on-call
+    diagnosis but slower (~100-300ms vs ~5ms).
+
+    Status semantics:
+      - "ok":       DB up and (in deep mode) every required dep up.
+      - "degraded": DB up but at least one optional dep is down.
+      - "down":    DB unreachable (return HTTP 503).
+    """
+    from fastapi.responses import JSONResponse
+
     db_ok = False
     try:
         result = execute_scalar("SELECT 1")
@@ -215,11 +257,54 @@ def health_check():
     except Exception:
         pass
 
-    cache = cache_stats()
-    status = "ok" if db_ok else "degraded"
-    return {
-        "status": status,
+    body: dict = {
+        "status": "ok" if db_ok else "down",
         "database": "connected" if db_ok else "disconnected",
-        "cache": cache,
         "timestamp": datetime.utcnow().isoformat(),
     }
+
+    if deep:
+        deps: dict = {}
+
+        # Cache (Redis) — already exposed via cache_stats() but also include in deps
+        try:
+            cs = cache_stats()
+            deps["redis"] = "connected" if cs.get("available") else "disconnected"
+            body["cache"] = cs
+        except Exception:
+            deps["redis"] = "error"
+
+        # DB pool saturation
+        try:
+            from database import get_pool_status
+            body["db_pool"] = get_pool_status()
+        except Exception:
+            body["db_pool"] = {"error": "unavailable"}
+
+        # LMStudio (LLM) — quick HTTP check, short timeout
+        try:
+            import httpx
+            from config import LMSTUDIO_URL
+            r = httpx.get(f"{LMSTUDIO_URL}/v1/models", timeout=2.0)
+            deps["lmstudio"] = "connected" if r.status_code == 200 else f"http {r.status_code}"
+        except Exception as e:
+            deps["lmstudio"] = f"unreachable ({type(e).__name__})"
+
+        # Tectonic (PDF compiler) — file existence + executability
+        try:
+            from config import TECTONIC_PATH
+            deps["tectonic"] = "available" if os.path.exists(TECTONIC_PATH) and os.access(TECTONIC_PATH, os.X_OK) else "missing"
+        except Exception:
+            deps["tectonic"] = "error"
+
+        body["dependencies"] = deps
+        # Downgrade to "degraded" if any dep is unhealthy (DB still up).
+        if db_ok and any(v not in ("connected", "available") for v in deps.values()):
+            body["status"] = "degraded"
+    else:
+        # Shallow mode: include cache stats since it's cheap (one Redis ping)
+        body["cache"] = cache_stats()
+
+    if not db_ok:
+        return JSONResponse(status_code=503, content=body)
+    return body

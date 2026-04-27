@@ -46,6 +46,11 @@ class ReportGenerator:
     """Generates PDF reports from LaTeX templates with data from the health screening system."""
 
     def __init__(self) -> None:
+        # LaTeX-friendly Jinja2 delimiters chosen to avoid LaTeX's `{`, `}`,
+        # `$`, `%` syntax. Risk: any string variable containing the literal
+        # `<<` or `>>` (uncommon in Thai text but possible in code listings)
+        # would be parsed as a Jinja directive — use the `latex_safe` filter
+        # to escape such values: `<< user_text | latex_safe >>`.
         self.env = jinja2.Environment(
             loader=jinja2.FileSystemLoader(str(TEMPLATE_DIR)),
             block_start_string="<%",
@@ -60,6 +65,7 @@ class ReportGenerator:
         # Custom Jinja2 filters
         self.env.filters["number_format"] = _number_format
         self.env.filters["pct"] = _pct_format
+        self.env.filters["latex_safe"] = _latex_safe
         self.env.filters["pct2"] = _pct2_format
         self.env.filters["sig_stars"] = _significance_stars
         self.env.filters["latex_escape"] = _latex_escape
@@ -164,18 +170,38 @@ class ReportGenerator:
             tex_path.write_text(rendered_tex, encoding="utf-8")
 
             # 8. Compile with Tectonic
-            pdf_path = self._compile_tex(tex_path, build_dir)
+            pdf_path, compile_clean = self._compile_tex(tex_path, build_dir)
 
             # 9. Copy PDF to cache
             cache_path = self.get_cache_path(lang, report_type)
             cache_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(pdf_path, cache_path)
 
-            # 10. Save hash for cache validation
-            cache_path.with_suffix(".hash").write_text(data.data_hash)
+            # ATOMIC publish: write to a temp sibling and rename. shutil.copy
+            # is NOT atomic — a concurrent reader (FastAPI handler returning
+            # FileResponse) can grab a partial PDF mid-copy. Rename within
+            # the same filesystem IS atomic on POSIX.
+            tmp_cache = cache_path.with_suffix(cache_path.suffix + ".tmp")
+            shutil.copy(pdf_path, tmp_cache)
+            tmp_cache.replace(cache_path)
+
+            # 10. Save hash for cache validation — ONLY on a clean compile.
+            # If Tectonic warned (non-zero exit but produced a partial PDF),
+            # we ship the PDF but skip the hash so the next request retries
+            # instead of serving a known-broken file forever.
+            if compile_clean:
+                # Atomic hash write too (small file but same race in principle)
+                hash_path = cache_path.with_suffix(".hash")
+                tmp_hash = hash_path.with_suffix(".hash.tmp")
+                tmp_hash.write_text(data.data_hash)
+                tmp_hash.replace(hash_path)
+            else:
+                # Drop any stale hash so is_cache_valid() returns False next time
+                hash_path = cache_path.with_suffix(".hash")
+                if hash_path.exists():
+                    hash_path.unlink()
 
             size_kb = cache_path.stat().st_size / 1024
-            logger.info("Generated %s (%.1f KB)", cache_path, size_kb)
+            logger.info("Generated %s (%.1f KB) clean=%s", cache_path, size_kb, compile_clean)
             return cache_path
 
     # --- Generation progress tracking ---
@@ -637,7 +663,17 @@ class ReportGenerator:
             result[match.group(1)] = match.group(2)
         return result
 
-    def _compile_tex(self, tex_path: Path, build_dir: Path) -> Path:
+    def _compile_tex(self, tex_path: Path, build_dir: Path) -> tuple[Path, bool]:
+        """Compile a .tex file with Tectonic.
+
+        Returns: (pdf_path, fully_clean)
+            fully_clean is True only when Tectonic exits 0. When Tectonic
+            exits non-zero but still produces a PDF (LaTeX warnings only,
+            partial output, etc.), we return that PDF so the caller can
+            ship it, but we mark fully_clean=False so the cache hash is
+            not written — next request will regenerate instead of serving
+            a known-broken PDF forever.
+        """
         if not Path(TECTONIC_PATH).exists():
             raise FileNotFoundError(
                 f"Tectonic not found at {TECTONIC_PATH}. "
@@ -661,16 +697,20 @@ class ReportGenerator:
             stderr = result.stderr[:1000] if result.stderr else "(no stderr)"
             stdout = result.stdout[:500] if result.stdout else ""
             if pdf_path.exists():
-                logger.warning("Tectonic exited %d but PDF exists; continuing.\nstderr: %s",
-                               result.returncode, stderr[:300])
-                return pdf_path
+                logger.warning(
+                    "Tectonic exited %d but PDF exists; returning partial PDF "
+                    "(cache hash will NOT be written so the next request retries).\n"
+                    "stderr: %s",
+                    result.returncode, stderr[:300],
+                )
+                return pdf_path, False
             logger.error("Tectonic failed (exit %d):\nstderr: %s\nstdout: %s",
                          result.returncode, stderr, stdout)
             raise RuntimeError(f"LaTeX compilation failed: {stderr[:500]}")
 
         if not pdf_path.exists():
             raise RuntimeError(f"Tectonic exited 0 but PDF not found at {pdf_path}")
-        return pdf_path
+        return pdf_path, True
 
     def _generate_stub_tex(
         self, lang: str, report_type: str, data: ReportData, i18n: dict[str, str]
@@ -808,6 +848,40 @@ def _pct_format(value: Any) -> str:
         return f"{float(value):.1f}"
     except (ValueError, TypeError):
         return str(value)
+
+
+# LaTeX special characters that need escaping in user-supplied strings.
+# Order matters: escape backslash first, then everything else.
+_LATEX_ESCAPES = (
+    ("\\", r"\textbackslash{}"),
+    ("&", r"\&"),
+    ("%", r"\%"),
+    ("$", r"\$"),
+    ("#", r"\#"),
+    ("_", r"\_"),
+    ("{", r"\{"),
+    ("}", r"\}"),
+    ("~", r"\textasciitilde{}"),
+    ("^", r"\textasciicircum{}"),
+    # Jinja2 delimiter conflict — protect against `<<` / `>>` in user content
+    ("<<", r"<\,<"),
+    (">>", r">\,>"),
+)
+
+
+def _latex_safe(value: Any) -> str:
+    """Escape LaTeX special chars in a user-supplied string.
+
+    Use `<< value | latex_safe >>` in templates whenever the value comes
+    from user input or external data (not from our own code constants),
+    so a `&`/`$`/`%`/`<<` in the value can't break the LaTeX compile.
+    """
+    if value is None:
+        return ""
+    s = str(value)
+    for src, repl in _LATEX_ESCAPES:
+        s = s.replace(src, repl)
+    return s
 
 
 def _pct2_format(value: Any) -> str:

@@ -1,0 +1,360 @@
+{% extends "base.html" %}
+{% set active_page = "cross_stats" %}
+
+{% block title %}Cross-Stats - BMA Health Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+
+    <!-- Page Header -->
+    <div>
+        <h1 class="text-lg font-bold text-gray-900">Cross-Source Statistics</h1>
+        <p class="text-xs text-gray-500 mt-1">
+            เปรียบเทียบข้อมูลระหว่าง 3 แหล่ง (Portal / App1 / App2) — coverage ต่อเขต, distribution + chi-square, data quality
+        </p>
+    </div>
+
+    {% set src_meta = {
+        "portal": {"label": "Portal", "color": "bg-emerald-600 text-white", "border": "border-emerald-300", "light": "bg-emerald-50"},
+        "app1":   {"label": "App1",   "color": "bg-sky-600 text-white",     "border": "border-sky-300",     "light": "bg-sky-50"},
+        "app2":   {"label": "App2",   "color": "bg-amber-600 text-white",   "border": "border-amber-300",   "light": "bg-amber-50"}
+    } %}
+
+    <!-- Source-availability banner -->
+    {% set missing = [] %}
+    {% for s in sources %}
+        {% if s not in sources_present %}{% set _ = missing.append(s) %}{% endif %}
+    {% endfor %}
+    {% if missing %}
+    <div class="flex items-start gap-3 px-4 py-3 rounded-xl text-sm font-medium bg-amber-50 text-amber-800 border border-amber-200">
+        <svg class="w-5 h-5 flex-shrink-0 mt-0.5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"/>
+        </svg>
+        <div>
+            ยังไม่มีข้อมูลจาก: <b>{{ missing | join(", ") }}</b> —
+            หน้านี้จะแสดงเฉพาะ source ที่มีข้อมูล ให้ไปอัปโหลดได้ที่
+            <a href="/admin/upload-bundle" class="underline font-semibold">Bundle Upload</a>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Tab bar -->
+    {% set tab_defs = [
+        {"key": "coverage",     "label": "Coverage",     "sub": "50 เขต × 3 source heatmap"},
+        {"key": "distribution", "label": "Distribution", "sub": "Prevalence + chi-square"},
+        {"key": "quality",      "label": "Data Quality", "sub": "Field completeness %"}
+    ] %}
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-1.5">
+        <div class="grid grid-cols-3 gap-1">
+            {% for t in tab_defs %}
+            {% set is_active = t.key == tab %}
+            <a href="?tab={{ t.key }}"
+               class="flex flex-col items-center gap-0.5 py-2.5 rounded-lg transition-colors
+                      {% if is_active %}bg-bma-green text-white shadow-sm
+                      {% else %}text-gray-700 hover:bg-gray-50{% endif %}">
+                <span class="text-sm font-semibold">{{ t.label }}</span>
+                <span class="text-[11px] {% if is_active %}text-white/80{% else %}text-gray-500{% endif %}">{{ t.sub }}</span>
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- =================================================================== -->
+    <!-- TAB 1: COVERAGE HEATMAP                                              -->
+    <!-- =================================================================== -->
+    {% if tab == "coverage" %}
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+        <div class="px-6 py-4 border-b border-gray-200">
+            <h2 class="text-sm font-bold text-gray-900">Coverage Heatmap — 50 เขต × 3 source</h2>
+            <p class="text-xs text-gray-500 mt-0.5">
+                ตัวเลขคือจำนวนคนที่คัดกรอง (จาก <code>summary_district_disease.total_screened</code>)
+                — สีเข้ม = คัดกรองมาก, สีอ่อน/ขาว = ไม่มีข้อมูลในแหล่งนั้น
+            </p>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="bg-gray-50 text-left">
+                        <th class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-gray-500">เขต</th>
+                        <th class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-gray-500">โซน</th>
+                        {% for s in sources %}
+                        <th class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-right
+                                   {{ src_meta[s].color | replace('text-white', 'text-white') }} rounded-t-md">
+                            {{ src_meta[s].label }}
+                        </th>
+                        {% endfor %}
+                        <th class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-gray-700 text-right bg-gray-100">รวม</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    {% for row in coverage %}
+                    <tr class="hover:bg-gray-50 transition-colors">
+                        <td class="px-4 py-2 font-medium text-gray-900 text-xs">
+                            <span class="text-gray-400">{{ row.district_code }}</span>
+                            {{ row.district_name }}
+                        </td>
+                        <td class="px-4 py-2 text-xs text-gray-500">Z{{ row.zone_code }}</td>
+                        {% for s in sources %}
+                        {% set val = row["n_" + s] or 0 %}
+                        {% set intensity = (val / coverage_max) if coverage_max > 0 else 0 %}
+                        {% set alpha = (intensity * 0.85 + 0.05) if val > 0 else 0 %}
+                        <td class="px-4 py-2 text-right font-mono text-xs"
+                            style="background-color: {% if s == 'portal' %}rgba(5,150,105,{{ alpha }}){% elif s == 'app1' %}rgba(2,132,199,{{ alpha }}){% else %}rgba(217,119,6,{{ alpha }}){% endif %};
+                                   color: {% if alpha > 0.5 %}white{% else %}#1f2937{% endif %};">
+                            {% if val > 0 %}{{ "{:,}".format(val) }}{% else %}—{% endif %}
+                        </td>
+                        {% endfor %}
+                        <td class="px-4 py-2 text-right font-mono text-xs font-bold bg-gray-50 text-gray-900">{{ "{:,}".format(row.n_total or 0) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+                <tfoot>
+                    <tr class="bg-gray-100 font-bold">
+                        <td class="px-4 py-2 text-xs text-gray-700" colspan="2">รวมทั้งหมด</td>
+                        {% for s in sources %}
+                        {% set col_total = coverage | sum(attribute="n_" + s) %}
+                        <td class="px-4 py-2 text-right font-mono text-xs text-gray-900">{{ "{:,}".format(col_total) }}</td>
+                        {% endfor %}
+                        {% set grand = coverage | sum(attribute="n_total") %}
+                        <td class="px-4 py-2 text-right font-mono text-xs text-gray-900">{{ "{:,}".format(grand) }}</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+        <div class="px-6 py-3 text-xs text-gray-500 border-t border-gray-200">
+            สเกลสี: 0 (ขาว) → {{ "{:,}".format(coverage_max) }} (เข้มสุด)
+            · เซลล์ "—" = ไม่มีบันทึกของ source นั้นในเขตนั้น
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- =================================================================== -->
+    <!-- TAB 2: DISTRIBUTION + CHI-SQUARE                                     -->
+    <!-- =================================================================== -->
+    {% if tab == "distribution" %}
+    <div class="space-y-4">
+        <!-- Per-source totals summary -->
+        <div class="grid grid-cols-3 gap-3">
+            {% for s in sources %}
+            {% set r = distribution.by_source[s] %}
+            <div class="p-4 rounded-xl border {{ src_meta[s].border }} {{ src_meta[s].light }}">
+                <div class="text-xs font-semibold uppercase tracking-wider text-gray-500">{{ src_meta[s].label }}</div>
+                <div class="text-2xl font-bold text-gray-900 mt-1">{{ "{:,}".format(r.total) }}</div>
+                <div class="text-xs text-gray-500 mt-1">คนคัดกรอง (รวมซ้ำข้ามเขต)</div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Distribution comparison table -->
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200">
+            <div class="px-6 py-4 border-b border-gray-200">
+                <h2 class="text-sm font-bold text-gray-900">Distribution Comparison — Disease Prevalence</h2>
+                <p class="text-xs text-gray-500 mt-0.5">
+                    % ที่พบในแต่ละ source + chi-square test ว่าความต่างระหว่าง source มีนัยสำคัญทางสถิติ (p &lt; 0.05) หรือไม่
+                </p>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="bg-gray-50 text-left">
+                            <th class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-gray-500">ตัวชี้วัด</th>
+                            {% for s in sources %}
+                            <th class="px-4 py-2 text-xs font-semibold uppercase tracking-wider {{ src_meta[s].color }} text-right">{{ src_meta[s].label }}</th>
+                            {% endfor %}
+                            <th class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-gray-500">χ²</th>
+                            <th class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-gray-500">p-value</th>
+                            <th class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-gray-500">Significant</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200">
+                        {% for c in distribution.comparisons %}
+                        <tr class="hover:bg-gray-50 transition-colors">
+                            <td class="px-4 py-3 font-medium text-gray-900 text-xs">{{ c.label }}</td>
+                            {% for s in sources %}
+                            {% set ps = c.per_source[s] %}
+                            <td class="px-4 py-3 text-right text-xs">
+                                <div class="flex flex-col items-end gap-0.5">
+                                    <span class="font-bold text-gray-900">{{ ps.pct }}%</span>
+                                    <span class="text-gray-400 text-[10px]">{{ "{:,}".format(ps.count) }} / {{ "{:,}".format(ps.total) }}</span>
+                                    <!-- Mini bar -->
+                                    <div class="w-20 h-1 bg-gray-200 rounded-full overflow-hidden">
+                                        <div class="h-full {% if s == 'portal' %}bg-emerald-500{% elif s == 'app1' %}bg-sky-500{% else %}bg-amber-500{% endif %}"
+                                             style="width: {{ ps.pct | round(1) }}%;"></div>
+                                    </div>
+                                </div>
+                            </td>
+                            {% endfor %}
+                            <td class="px-4 py-3 font-mono text-xs text-gray-700">
+                                {% if c.chi_square.applicable %}{{ c.chi_square.chi2 }}{% else %}—{% endif %}
+                            </td>
+                            <td class="px-4 py-3 font-mono text-xs text-gray-700">
+                                {% if c.chi_square.applicable %}{{ c.chi_square.p_value }}{% else %}—{% endif %}
+                            </td>
+                            <td class="px-4 py-3">
+                                {% if c.chi_square.applicable %}
+                                    {% if c.chi_square.significant %}
+                                    <span class="inline-flex items-center gap-1 text-xs font-semibold rounded-full px-2.5 py-0.5 bg-red-100 text-red-700">
+                                        <span class="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                                        ต่างอย่างมีนัยสำคัญ
+                                    </span>
+                                    {% else %}
+                                    <span class="inline-flex items-center gap-1 text-xs font-semibold rounded-full px-2.5 py-0.5 bg-gray-100 text-gray-600">
+                                        ไม่ต่าง (p≥0.05)
+                                    </span>
+                                    {% endif %}
+                                {% else %}
+                                <span class="text-[11px] text-gray-400" title="{{ c.chi_square.reason }}">{{ c.chi_square.reason }}</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="px-6 py-3 text-xs text-gray-500 border-t border-gray-200">
+                Chi-square test บน 2×N contingency table (positive / negative × sources ที่มีข้อมูล) ·
+                Null hypothesis: สัดส่วนเหมือนกันทุก source · Reject เมื่อ p &lt; 0.05
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- =================================================================== -->
+    <!-- TAB 3: DATA QUALITY                                                  -->
+    <!-- =================================================================== -->
+    {% if tab == "quality" %}
+    {% if v3_pending_quality_tab %}
+    <div class="rounded-xl border border-amber-300 bg-amber-50 px-5 py-4 flex items-start gap-3">
+        <svg class="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <div class="flex-1">
+            <p class="text-sm font-semibold text-amber-900">
+                Tab นี้กำลังย้ายไปใช้ schema v3 — ยังไม่พร้อม
+            </p>
+            <p class="text-xs text-amber-800 mt-1">
+                Data Quality tab ยังอ่านจาก <code>raw_*</code> เก่า ซึ่ง migration 105 ปลดออกไปแล้ว
+                Coverage และ Distribution tabs ยังใช้งานได้ปกติ
+                (ผ่าน <code>summary_district_disease</code> compat view)
+            </p>
+        </div>
+    </div>
+    {% else %}
+    <div class="space-y-4">
+        {% set tables = [
+            ("raw_patients",     "Patients",     "ข้อมูลผู้ป่วย"),
+            ("raw_visits",       "Visits",       "ประวัติการตรวจ (Portal only)"),
+            ("raw_vitalsigns",   "Vitalsigns",   "สัญญาณชีพ + คัดกรองโรค"),
+            ("raw_homevisit",    "Home Visit",   "สังคมเศรษฐกิจ (บ้าน/ที่ทำงาน)"),
+            ("raw_homehealth",   "Home Health",  "พฤติกรรม + วัคซีน"),
+            ("raw_lab_results",  "Lab",          "ผลแลป"),
+            ("raw_lab_extended", "Lab Extended", "ระบบหายใจ + MSD (Portal only)")
+        ] %}
+
+        <!-- Top nav: jump-links to each table -->
+        <div class="sticky top-16 z-10 bg-white/90 backdrop-blur rounded-xl shadow-sm border border-gray-200 px-4 py-2">
+            <div class="flex flex-wrap items-center gap-2 text-xs">
+                <span class="text-gray-500 font-medium mr-1">Jump:</span>
+                {% for tbl_key, tbl_label, _ in tables %}
+                <a href="#q-{{ tbl_key }}" class="px-2 py-1 rounded-md bg-gray-100 hover:bg-bma-green hover:text-white transition-colors font-mono text-[11px]">
+                    {{ tbl_key }}<span class="opacity-60"> ({{ quality[tbl_key][0].fields | length if quality[tbl_key] else 0 }})</span>
+                </a>
+                {% endfor %}
+                <span class="ml-auto text-gray-400 text-[11px]">
+                    รวม {{ tables | length }} tables,
+                    {{ quality.values() | map('first') | select | map(attribute='fields') | map('length') | sum }} fields
+                </span>
+            </div>
+        </div>
+
+        {% for tbl_key, tbl_label, tbl_sub in tables %}
+        {% set data = quality[tbl_key] %}
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200" id="q-{{ tbl_key }}">
+            <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-baseline gap-4">
+                <div>
+                    <h2 class="text-sm font-bold text-gray-900">
+                        {{ tbl_label }}
+                        <span class="ml-2 text-gray-400 font-normal text-xs">
+                            {{ data[0].fields | length if data else 0 }} fields
+                        </span>
+                    </h2>
+                    <p class="text-xs text-gray-500 mt-0.5">{{ tbl_sub }} — <code>{{ tbl_key }}</code></p>
+                </div>
+                <div class="text-xs text-gray-500 text-right">
+                    {% for r in data %}
+                        <span class="inline-block mx-1.5">
+                            <b class="{% if r.data_source == 'portal' %}text-emerald-600{% elif r.data_source == 'app1' %}text-sky-600{% else %}text-amber-600{% endif %}{% if r.n_records == 0 %} opacity-40{% endif %}">{{ r.data_source }}</b>:
+                            {% if r.n_records > 0 %}{{ "{:,}".format(r.n_records) }} rows{% else %}<span class="text-gray-300">— ไม่มีข้อมูล</span>{% endif %}
+                        </span>
+                    {% endfor %}
+                </div>
+            </div>
+
+            {% if data %}
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="bg-gray-50 text-left">
+                            <th class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-gray-500">Field</th>
+                            {% for r in data %}
+                            <th class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-right
+                                       {% if r.n_records == 0 %}text-gray-300
+                                       {% elif r.data_source == 'portal' %}text-emerald-700
+                                       {% elif r.data_source == 'app1' %}text-sky-700
+                                       {% else %}text-amber-700{% endif %}">
+                                {{ r.data_source }}{% if r.n_records == 0 %} <span class="normal-case font-normal text-[10px]">(ไม่มี)</span>{% endif %}
+                            </th>
+                            {% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200">
+                        {% if data %}
+                            {% set all_fields = [] %}
+                            {% for r in data %}
+                                {% for f in r.fields.keys() %}
+                                    {% if f not in all_fields %}{% set _ = all_fields.append(f) %}{% endif %}
+                                {% endfor %}
+                            {% endfor %}
+                            {% for field in all_fields %}
+                            <tr class="hover:bg-gray-50">
+                                <td class="px-4 py-2 font-mono text-xs text-gray-700">{{ field }}</td>
+                                {% for r in data %}
+                                {% set fd = r.fields.get(field, {"pct": 0, "count": 0}) %}
+                                {% set bar_color = "bg-emerald-500" if r.data_source == "portal" else ("bg-sky-500" if r.data_source == "app1" else "bg-amber-500") %}
+                                <td class="px-4 py-2 text-right text-xs">
+                                    {% if fd.count > 0 %}
+                                    <div class="flex items-center justify-end gap-2">
+                                        <div class="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                                            <div class="h-full {{ bar_color }}" style="width: {{ fd.pct }}%"></div>
+                                        </div>
+                                        <span class="font-mono font-semibold text-gray-900 w-14">{{ fd.pct }}%</span>
+                                    </div>
+                                    {% else %}
+                                    <span class="text-gray-300 font-mono"
+                                          title="{% if r.n_records == 0 %}ไม่มีข้อมูลจาก {{ r.data_source }} ในตารางนี้{% else %}{{ r.data_source }} ไม่ได้กรอก field นี้ ({{ r.n_records }} rows){% endif %}">—</span>
+                                    {% endif %}
+                                </td>
+                                {% endfor %}
+                            </tr>
+                            {% endfor %}
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <div class="px-6 py-8 text-center text-sm text-gray-400">ไม่มีข้อมูลในตารางนี้</div>
+            {% endif %}
+        </div>
+        {% endfor %}
+
+        <div class="text-xs text-gray-500 px-2">
+            <b>วิธีอ่าน:</b> ค่า % = <code>COUNT(field) / COUNT(*)</code> ต่อ source —
+            สูงกว่า = กรอกครบกว่า · <code>bmi_src</code>, <code>hemoglobin_src</code>, ฯลฯ คือค่าจาก App2 pre-computed
+            ส่วน field ชื่อปกติคือ ETL-derived หรือค่า raw จาก Portal/App1
+        </div>
+    </div>
+    {% endif %}{# /v3_pending_quality_tab else #}
+    {% endif %}{# /tab == "quality" #}
+
+</div>
+{% endblock %}

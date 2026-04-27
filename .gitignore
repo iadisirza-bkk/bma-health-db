@@ -32,3 +32,9 @@ minimal_data/portal_top/district_health_data.json
 .claude/plans/
 .claude/launch.json
 .env.bak.*
+
+# Local DB backups
+backups/
+
+# Generated PDFs (LaTeX reports)
+*.pdf

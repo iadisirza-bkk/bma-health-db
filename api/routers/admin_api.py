@@ -349,11 +349,90 @@ def get_audit_log(
     )
 
 
+@router.get("/audit-log/verify")
+def verify_audit_log_chain(authorization: Optional[str] = Header(None)):
+    """Verify the SHA-256 chain on the MCP audit log file.
+
+    The MCP server writes JSONL entries with `prev_hash` and `hash` fields
+    forming a tamper-evident chain. This endpoint walks the file and
+    confirms every link, returning the first broken line if any.
+
+    Use cases:
+      - Periodic compliance check (PDPA / SOC2)
+      - Pre-archive integrity verification
+      - Incident response — was the audit log tampered with?
+    """
+    _require_admin(authorization)
+
+    import hashlib as _hashlib
+    import json as _json
+
+    audit_path = os.getenv("MCP_AUDIT_LOG_PATH", "/var/log/bma-health/mcp-audit.jsonl")
+    report = {
+        "path": audit_path,
+        "verified": False,
+        "total_entries": 0,
+        "first_broken_line": None,
+        "last_hash": "0" * 64,
+        "errors": [],
+    }
+
+    if not os.path.exists(audit_path):
+        report["errors"].append("audit log file does not exist")
+        return report
+
+    try:
+        prev_hash = "0" * 64
+        with open(audit_path, "r", encoding="utf-8") as f:
+            for lineno, raw in enumerate(f, start=1):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    entry = _json.loads(raw)
+                except _json.JSONDecodeError as e:
+                    report["first_broken_line"] = lineno
+                    report["errors"].append(f"line {lineno}: invalid JSON ({e})")
+                    return report
+                stored_hash = entry.pop("hash", None)
+                if not stored_hash:
+                    report["first_broken_line"] = lineno
+                    report["errors"].append(f"line {lineno}: missing 'hash' field")
+                    return report
+                if entry.get("prev_hash") != prev_hash:
+                    report["first_broken_line"] = lineno
+                    report["errors"].append(
+                        f"line {lineno}: prev_hash mismatch "
+                        f"(expected {prev_hash[:12]}..., got {(entry.get('prev_hash') or '')[:12]}...)"
+                    )
+                    return report
+                expected = _hashlib.sha256(
+                    _json.dumps(entry, sort_keys=True, ensure_ascii=False).encode()
+                ).hexdigest()
+                if stored_hash != expected:
+                    report["first_broken_line"] = lineno
+                    report["errors"].append(
+                        f"line {lineno}: content hash mismatch "
+                        f"(expected {expected[:12]}..., got {stored_hash[:12]}...)"
+                    )
+                    return report
+                prev_hash = stored_hash
+                report["total_entries"] += 1
+        report["last_hash"] = prev_hash
+        report["verified"] = True
+        return report
+    except Exception as e:
+        report["errors"].append(f"verification crashed: {type(e).__name__}: {e}")
+        return report
+
+
 # ---------------------------------------------------------------------------
 # Excel upload endpoints
 # ---------------------------------------------------------------------------
 
-MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
+# Aligned with the CSV upload path (admin.py): file is parsed straight into
+# DB then discarded, no on-disk persistence — 500 MB is the same ceiling.
+MAX_UPLOAD_SIZE = 500 * 1024 * 1024  # 500 MB
 
 
 @router.post("/upload-excel", response_model=ExcelUploadResponse)

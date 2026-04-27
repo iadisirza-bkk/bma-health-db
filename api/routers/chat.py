@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Union
 
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -32,10 +33,16 @@ def _get_orchestrator():
 # --------------------------------------------------------------------------- #
 
 
-@router.get("/chat")
-@router.post("/chat")
-async def chat_endpoint(message: str = Query("", description="User message")):
-    """Synchronous chat — returns full response as JSON."""
+@router.get("/chat", response_model=None)
+@router.post("/chat", response_model=None)
+async def chat_endpoint(
+    message: str = Query("", description="User message"),
+) -> Union[dict, JSONResponse]:
+    """Synchronous chat — returns full response as JSON.
+
+    Returns a `dict` on success (FastAPI serialises it to JSON automatically)
+    or a `JSONResponse` for explicit error status codes (503/500).
+    """
     orchestrator = _get_orchestrator()
     if orchestrator is None:
         return JSONResponse(
@@ -63,7 +70,7 @@ async def chat_endpoint(message: str = Query("", description="User message")):
 async def chat_stream_endpoint(
     message: str = Query("", description="User message"),
     history: str = Query("[]", description="Conversation history as JSON array"),
-):
+) -> StreamingResponse:
     """SSE streaming chat — returns Server-Sent Events with incremental content."""
     orchestrator = _get_orchestrator()
     if orchestrator is None:
@@ -82,7 +89,10 @@ async def chat_stream_endpoint(
         conv_history = json.loads(history)
         if not isinstance(conv_history, list):
             conv_history = []
-    except Exception:
+    except Exception as e:
+        # Frontend sent a malformed history blob — drop it but log so
+        # we can spot a regression in the client serialiser.
+        logger.warning("Failed to parse conversation history (%s) — using empty", type(e).__name__)
         conv_history = []
 
     # Trim history to prevent context overflow

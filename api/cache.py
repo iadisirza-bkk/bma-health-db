@@ -73,6 +73,123 @@ def cache_set(key: str, value: Any, ttl: int = TTL_T2_AGGREGATE) -> None:
         pass
 
 
+def cache_get_or_compute(
+    key: str,
+    compute_fn: Callable[[], Any],
+    ttl: int = TTL_T2_AGGREGATE,
+    lock_timeout: int = 30,
+) -> Any:
+    """Get from cache; on miss, acquire a Redis lock before computing.
+
+    Solves the cache-stampede problem: when many requests hit a cold key
+    at the same time, only ONE actually runs compute_fn(); the others wait
+    and read the freshly-cached value.
+
+    Falls open if Redis is unavailable: every caller computes (same as
+    today's behaviour, which is correct for fail-open caching).
+
+    Args:
+        key: cache key (without bma: prefix)
+        compute_fn: zero-arg callable that produces the value to cache
+        ttl: cache TTL in seconds
+        lock_timeout: max seconds to wait for the lock before computing anyway
+    """
+    # Fast path: cache hit
+    hit = cache_get(key)
+    if hit is not None:
+        return hit
+
+    r = _get_redis()
+    if r is None:
+        # Fail-open: no Redis means no stampede protection — just compute.
+        return compute_fn()
+
+    lock_key = f"bma:lock:{key}"
+    # blocking_timeout = how long to wait for someone else's lock; if it
+    # expires we compute ourselves rather than 5xx.
+    # timeout = how long the lock auto-expires if the holder crashes mid-compute.
+    try:
+        lock = r.lock(lock_key, timeout=lock_timeout, blocking_timeout=lock_timeout - 1)
+    except Exception:
+        return compute_fn()
+
+    acquired = False
+    try:
+        acquired = lock.acquire(blocking=True)
+    except Exception:
+        acquired = False
+
+    if not acquired:
+        # Couldn't get the lock in time — fall back to direct compute so the
+        # request doesn't hang. Don't cache (the lock-holder will).
+        logger.warning("Cache lock timeout on %s — computing without lock", key)
+        return compute_fn()
+
+    try:
+        # Re-check cache: another worker may have populated it while we waited
+        hit = cache_get(key)
+        if hit is not None:
+            return hit
+        # Compute and cache
+        value = compute_fn()
+        cache_set(key, value, ttl)
+        return value
+    finally:
+        try:
+            lock.release()
+        except Exception:
+            pass
+
+
+async def acache_get_or_compute(
+    key: str,
+    async_compute_fn: Callable[[], Any],
+    ttl: int = TTL_T2_AGGREGATE,
+    lock_timeout: int = 30,
+) -> Any:
+    """Async variant of cache_get_or_compute — for compute fns that await.
+
+    Wraps the Redis lock acquire in asyncio.to_thread so the event loop
+    isn't blocked while waiting for another worker to release the lock.
+    """
+    import asyncio
+
+    hit = cache_get(key)
+    if hit is not None:
+        return hit
+
+    r = _get_redis()
+    if r is None:
+        return await async_compute_fn()
+
+    try:
+        lock = r.lock(f"bma:lock:{key}", timeout=lock_timeout, blocking_timeout=lock_timeout - 1)
+    except Exception:
+        return await async_compute_fn()
+
+    try:
+        acquired = await asyncio.to_thread(lock.acquire, True)
+    except Exception:
+        acquired = False
+
+    if not acquired:
+        logger.warning("Cache lock timeout on %s — computing without lock", key)
+        return await async_compute_fn()
+
+    try:
+        hit = cache_get(key)
+        if hit is not None:
+            return hit
+        value = await async_compute_fn()
+        cache_set(key, value, ttl)
+        return value
+    finally:
+        try:
+            await asyncio.to_thread(lock.release)
+        except Exception:
+            pass
+
+
 def cache_delete_pattern(pattern: str) -> int:
     """Delete all keys matching a pattern. Returns count deleted."""
     r = _get_redis()

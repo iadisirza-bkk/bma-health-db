@@ -109,7 +109,12 @@ CANONICAL_RENAMES = {
     'WAIST':     'waist_cm',
     'PULSE':     'pulse_rate',
     'BMI':       'bmi',
-    'FAT':       'body_fat_pct',
+    # FAT: confusingly named "body fat percent" in the Excel sheet, but the
+    # CSV column actually stores a Boolean obesity flag (1=ใช่/0=ไม่ใช่). We
+    # rename to the canonical disease-flag key that the disease registry and
+    # mv_visit_resolved already expect — see ETL-TYPE-FIX-DESIGN.md §7 and
+    # migration 108.
+    'FAT':       'found_obesity',
 
     # Glucose
     'PREFPG':    'fasting_glucose',
@@ -181,6 +186,172 @@ CANONICAL_RENAMES = {
 }
 
 
+# ----- Explicit type overrides (variable_key → data_type) --------------------
+# Authoritative type assignment that wins over the regex inference below.
+# Source: ETL-TYPE-FIX-DESIGN.md §1.
+#
+# Lookup precedence (in infer_data_type()):
+#   1. EXPLICIT_TYPES[variable_key]   ← here
+#   2. regex on possible_values+description
+#   3. fallback 'text'
+
+EXPLICIT_TYPES: dict[str, str] = {
+    # ---- boolean (binary 0/1 flags; see ETL-TYPE-FIX-DESIGN §1.A) ----
+    # Disease risk flags
+    'risk_dm': 'boolean', 'risk_hpt': 'boolean', 'risk_cvd': 'boolean',
+    'risk_bmi': 'boolean', 'risk_stroke': 'boolean', 'risk_dyslipidemia': 'boolean',
+    # Disease found flags
+    'found_dm': 'boolean', 'found_hpt': 'boolean', 'found_cvd': 'boolean',
+    'found_dyslipidemia': 'boolean', 'found_stroke': 'boolean', 'found_obesity': 'boolean',
+    # NCD comorbidity (App1 1=เป็น, 2=ไม่เป็น)
+    'hrt': 'boolean', 'kidney': 'boolean', 'asth': 'boolean',
+    'emphy': 'boolean', 'eplpy': 'boolean',
+    'cgtds': 'boolean', 'cgtdsmn': 'boolean', 'cgtdsot': 'boolean',
+    # Family history checkboxes
+    'pdm': 'boolean', 'phpt': 'boolean', 'phrtm': 'boolean',
+    'pkidney': 'boolean', 'pstroke': 'boolean', 'pgout': 'boolean',
+    'pepm': 'boolean', 'poth': 'boolean',
+    # Pets
+    'dog': 'boolean', 'cat': 'boolean', 'amloth': 'boolean',
+    # Mental health 2Q
+    'depression_2q_1': 'boolean', 'depression_2q_2': 'boolean',
+    # Symptom checklists
+    'scrres01': 'boolean', 'scrres02': 'boolean',
+    'scrres03': 'boolean', 'scrres04': 'boolean',
+    'symp01': 'boolean', 'symp02': 'boolean',
+    'symp03': 'boolean', 'symp04': 'boolean',
+    'ankle': 'boolean', 'elbow': 'boolean', 'head': 'boolean',
+    'hip': 'boolean', 'knee': 'boolean', 'lwbh': 'boolean',
+    'neck': 'boolean', 'shldr': 'boolean', 'upbh': 'boolean',
+    'wrist': 'boolean',
+    'ptgleft': 'boolean', 'ptgright': 'boolean',
+    # Lab interpretation flags (TRUE = abnormal)
+    'bldsgrs': 'boolean', 'cbcrs': 'boolean',
+    'chltrrs': 'boolean', 'clcrs': 'boolean',
+    'cvcrs': 'boolean', 'egfr': 'boolean',
+    'liverrs': 'boolean', 'uars': 'boolean',
+    'uricrs': 'boolean', 'vsactrs': 'boolean',
+    # Lab-test ordering checkboxes
+    'bldsg': 'boolean', 'cbc': 'boolean',
+    'chkegfr': 'boolean', 'chkot': 'boolean',
+    'clc': 'boolean', 'cvc': 'boolean',
+    'liver': 'boolean', 'ua': 'boolean', 'uric': 'boolean',
+    # NOTE: the Excel sheet column "FAT" was historically mapped to
+    # variable_key='body_fat_pct' (a misnomer — it's a Boolean obesity flag,
+    # not a percent). It is now canonicalised to 'found_obesity' via
+    # CANONICAL_RENAMES, and the boolean type is asserted there (see entry
+    # for 'found_obesity' above). Migration 108 renames any pre-existing
+    # rows in private.variable_definition.
+    # Lifestyle / risk-factor checkboxes
+    'smoketype1': 'boolean', 'smoketype2': 'boolean',
+    'smoketype3': 'boolean', 'smoketype4': 'boolean',
+    'stmng1': 'boolean', 'stmng2': 'boolean',
+    'stmng3': 'boolean', 'stmng4': 'boolean',
+    'fdfat': 'boolean', 'fdnon': 'boolean',
+    'fdslt': 'boolean', 'fdsw': 'boolean',
+    'rffw': 'boolean', 'rfnon': 'boolean', 'rfoth': 'boolean',
+    'rfover': 'boolean', 'rfprvlg': 'boolean', 'rfspc': 'boolean',
+    'oth': 'boolean',
+    'csoth': 'boolean', 'csrefer': 'boolean', 'csslf': 'boolean',
+    'wdsick': 'boolean',
+    'smoking': 'boolean', 'alcohol': 'boolean',
+    # Disability sub-checkboxes
+    'discare1': 'boolean', 'discare2': 'boolean',
+    'discare3': 'boolean', 'discare4': 'boolean',
+    'distype1': 'boolean', 'distype2': 'boolean',
+    'distype3': 'boolean', 'distype4': 'boolean',
+    'distype5': 'boolean', 'distype6': 'boolean',
+    'distype7': 'boolean', 'distype8': 'boolean',
+    # Service requests
+    'request1': 'boolean', 'request2': 'boolean',
+    'request3': 'boolean', 'request4': 'boolean',
+    'request5': 'boolean', 'request6': 'boolean',
+    'request7': 'boolean',
+    # Audit / lifecycle
+    'cancelst': 'boolean', 'flag': 'boolean',
+
+    # ---- number (continuous numerics; see ETL-TYPE-FIX-DESIGN §1.B) ----
+    # Anthropometry
+    'height_cm': 'number', 'weight_kg': 'number',
+    'waist_cm': 'number', 'wstl': 'number', 'bmi': 'number',
+    # Vital signs
+    'sbp': 'number', 'dbp': 'number',
+    'pr': 'number', 'pulse_rate': 'number',
+    # Glucose
+    'fasting_glucose': 'number', 'post_glucose': 'number',
+    'dtx': 'number', 'fbs': 'number',
+    'blood_sugar': 'number', 'hba1c': 'number',
+    'bldhour': 'number',
+    # Lipid
+    'total_cholesterol': 'number', 'triglyceride': 'number',
+    'hdl': 'number', 'ldl': 'number',
+    # Kidney
+    'crtinine': 'number', 'egfrrs': 'number',
+    'egfroth': 'number', 'egfr_lab': 'number',
+    'lab_egfr': 'number', 'bunrs': 'number',
+    'uric_acid': 'number',
+    # Liver
+    'sgot': 'number', 'sgpt': 'number', 'alkppt': 'number',
+    # CBC
+    'hmgb': 'number', 'hmtc': 'number', 'wbc': 'number',
+    'rbc': 'number', 'mcv': 'number', 'mnc': 'number',
+    'ntp': 'number', 'lmpc': 'number', 'ecsnp': 'number',
+    'pitcnt': 'number', 'lab_hemoglobin': 'number',
+    # Urinalysis
+    'protein': 'number', 'uarbc': 'number', 'uawbc': 'number',
+    # Cancer screen
+    'fittest': 'number', 'hpv': 'number',
+    # Other lab
+    'lab_cholesteral': 'number',
+    # Vision
+    'leftvl': 'number', 'rightvl': 'number',
+    'leftrw': 'number', 'rightrw': 'number',
+    # Pet counts
+    'dogamt': 'number', 'catamt': 'number', 'amlamt': 'number',
+    # Demographics
+    'age': 'number',
+    'age_sort': 'number', 'alcohal_sort': 'number',
+    'smoke_sort': 'number', 'bmi_sort': 'number',
+    'bp_sort': 'number', 'selfour_sort': 'number',
+    'st5_sort': 'number', 'vsact_sort': 'number',
+    'drscn_sort': 'number', 'scr2q_sort': 'number',
+    'homeland_sort': 'number',
+    # Mental health Likert
+    'phq9_q1': 'number', 'phq9_q2': 'number', 'phq9_q3': 'number',
+    'phq9_q4': 'number', 'phq9_q5': 'number', 'phq9_q6': 'number',
+    'phq9_q7': 'number', 'phq9_q8': 'number', 'phq9_q9': 'number',
+    'st5_q1': 'number', 'st5_q2': 'number', 'st5_q3': 'number',
+    'st5_q4': 'number', 'st5_q5': 'number',
+
+    # ---- date (calendar dates; see ETL-TYPE-FIX-DESIGN §1.C) ----
+    'birthdate': 'date',
+    'vstdate': 'date',
+    'canceldate': 'date',
+    'firstdate': 'date',
+    'lastdate': 'date',
+}
+
+
+# ----- Boolean polarity hints (variable_key → polarity) ----------------------
+# Used by ETL backfill to know how to map raw value → boolean.
+#   'positive' (default): VALUE 1 → TRUE; 2/0 → FALSE
+#   'inverted'          : VALUE 1 → FALSE; 2 → TRUE (e.g. 1=ปกติ, 2=ผิดปกติ)
+#   'two_q'             : VALUE 2 → TRUE; 1 → FALSE; 0 → NULL
+
+BOOLEAN_POLARITY: dict[str, str] = {
+    # Lab interpretation flags (1=ปกติ, 2=ผิดปกติ)
+    'bldsgrs': 'inverted', 'cbcrs': 'inverted',
+    'chltrrs': 'inverted', 'clcrs': 'inverted',
+    'cvcrs': 'inverted', 'egfr': 'inverted',
+    'liverrs': 'inverted', 'uars': 'inverted',
+    'uricrs': 'inverted', 'vsactrs': 'inverted',
+    # Vision flags
+    'ptgleft': 'inverted', 'ptgright': 'inverted',
+    # Mental health 2Q (2=มี, 1=ไม่มี, 0=ไม่ตอบ)
+    'depression_2q_1': 'two_q', 'depression_2q_2': 'two_q',
+}
+
+
 # ----- Type inference --------------------------------------------------------
 
 NUMBER_HINTS = re.compile(r'\b(score|points?|mg/dL|mmHg|cm|kg|%|ปี|ครั้ง)\b', re.I)
@@ -189,7 +360,12 @@ CODE_HINTS = re.compile(r'\d\s*=\s*\S')
 DATE_HINTS = re.compile(r'\bDATE|TIMESTAMP|วันที่\b', re.I)
 
 
-def infer_data_type(possible_values: Optional[str], description: str) -> str:
+def infer_data_type(possible_values: Optional[str], description: str,
+                    variable_key: Optional[str] = None) -> str:
+    # 1. Explicit override wins over regex inference
+    if variable_key and variable_key in EXPLICIT_TYPES:
+        return EXPLICIT_TYPES[variable_key]
+
     pv = (possible_values or '').strip()
     desc = (description or '').strip()
 
@@ -302,11 +478,11 @@ def load(db_url: str, xlsx_path: str, dry_run: bool = False) -> int:
         description  = str(r.get('คำอธิบาย', '') or '').strip()
         possible_v   = str(r.get('ค่าที่เป็นไปได้ (Possible Values)', '') or '').strip() or None
 
-        data_type = infer_data_type(possible_v, description)
+        var_key   = to_variable_key(csv_col, source_code, sub_domain)
+        data_type = infer_data_type(possible_v, description, variable_key=var_key)
         unit      = infer_unit(possible_v, description)
         valid_min, valid_max = parse_numeric_range(possible_v) if data_type == 'number' else (None, None)
         tier      = infer_tier(domain, csv_col, sub_domain)
-        var_key   = to_variable_key(csv_col, source_code, sub_domain)
 
         key = (source_code, csv_col)
         # Dedupe: same csv_col can appear in multiple files (e.g. PID in pt+vital+hv).

@@ -1,0 +1,659 @@
+% =============================================================================
+% BMA Health — Preprocessing Pipeline Technical Note (XeLaTeX via Tectonic)
+% =============================================================================
+% Compile from api/templates/latex/ so that `Path=assets/` resolves:
+%     cd api/templates/latex && tectonic preprocessing.tex
+% =============================================================================
+\documentclass[11pt,a4paper]{article}
+
+\newcommand{\bmaheaderleft}{BMA Health --- Preprocessing Pipeline}
+\newcommand{\bmaversion}{v1.0 · 2026-04-22}
+\input{bma_article_preamble}
+
+% --- Thai font (Google Sans has native Thai support) ---
+\setmainfont{GoogleSans-Regular.ttf}[
+  Path=assets/,
+  BoldFont=GoogleSans-Bold.ttf,
+]
+\setsansfont{GoogleSans-Regular.ttf}[
+  Path=assets/,
+  BoldFont=GoogleSans-Bold.ttf,
+]
+% --- Monospace: use a system font that supports Thai so \texttt{} with Thai
+%     characters renders correctly (fallback from LaTeX's default lmmono).
+\setmonofont{Menlo}[Scale=0.88]
+
+% --- listings for code samples ---
+\usepackage{listings}
+\definecolor{codebg}{HTML}{F6F8F7}
+\definecolor{codekey}{HTML}{00744B}
+\definecolor{codestr}{HTML}{B7410E}
+\definecolor{codecomment}{HTML}{718096}
+
+% Custom "monospace-ish" font that supports Thai (uses the main Google Sans,
+% which has Thai glyphs, just at slightly smaller size + no proportional
+% kerning). listings' basicstyle can take any font family.
+\newfontfamily\codefont{GoogleSans-Regular.ttf}[
+  Path=assets/,
+  Scale=0.88,
+  BoldFont=GoogleSans-Bold.ttf,
+]
+
+\lstdefinestyle{shellstyle}{
+  basicstyle=\codefont\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  framerule=0.3pt,
+  rulecolor=\color{gray!40},
+  breaklines=true,
+  breakatwhitespace=true,
+  columns=fullflexible,
+  keepspaces=true,
+  xleftmargin=8pt,
+  xrightmargin=4pt,
+  lineskip=1pt,
+  aboveskip=6pt,
+  belowskip=6pt,
+  captionpos=b,
+}
+\lstdefinestyle{sqlstyle}{
+  style=shellstyle,
+  language=SQL,
+  keywordstyle=\color{codekey}\bfseries,
+  stringstyle=\color{codestr},
+  commentstyle=\color{codecomment}\itshape,
+  morekeywords={CASCADE,CONCURRENTLY,RETURNING,COALESCE,FILTER,STRING_AGG}
+}
+\lstdefinestyle{pythonstyle}{
+  style=shellstyle,
+  language=Python,
+  keywordstyle=\color{codekey}\bfseries,
+  stringstyle=\color{codestr},
+  commentstyle=\color{codecomment}\itshape,
+}
+
+% Let tables break across pages automatically
+\usepackage{tabularx}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+% Since the preamble loads `fancyhdr` and expects \bmaheaderleft, the header
+% will already appear on every page. No \maketitle, no cover.
+
+\begin{document}
+
+% No title page — go straight to content. A compact heading bar instead.
+\begin{center}
+  \vspace*{-0.6cm}
+  \textcolor{bmagreen}{\rule{\linewidth}{1.2pt}}\\[2pt]
+  {\Large\bfseries\color{bmagreen} BMA Health Preprocessing Pipeline}\\[2pt]
+  {\small\color{gray} โครงการคัดกรองสุขภาพกรุงเทพมหานคร · สำนักการแพทย์ กรุงเทพมหานคร}\\[2pt]
+  \textcolor{bmagreen}{\rule{\linewidth}{1.2pt}}
+\end{center}
+
+\vspace{0.3cm}
+
+\noindent
+เอกสารนี้สรุป \textbf{preprocessing pipeline ทั้งหมด} ที่แปลงไฟล์ CSV ต้นทาง 13 ไฟล์จาก 3 ระบบ
+(Portal / App1 / App2) ให้กลายเป็นตาราง PostgreSQL และ materialized views สำหรับ API และรายงาน.
+ไม่มีการ impute ค่าใด ๆ — ค่าผิด/เกินช่วง/ว่าง จะถูกแปลงเป็น \texttt{NULL}.
+ข้อมูลคนเดียวกันที่ปรากฏในหลายระบบจะ \textit{stack} เก็บเป็นหลายแถว (ไม่ merge) เพื่อรักษาจำนวนการตรวจจริง.
+
+\tableofcontents
+\vspace{0.5cm}
+
+% =============================================================================
+\section{หลักการออกแบบ 5 ข้อ}
+% =============================================================================
+
+\begin{enumerate}[leftmargin=*, itemsep=3pt]
+  \item \textbf{No imputation} --- ค่าผิดพลาด/นอกช่วง/ว่างเปล่า $\rightarrow$ \texttt{NULL} เสมอ.
+    ไม่เดา ไม่เติมด้วยค่าเฉลี่ย ไม่ใช้ last-observation-carried-forward.
+    Imputation บิดเบือนการวิเคราะห์ epidemiology.
+  \item \textbf{Stack mode} --- คนเดียวกันปรากฏใน 2 ระบบ $=$ สร้าง 2 แถวใน \texttt{raw\_patients}
+    (แถวละ \texttt{data\_source} ต่างกัน) เพื่อรักษาจำนวนการตรวจจริงและรายงานความซ้ำซ้อนข้ามระบบ.
+  \item \textbf{3-tier fields} --- \textit{raw} / \textit{source-derived} (\texttt{*\_src}) / \textit{ETL-derived}
+    แยกกันชัดเจน ตรวจสอบย้อนกลับได้และเปรียบเทียบระหว่าง source ได้.
+  \item \textbf{Provenance} --- ทุก record มี \texttt{data\_source} (\texttt{portal}/\texttt{app1}/\texttt{app2})
+    และ \texttt{import\_batch\_id} เก็บไว้เสมอ.
+  \item \textbf{Fail-soft} --- \texttt{execute\_values} มี \texttt{SAVEPOINT} แถว-ต่อ-แถว.
+    แถวที่พังจะถูก skip พร้อม log. ไม่ทำให้ transaction ทั้งก้อนล้ม.
+\end{enumerate}
+
+% =============================================================================
+\section{แหล่งข้อมูล 3 ระบบ}
+% =============================================================================
+
+\subsection{โครงสร้างโฟลเดอร์}
+
+Web upload และ CLI คาดหวังโครงสร้างดังนี้:
+\begin{lstlisting}[style=shellstyle]
+<data-dir>/
+|- portal/   (7 files) pt.csv, pthistory.csv, vitalsignslf.csv,
+|                      homevisit.csv, homehealth.csv,
+|                      labhealth.csv, labhealthext.csv
+|- app1/     (5 files) pt.csv, vitalsignslf.csv, homevisit.csv,
+|                      homehealth.csv, labhealth.csv
+|- app2/     (1 file)  app2.csv
+\end{lstlisting}
+
+\subsection{ความแตกต่างระหว่าง source}
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{l X X X}
+\toprule
+& \textbf{Portal} & \textbf{App1} & \textbf{App2} \\
+\midrule
+จำนวนไฟล์          & 7 & 5 & 1 \\
+Columns รวม        & 383 & 189 & 103 \\
+ID field           & \texttt{IDCARD} & \texttt{PID} & \texttt{PID} \\
+Birth date         & \texttt{BIRTHDATE} & \texttt{BRTHDATE} & ไม่มี (มีแค่ \texttt{AGE\_GROUP}) \\
+Sex encoding       & 10 / 20 & 10 / 20 & "ชาย" / "หญิง" \\
+BMI                & ต้องคำนวณเอง & ต้องคำนวณเอง & pre-computed ใน \texttt{BMI} \\
+Lab results        & ตัวเลข raw (HMGB, FBS, CHOLEST) & เหมือน Portal & ตัวเลข 3 ช่อง + text interpret 11 ช่อง \\
+Screening flags    & 0/1 integer & 0/1 integer & "ปกติ" / "เสี่ยง" / "ผิดปกติ" \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+% =============================================================================
+\section{Pipeline 6 ขั้นตอน}
+% =============================================================================
+
+\begin{center}
+\footnotesize
+\begin{tabular}{rlL{8.5cm}}
+\toprule
+\# & ขั้นตอน & คำอธิบาย \\
+\midrule
+1 & Upload (streaming)  & \texttt{shutil.copyfileobj} ลง tempfile บน disk — 64 KB chunks.
+  Peak memory $< 10$ MB แม้ไฟล์ 500 MB. \\
+2 & Parse               & \texttt{pd.read\_csv(path, dtype=str, low\_memory=False)}.
+  Encoding fallback: UTF-8 $\rightarrow$ TIS-620 $\rightarrow$ CP874 $\rightarrow$ Latin-1. \\
+3 & Hash                & Base64 decode $\rightarrow$ HMAC-SHA-256 ด้วย env secret $\rightarrow$ hex digest 64 chars.
+  Portal/App1/App2 ใช้ secret เดียวกัน $\rightarrow$ match ข้าม source ได้. \\
+4 & Clean               & Out-of-range $\rightarrow$ \texttt{NULL} (ดู \S\ref{sec:cleanse}). \\
+5 & Stack insert        & Plain \texttt{INSERT} (ไม่มี \texttt{ON CONFLICT} บน child tables).
+  Natural key = \texttt{(idcard\_hash, data\_source)}. \\
+6 & View refresh        & \texttt{REFRESH MATERIALIZED VIEW CONCURRENTLY} ทั้ง 13 views.
+  Non-fatal — ถ้า refresh ล้ม ข้อมูล raw ยัง committed แล้ว. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% =============================================================================
+\section{Data Cleansing Rules}
+\label{sec:cleanse}
+% =============================================================================
+
+\subsection{Filter out (ลบทิ้ง)}
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item \texttt{IDCARD}/\texttt{PID} เป็น \texttt{NULL}, ว่าง, หรือ base64 decode ไม่ได้
+    $\rightarrow$ ลบ (ระบุตัวบุคคลไม่ได้, $< 1$\%).
+\end{itemize}
+
+\noindent เราไม่ลบ row ที่ \texttt{CANCELST}$=1$ อีกต่อไป — เก็บไว้
+และใช้ \texttt{cancel\_status} filter ตอน query เพราะยังต้องรายงาน.
+
+\subsection{Out-of-range $\rightarrow$ NULL}
+
+หลักการ: ค่าที่ \textit{เป็นไปไม่ได้ทาง clinical} $\rightarrow$ \texttt{NULL} --- ไม่ใช่ 0 ไม่ใช่ค่าเฉลี่ย.
+
+\begin{center}
+\small
+\begin{tabularx}{\linewidth}{l l X}
+\toprule
+\textbf{Field} & \textbf{เงื่อนไข NULL} & \textbf{เหตุผล} \\
+\midrule
+\texttt{BIRTHDATE} ปี & $< 1900$ หรือ $> 2030$ & อายุสูงสุดโลก $= 122$ ปี \\
+\texttt{age}          & $< 0$ หรือ $> 150$ & เป็นไปไม่ได้ \\
+\texttt{HEIGHT}       & $< 50$ หรือ $> 250$ cm & ทารก $\sim 50$, คนสูงสุด $272$ cm \\
+\texttt{WEIGHT}       & $< 10$ หรือ $> 300$ kg & ทารก $\sim 3$, คนหนักสุดในไทย $\sim 300$ kg \\
+\texttt{WSTL}         & $< 30$ cm & \textbf{พบจริง} มีค่า $0$ (ไม่ได้วัดแต่กรอก 0) \\
+\texttt{HBPN} (SBP)   & $< 40$ หรือ $> 300$ mmHg & \textbf{พบจริง} มีค่า $0, 1$ (ไม่ได้วัด) \\
+\texttt{LBPN} (DBP)   & $< 20$ หรือ $> 200$ mmHg & DBP $< 20 =$ shock รุนแรง \\
+\texttt{FBS, CHOLEST} & $< 0$ หรือ $> 999$ mg/dL & เครื่องวัดสูงสุด \\
+\texttt{HMGB}         & $< 0$ หรือ $> 30$ g/dL & Hb สูงสุดจริง $\sim 20$ (polycythemia vera) \\
+\texttt{EGFR}         & $< 0$ หรือ $> 200$ mL/min & Clinical range \\
+\texttt{BMI} (computed) & $> 80$ & คนหนักสุดโลก BMI $\sim 70$ \\
+integer               & $> 2{,}147{,}483{,}647$ & เกิน PostgreSQL INT4 \\
+float                 & $\infty$ หรือ NaN & data เสีย \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Transform (แปลงค่า)}
+
+\begin{center}
+\footnotesize
+\begin{tabularx}{\linewidth}{L{6cm} X}
+\toprule
+\textbf{เงื่อนไข} & \textbf{การแปลง} \\
+\midrule
+\texttt{BIRTHDATE} ปี $> 2400$     & ลบ 543 (พ.ศ.$\rightarrow$ค.ศ.) \\
+App2 \texttt{MALE} = "ชาย"/"หญิง"   & $\rightarrow$ 10 / 20 \\
+App2 \texttt{DM\_NAME} = "ปกติ"/"เสี่ยง"/"เป็น" & $\rightarrow$ 0 / 1 / 1 \\
+App2 \texttt{H\_DM\_NAME} = "เป็น"/"ไม่เป็น"/"ไม่แน่ใจ" & $\rightarrow$ True / False / NULL \\
+App2 \texttt{DISTRICT} $= 9999$    & $\rightarrow$ \texttt{NULL} (placeholder "ไม่ระบุ") \\
+\texttt{DISTRICTBKK} ว่าง          & Backfill 4-priority (ดู \S\ref{sec:backfill}) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{District backfill (4 priority)}
+\label{sec:backfill}
+
+\begin{enumerate}[leftmargin=*, itemsep=1pt]
+  \item \texttt{DISTRICTBKK} จาก \texttt{vitalsignslf.csv} (ถ้ามี)
+  \item \texttt{DISTRICT} จาก \texttt{app2.csv} (ถ้ามี, $\ne 9999$)
+  \item \texttt{facility\_code} $\rightarrow$ \texttt{ref\_facility\_districts} mapping
+  \item \texttt{home\_district} จาก \texttt{homevisit} (ต้องอยู่ $1001$--$1050$)
+\end{enumerate}
+
+\subsection{Row-level error handling}
+
+\begin{lstlisting}[style=pythonstyle]
+execute_values(cur, sql, rows, page_size=2000, progress_cb=cb):
+  for chunk in chunks(rows, page_size):
+    SAVEPOINT ev_batch
+    try:
+      INSERT chunk   # batch-mode (fast path)
+      RELEASE SAVEPOINT
+    except:
+      ROLLBACK TO SAVEPOINT ev_batch
+      # retry each row; skip offenders
+      for row in chunk:
+        try:    SAVEPOINT ev_row; INSERT row; RELEASE
+        except: ROLLBACK TO SAVEPOINT; skipped += 1
+    progress_cb(done, total)   # UI live progress
+\end{lstlisting}
+
+% =============================================================================
+\section{Stack Mode --- ไม่ Merge ไม่ Dedupe}
+% =============================================================================
+
+\subsection{Natural key ใหม่}
+
+\begin{lstlisting}[style=sqlstyle]
+-- Before (migration 001-004):
+raw_patients (idcard_hash UNIQUE, ...)
+
+-- After (migration 011):
+raw_patients (idcard_hash, data_source, ...)
+  UNIQUE(idcard_hash, data_source)
+-- Same person in 2 systems = 2 rows (one per source).
+\end{lstlisting}
+
+ตาราง child (\texttt{raw\_visits}, \texttt{raw\_vitalsigns}, \ldots) มี FK \texttt{patient\_id}
+ชี้ไปที่ \texttt{raw\_patients(id)} ของ source ตัวเอง.
+Composite \texttt{UNIQUE(patient\_id, visit\_date, facility\_code)} ถูกถอดเหลือเป็น \texttt{INDEX}
+(visit เดียวกันจาก 2 ระบบ = ให้เป็น 2 row ได้, นับเป็นการตรวจซ้ำ).
+
+\subsection{ผลต่อ query}
+
+\begin{lstlisting}[style=sqlstyle]
+-- นับจำนวนการตรวจ (visits, รวมซ้ำข้ามระบบ):
+SELECT COUNT(*) FROM raw_vitalsigns;
+
+-- นับจำนวนประชาชนเฉพาะ (unique people):
+SELECT COUNT(DISTINCT idcard_hash) FROM raw_patients;
+
+-- ตรวจซ้ำข้ามระบบ (view built-in):
+SELECT * FROM v_cross_system_duplicates;
+-- columns: idcard_hash, n_systems, systems, n_patient_rows
+
+-- สรุปจำนวน rows แต่ละ source แต่ละ table:
+SELECT * FROM v_source_row_counts;
+\end{lstlisting}
+
+\subsection{Best-available value}
+
+\begin{lstlisting}[style=sqlstyle]
+-- BMI ที่ดีที่สุด: priority Portal calc > App1 calc > App2 src
+SELECT idcard_hash,
+  COALESCE(
+    MAX(bmi)     FILTER (WHERE data_source = 'portal'),
+    MAX(bmi)     FILTER (WHERE data_source = 'app1'),
+    MAX(bmi_src) FILTER (WHERE data_source = 'app2')
+  ) AS best_bmi
+FROM raw_patients p JOIN raw_vitalsigns v USING (idcard_hash)
+GROUP BY idcard_hash;
+\end{lstlisting}
+
+% =============================================================================
+\section{App2 Normalizer}
+% =============================================================================
+
+App2 เป็นไฟล์เดียวที่แตกต่างจาก Portal/App1 มาก: \textbf{pre-aggregated} (1 row ครอบคลุม
+patient + vitalsigns + homevisit + homehealth + lab), ค่าเป็น \textit{Thai labels},
+และมี \textit{pre-computed derived} (\texttt{BMI, AGE\_GROUP, LAB\_EGFR}).
+
+\subsection{Split strategy}
+
+1 row ใน \texttt{app2.csv} ถูก split เป็น 5 rows กระจาย 5 ตาราง:
+
+\begin{lstlisting}[style=shellstyle]
+app2.csv (1 row)
+   |-> raw_patients    (sex, age, age_group_src)
+   |-> raw_vitalsigns  (screening flags + bmi_src + *_src labels)
+   |-> raw_homevisit   (district + edu_src, occupation_src, ...)
+   |-> raw_homehealth  (family history bools + smoke_src, alcohol_src, ...)
+   |-> raw_lab_results (binary results + 3 numeric labs + 11 text interpret)
+\end{lstlisting}
+
+\subsection{Thai $\rightarrow$ code mapping}
+
+\begin{center}
+\footnotesize
+\begin{tabularx}{\linewidth}{L{4.5cm} L{4cm} X}
+\toprule
+\textbf{ค่าดิบ App2} & \textbf{ค่าหลัง normalize} & \textbf{ที่ใช้} \\
+\midrule
+"ชาย" / "หญิง"                         & 10 / 20                    & \texttt{MALE} $\rightarrow$ \texttt{sex} \\
+"ปกติ" / "เสี่ยง" / "เป็น" / "ผิดปกติ"    & 0 / 1 / 1 / 1              & \texttt{DM\_NAME} etc. $\rightarrow$ \texttt{found\_*} \\
+"ไม่เป็น" / "เป็น" / "ไม่แน่ใจ"           & False / True / NULL        & \texttt{H\_DM\_NAME} $\rightarrow$ \texttt{parent\_*} \\
+"15-34 ปี" / "35-44 ปี" / \ldots        & proxy age 25 / 40 / 52 / 70 & \texttt{AGE\_GROUP} $\rightarrow$ \texttt{age} \\
+9999                                   & NULL                        & \texttt{DISTRICT, WRKDISTRICT} \\
+Thai label อื่น (e.g., "อ้วนระดับ 1")    & เก็บใน \texttt{*\_src}     & \texttt{BMI\_GROUP, HOMETYPE\_NAME} \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{สิ่งที่ App2 ไม่มี}
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item \textbf{ไม่มี} \texttt{HEIGHT/WEIGHT} $\rightarrow$ \texttt{bmi} (ETL calc) $=$ NULL,
+    ใช้ได้แค่ \texttt{bmi\_src} (App2's).
+  \item \textbf{ไม่มี} \texttt{SBP/DBP} $\rightarrow$ \texttt{map\_bp, pulse\_pressure, bp\_group} $=$ NULL.
+  \item \textbf{ไม่มี} \texttt{SCN9Q/ST50} individual items $\rightarrow$ \texttt{phq9\_total, st5\_total} $=$ NULL.
+  \item \textbf{ไม่มี} \texttt{birth\_year} $\rightarrow$ ใช้ \texttt{AGE\_GROUP} midpoint เป็น proxy.
+\end{itemize}
+
+App2 rows จะมี \texttt{NULL} มากกว่า Portal/App1 สำหรับ ETL-derived fields.
+การเทียบต้องใช้ \texttt{COALESCE(bmi, bmi\_src)} เพื่อไม่ให้ App2 ตกหล่น.
+
+% =============================================================================
+\section{Derived Fields 3 ชั้น}
+% =============================================================================
+
+ทุก raw table มี \textbf{3 ชั้น} ของ column:
+
+\subsection{Layer 1 --- Raw}
+
+ค่าคัดจาก CSV ตรง ๆ (หลัง out-of-range $\rightarrow$ NULL).
+ตัวอย่าง: \texttt{height\_cm, weight\_kg, sbp, dbp, hemoglobin, cholesterol, fbs}.
+
+\subsection{Layer 2 --- Source-provided (\texttt{*\_src})}
+
+ค่าที่ source system คำนวณไว้ให้ --- เก็บเพื่อ audit.
+
+\begin{center}
+\footnotesize
+\begin{tabularx}{\linewidth}{l X}
+\toprule
+\textbf{Column} & \textbf{ที่มา} \\
+\midrule
+\texttt{bmi\_src}            & App2's pre-computed BMI \\
+\texttt{bmi\_group\_src}     & App2's "อ้วนระดับ 1" / "ปกติสมส่วน" / \ldots \\
+\texttt{age\_group\_src}     & App2's "15-34 ปี" / \ldots \\
+\texttt{cbc\_interp\_src}    & App2's "ปกติ" / "ผิดปกติ" / "ไม่ได้ตรวจ" \\
+\texttt{hemoglobin\_src}     & App2's \texttt{LAB\_HEMOGLOBIN} numeric \\
+\texttt{edu\_src}            & App2's "ปริญญาตรี" / "มัธยมศึกษา" (ไม่แปลงเป็น code) \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{Layer 3 --- ETL-derived (plain name)}
+
+เราคำนวณเองจาก raw --- \textbf{harmonized ทุก source} (ถ้า raw ครบ).
+
+\begin{center}
+\footnotesize
+\begin{tabularx}{\linewidth}{l L{5cm} X}
+\toprule
+\textbf{Column} & \textbf{สูตร} & \textbf{เกณฑ์} \\
+\midrule
+\texttt{bmi}            & $\dfrac{\text{weight\_kg}}{(\text{height\_cm}/100)^2}$ & $10 \le$ bmi $\le 80$ else NULL \\
+\texttt{bmi\_group}     & int 1-5            & WHO Asia-Pacific: ผอม/ปกติ/เกิน/อ้วน I/อ้วน II \\
+\texttt{bp\_group}      & int 1-4            & ปกติ / สูงกว่าปกติ / HTN-I / HTN-II \\
+\texttt{map\_bp}        & $\text{DBP} + \dfrac{\text{SBP}-\text{DBP}}{3}$ & Mean Arterial Pressure \\
+\texttt{pulse\_pressure} & $\text{SBP} - \text{DBP}$                       & --- \\
+\texttt{phq9\_total}    & $\sum_{i=1}^{9} Q_i$ (PHQ-9) & NULL ถ้า item ใดว่าง \\
+\texttt{phq9\_severity} & 0--4               & ปกติ / เล็ก / กลาง / ค่อนข้าง / รุนแรง \\
+\texttt{st5\_total}     & $\sum_{i=1}^{5} Q_i$ (ST-5) & --- \\
+\texttt{st5\_severity}  & 0--4               & น้อย / ปานกลาง / สูง / รุนแรง / รุนแรงมาก \\
+\texttt{age\_group}     & label              & วัยเรียน / วัยเริ่มทำงาน / \ldots / สูงวัย \\
+\texttt{egfr\_stage}    & text               & G1 / G2 / G3a / G3b / G4 / G5 (KDIGO 2012) \\
+\texttt{anemia\_class}  & text               & microcytic / normocytic / macrocytic \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+% =============================================================================
+\section{การอัปโหลดผ่านหน้าเว็บ}
+% =============================================================================
+
+\subsection{Memory-safe upload}
+
+\begin{center}
+\footnotesize
+\begin{tabular}{lll}
+\toprule
+\textbf{ขั้น} & \textbf{เทคนิค} & \textbf{Peak memory} \\
+\midrule
+Browser $\rightarrow$ Server & multipart streaming            & $< 100$ KB buffer \\
+Server receive              & \texttt{SpooledTemporaryFile} (1 MB spool) & $\sim 1$ MB $\times N$ files \\
+Copy to tempfile            & \texttt{shutil.copyfileobj} 64 KB chunks    & 64 KB per copy \\
+Read into pandas            & \texttt{pd.read\_csv(path)} one-at-a-time   & 1 DataFrame \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+ประมวลผลได้ไฟล์ $> 1$ GB ต่อไฟล์ บนเครื่อง RAM 4 GB.
+Max per-file $= 1$ GB (ตั้งใน \texttt{admin.py:MAX\_FILE\_BYTES}).
+
+\subsection{Flow}
+
+\begin{enumerate}[leftmargin=*, itemsep=1pt]
+  \item Drag folder $\rightarrow$ JS เก็บ \texttt{file.webkitRelativePath} ใน hidden input.
+  \item JS แสดง badge per-file: source (portal/app1/app2/?) + type.
+  \item Submit: CSRF check, stream each file to tempfile, build manifest,
+    INSERT \texttt{import\_history} (status=\texttt{running}), spawn thread.
+  \item Worker: advisory lock $\rightarrow$ per-source delete (ไม่ TRUNCATE)
+    $\rightarrow$ loop portal/app1/app2 $\rightarrow$ \texttt{pd.read\_csv} + importer
+    $\rightarrow$ commit $\rightarrow$ refresh views $\rightarrow$ flush cache.
+  \item UI polls \texttt{/admin/api/import-progress} ทุก 2 วินาที แสดง \texttt{rows\_processed/rows\_total},
+    throughput (\texttt{rows/s}), ETA.
+\end{enumerate}
+
+% =============================================================================
+\section{Schema Changes (Migrations 011--013)}
+% =============================================================================
+
+\begin{center}
+\footnotesize
+\begin{tabularx}{\linewidth}{l X}
+\toprule
+\textbf{Migration} & \textbf{สิ่งที่ทำ} \\
+\midrule
+\texttt{011\_multi\_source\_stack.sql}
+    & เพิ่ม \texttt{data\_source + import\_batch\_id} ทุก raw table;
+      drop \texttt{UNIQUE(idcard\_hash)} $\rightarrow$ \texttt{UNIQUE(idcard\_hash, data\_source)};
+      downgrade natural-key UNIQUE $\rightarrow$ plain INDEX;
+      เพิ่ม \texttt{*\_src} columns (App2 pre-computed);
+      เพิ่ม ETL-derived columns (BMI group, BP group, MAP, pulse pressure,
+      PHQ9/ST5 totals + severities, eGFR stage, anemia class);
+      สร้าง views \texttt{v\_cross\_system\_duplicates}, \texttt{v\_source\_row\_counts}. \\
+\addlinespace
+\texttt{012\_matviews\_per\_source.sql}
+    & DROP + CREATE matviews ทั้ง 13 views ด้วย \texttt{data\_source} column แรก
+      + GROUP BY source. UNIQUE index เป็น \texttt{(data\_source, district\_code, \ldots)}.
+      REFRESH ทุก view ท้าย migration. \\
+\addlinespace
+\texttt{013\_live\_progress.sql}
+    & เพิ่ม \texttt{rows\_total + rows\_processed} บน \texttt{import\_history}
+      สำหรับ live progress bar (throttled 500 ms per update). \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\subsection{ETL ใหม่ --- รองรับ 3 source + progress callback}
+
+\begin{lstlisting}[style=pythonstyle]
+# Every importer takes (cur, df, patient_map, data_source, batch_id, progress_cb)
+# patient_map key = (idcard_hash, data_source)
+
+def execute_values(cur, sql, rows, page_size=2000, progress_cb=None):
+    for chunk in chunks(rows, page_size):
+        try:    SAVEPOINT; INSERT chunk; RELEASE
+        except: ROLLBACK; retry per-row
+        if progress_cb:
+            progress_cb(done, total)   # UI update (throttled)
+\end{lstlisting}
+
+% =============================================================================
+\section{Query Patterns}
+% =============================================================================
+
+\subsection{Data quality per source}
+
+\begin{lstlisting}[style=sqlstyle]
+-- % null per field per source (for quality comparison)
+SELECT data_source,
+       COUNT(*) AS total,
+       ROUND(100.0 * COUNT(bmi) / COUNT(*), 1) AS pct_bmi,
+       ROUND(100.0 * COUNT(sbp) / COUNT(*), 1) AS pct_sbp,
+       ROUND(100.0 * COUNT(fbs) / COUNT(*), 1) AS pct_fbs
+FROM raw_vitalsigns
+GROUP BY data_source;
+\end{lstlisting}
+
+\subsection{Source-filtered summary view}
+
+\begin{lstlisting}[style=sqlstyle]
+-- หลัง migration 012 ทุก summary_* view มี data_source col
+SELECT district_code, SUM(total_screened) AS total_all_sources
+FROM summary_district_disease
+WHERE data_source IN ('portal', 'app1')   -- Portal + App1 รวม
+GROUP BY district_code;
+\end{lstlisting}
+
+\subsection{Cross-system duplicate report}
+
+\begin{lstlisting}[style=sqlstyle]
+SELECT idcard_hash, n_systems, systems, n_patient_rows
+FROM v_cross_system_duplicates
+ORDER BY n_systems DESC
+LIMIT 100;
+-- คนที่ตรวจมากกว่า 1 ระบบ (เช่น portal+app1 = 2, หรือทั้ง 3)
+\end{lstlisting}
+
+% =============================================================================
+\section{Analytics Dashboards}
+% =============================================================================
+
+\subsection{Dashboard / Source tabs}
+
+\texttt{/admin/dashboard?source=portal|app1|app2|all} --- แถบ 4 tab ด้านบน แสดง
+per-source counts ของ raw tables และ materialized views.
+
+\subsection{Cross-Stats (3 tabs)}
+
+\texttt{/admin/cross-stats}:
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item \textbf{Coverage}: Heatmap $50$ เขต $\times$ $3$ source.
+    Emerald/sky/amber alpha-scaled ตามจำนวน patients.
+  \item \textbf{Distribution}: 9 metrics (\texttt{risk\_dm, risk\_hpt, \ldots, found\_obesity, found\_dyslipidemia})
+    แสดง \% per source + $\chi^2$ test แสดง \textit{ต่างกันอย่างมีนัยสำคัญ} ($p < 0.05$) หรือไม่.
+    ใช้ 2$\times$N contingency table (positive vs negative $\times$ sources with data).
+  \item \textbf{Data Quality}: $230$ fields $\times$ $7$ tables field-completeness $\%$.
+    Blank cell (\texttt{—}) สำหรับ source ที่ไม่มีข้อมูลใน column นั้น.
+\end{itemize}
+
+\subsection{Agreement (Phase 3) --- Same-person discrepancy}
+
+\texttt{/admin/agreement?pair=portal-app1|portal-app2|app1-app2}.
+
+Match ผู้ป่วยข้าม source ด้วย \texttt{idcard\_hash} (DISTINCT ON + ORDER BY visit\_date DESC
+$\rightarrow$ latest visit per source). จากนั้น:
+
+\begin{itemize}[leftmargin=*, itemsep=1pt]
+  \item \textbf{Bland-Altman} (continuous: BMI, SBP, DBP, Hb, Cholesterol, eGFR, \ldots):
+    bias, SD, $95\%$ LoA $=$ bias $\pm 1.96 \cdot$ SD, Pearson $r$, ICC.
+    Matplotlib scatter plot embedded as base64 PNG.
+  \item \textbf{Cohen's $\kappa$} (categorical: DM/HPT/CVD/obesity found, risk flags, sex):
+    confusion matrix $+$ Landis-Koch interpretation
+    (slight / fair / moderate / substantial / almost perfect).
+\end{itemize}
+
+$N \ge 3$ คู่ ถึงจะคำนวณ, $N \ge 10$ ถึงจะวาด plot. ต่ำกว่านั้นแสดงข้อความเตือนแทน.
+
+% =============================================================================
+\section{Troubleshooting}
+% =============================================================================
+
+\begin{center}
+\footnotesize
+\begin{tabularx}{\linewidth}{L{5cm} X}
+\toprule
+\textbf{Issue} & \textbf{Fix} \\
+\midrule
+\texttt{IDCARD\_HASH\_SECRET} ไม่ set
+    & \texttt{export IDCARD\_HASH\_SECRET=\$(python3 -c 'import secrets; print(secrets.token\_urlsafe(32))')} \\
+\addlinespace
+"Another import is currently running"
+    & PostgreSQL advisory lock --- รอ import เก่าเสร็จ หรือ restart API เพื่อ drop dead connection \\
+\addlinespace
+Import status "success" แต่ rows น้อย
+    & ดู \texttt{rows\_skipped} + ตรวจ log --- มักเพราะ PID decode ไม่ได้ \\
+\addlinespace
+View refresh failed
+    & \texttt{import\_history.view\_refresh\_error};
+      re-run ผ่าน \texttt{POST /admin/refresh} หรือ \texttt{make refresh-views} \\
+\addlinespace
+Import thread orphaned (API restart)
+    & \texttt{UPDATE import\_history SET status='error' WHERE status='running';} \\
+\addlinespace
+Memory error ระหว่าง import
+    & DataFrame too large --- ลด file size หรือเพิ่ม Docker memory limit \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+% =============================================================================
+\section{ไฟล์ที่เกี่ยวข้อง}
+% =============================================================================
+
+\begin{center}
+\footnotesize
+\begin{tabularx}{\linewidth}{l X}
+\toprule
+\textbf{Path} & \textbf{หน้าที่} \\
+\midrule
+\texttt{db/migrations/011\_multi\_source\_stack.sql} & เปลี่ยน schema สำหรับ 3-source stack mode \\
+\texttt{db/migrations/012\_matviews\_per\_source.sql} & Rebuild 13 matviews + data\_source GROUP BY \\
+\texttt{db/migrations/013\_live\_progress.sql} & เพิ่ม rows\_total/rows\_processed \\
+\texttt{etl/import\_csv.py} & Main ETL orchestrator + per-table importers + progress cb \\
+\texttt{etl/derived.py} & Shared derived helpers (BMI, MAP, PHQ9, eGFR, anemia) \\
+\texttt{etl/app2\_normalizer.py} & App2 Thai$\rightarrow$code mapping + row splitter \\
+\texttt{api/admin.py} & Bundle upload + background worker + cross-stats + agreement \\
+\texttt{api/services/agreement\_service.py} & Bland-Altman + Cohen's $\kappa$ + plot renderer \\
+\texttt{api/templates/admin/upload\_bundle.html} & Upload UI (folder picker) \\
+\texttt{api/templates/admin/cross\_stats.html} & Coverage heatmap + distribution + data quality \\
+\texttt{api/templates/admin/agreement.html} & Agreement report UI \\
+\texttt{PREPROCESSING.md} & เอกสาร Markdown (ต้นฉบับของเอกสารนี้) \\
+\texttt{DATA-DICTIONARY.md} & Column-level reference \\
+\texttt{MEDICAL-DICTIONARY.md} & Clinical range reference \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\vspace{0.5cm}
+\begin{center}
+\small\color{gray}\itshape
+เอกสารสร้างเมื่อ 2026-04-22 · ครอบคลุมถึง migration 013 + Cross-Stats/Agreement dashboards
+\end{center}
+
+\end{document}

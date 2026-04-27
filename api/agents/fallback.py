@@ -191,6 +191,10 @@ def build_prevalence(data: dict, disease: str | None, district: str | None) -> d
 def build_compare_sex(data: dict, disease: str | None) -> dict:
     try:
         from agents.tools.query_api import _query
+        # k-anonymity guard: suppress sex buckets with fewer than K patients.
+        # Citywide totals are huge in practice, but the principle applies
+        # everywhere — if NULL/unknown sex has only a handful, it's identifying.
+        from security import K_ANONYMITY_THRESHOLD
         rows = _query("""
             SELECT p.sex, COUNT(DISTINCT v.patient_id) AS total,
                    COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_dm) AS risk_dm,
@@ -200,7 +204,8 @@ def build_compare_sex(data: dict, disease: str | None) -> dict:
             JOIN raw_patients p ON v.patient_id = p.id
             WHERE v.cancel_status IS DISTINCT FROM 1
             GROUP BY p.sex
-        """)
+            HAVING COUNT(DISTINCT v.patient_id) >= %s
+        """, (K_ANONYMITY_THRESHOLD,))
         sex_labels = {10: "ชาย", 20: "หญิง"}
         lines = ["## เปรียบเทียบรายเพศ", ""]
         chart_data = []

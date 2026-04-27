@@ -4,6 +4,7 @@ New endpoints for map dashboard (Docs 01-08).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -18,6 +19,22 @@ from data.pm25_stations import (
 logger = logging.getLogger("bma.gis")
 
 router = APIRouter(prefix="/api/v2/gis", tags=["GIS"])
+
+
+# ---------------------------------------------------------------------------
+# Async DB helpers — wrap blocking psycopg2 calls so they don't park the
+# event loop while awaiting external I/O (ArcGIS PM2.5). Use these from any
+# `async def` handler that also `await`s on something else; pure sync
+# handlers (`def`) can keep using execute_query/execute_scalar directly
+# because FastAPI runs them in a thread pool.
+# ---------------------------------------------------------------------------
+
+async def _aq(sql: str, params: Optional[tuple] = None):
+    return await asyncio.to_thread(execute_query, sql, params)
+
+
+async def _as(sql: str, params: Optional[tuple] = None):
+    return await asyncio.to_thread(execute_scalar, sql, params)
 
 
 # =========================================================================== #
@@ -255,8 +272,9 @@ async def disease_environment_overlay(
 
     pct_col = valid_keys[disease_key]
 
-    # Get disease data per district
-    disease_rows = execute_query(f"""
+    # Get disease data per district. Use async wrapper so the DB query
+    # doesn't block the event loop (this handler also awaits ArcGIS below).
+    disease_rows = await _aq(f"""
         SELECT d.district_code, d.district_name, d.total_screened,
                d.{pct_col} AS disease_pct,
                AVG(f.latitude) AS centroid_lat,
@@ -276,7 +294,9 @@ async def disease_environment_overlay(
         client = ArcGISClient()
         pm25_data = await client.get_pm25()
     except Exception:
-        pass
+        # PM2.5 is optional overlay data — log so a recurring outage is visible
+        # but don't fail the whole disease overlay request.
+        logger.warning("PM2.5 fetch failed for disease overlay", exc_info=True)
 
     return {
         "disease_key": disease_key,
@@ -296,20 +316,31 @@ async def disease_environment_overlay(
 
 
 async def _get_pm25_cached() -> dict:
-    """Fetch PM2.5 from ArcGIS with T1 (5 min) cache."""
-    hit = cache_get("pm25:current_readings")
-    if hit is not None:
-        return hit
-    try:
-        from external.arcgis_client import ArcGISClient
-        client = ArcGISClient()
-        data = await client.get_pm25()
-        if data.get("data_available"):
-            cache_set("pm25:current_readings", data, TTL_T1_EXTERNAL)
-        return data
-    except Exception as e:
-        logger.warning("ArcGIS PM2.5 fetch failed: %s", e)
-        return {"data_available": False, "data": []}
+    """Fetch PM2.5 from ArcGIS with T1 (5 min) cache + stampede protection.
+
+    Uses acache_get_or_compute so that under concurrent traffic only ONE
+    worker hits ArcGIS when the cache expires. Other concurrent requests
+    wait briefly and read the freshly-cached value — protects the upstream
+    ArcGIS quota during traffic spikes.
+    """
+    from cache import acache_get_or_compute
+
+    async def _fetch_pm25() -> dict:
+        try:
+            from external.arcgis_client import ArcGISClient
+            client = ArcGISClient()
+            data = await client.get_pm25()
+            return data
+        except Exception as e:
+            logger.warning("ArcGIS PM2.5 fetch failed: %s", e)
+            return {"data_available": False, "data": []}
+
+    return await acache_get_or_compute(
+        "pm25:current_readings",
+        _fetch_pm25,
+        ttl=TTL_T1_EXTERNAL,
+        lock_timeout=15,  # ArcGIS typical response < 5s; 15s is safe
+    )
 
 
 def _build_district_readings(pm25_data: dict) -> dict[str, dict]:
@@ -393,6 +424,9 @@ def _get_historical_stats(dcodes: list[str]) -> dict | None:
             return row[0]
         return None
     except Exception:
+        # Historical stats are optional enrichment — log so we notice
+        # recurring DB issues but don't fail the live PM2.5 endpoint.
+        logger.warning("_get_historical_stats failed for dcodes=%s", dcodes, exc_info=True)
         return None
 
 
@@ -418,8 +452,11 @@ async def pm25_zones():
 
     pm25_data = await _get_pm25_cached()
     readings = _build_district_readings(pm25_data)
-    zones_meta = _get_zone_meta()
-    districts = _get_district_list()
+    # Two short DB queries — wrap so they don't block the loop
+    zones_meta, districts = await asyncio.gather(
+        asyncio.to_thread(_get_zone_meta),
+        asyncio.to_thread(_get_district_list),
+    )
 
     # Group districts by zone, collect PM2.5 values
     zone_data: dict[str, list[dict]] = {}
@@ -487,12 +524,15 @@ async def pm25_districts():
 
     pm25_data = await _get_pm25_cached()
     readings = _build_district_readings(pm25_data)
-    districts = _get_district_list()
+    districts = await asyncio.to_thread(_get_district_list)
 
     result = []
     for d in districts:
         r = readings.get(d["name_th"], {})
-        hist = _get_historical_stats([d["dcode"]])
+        # _get_historical_stats hits DB twice per district (50 calls total).
+        # Already inside an async handler — push to thread pool to avoid
+        # parking the event loop on each call.
+        hist = await asyncio.to_thread(_get_historical_stats, [d["dcode"]])
 
         row = {
             "dcode": d["dcode"],
@@ -532,7 +572,7 @@ async def pm25_monthly(
 
     # Validate zone_code if provided
     if zone_code is not None:
-        valid = execute_scalar(
+        valid = await _as(
             "SELECT COUNT(*) FROM ref_health_zones WHERE zone_code = %s",
             (zone_code,),
         )
@@ -544,8 +584,9 @@ async def pm25_monthly(
     if hit is not None:
         return hit
 
-    # Determine which dcodes to query
-    all_districts = _get_district_list()
+    # Determine which dcodes to query (sync helper — uses execute_query
+    # but is fast and runs only once per request)
+    all_districts = await asyncio.to_thread(_get_district_list)
     if zone_code:
         dcodes = [d["dcode"] for d in all_districts if d["zone_code"] == zone_code]
     else:
@@ -555,13 +596,13 @@ async def pm25_monthly(
     period = []
     historical_available = False
     try:
-        count = execute_scalar(
+        count = await _as(
             "SELECT COUNT(*) FROM pm25_daily WHERE dcode = ANY(%s)",
             (dcodes,),
         )
         if count and count > 0:
             historical_available = True
-            period = execute_query("""
+            period = await _aq("""
                 SELECT
                     EXTRACT(YEAR FROM reading_date)::INTEGER AS year,
                     LPAD(EXTRACT(MONTH FROM reading_date)::TEXT, 2, '0') AS month,
@@ -575,7 +616,10 @@ async def pm25_monthly(
             for row in period:
                 row["year"] = str(row["year"])
     except Exception:
-        pass
+        # pm25_daily aggregate is best-effort historical context; failure
+        # leaves `period` as set above (possibly partial). Log + continue
+        # so we still return the current snapshot from ArcGIS.
+        logger.warning("pm25_monthly historical aggregate failed", exc_info=True)
 
     # Current snapshot from ArcGIS
     pm25_data = await _get_pm25_cached()

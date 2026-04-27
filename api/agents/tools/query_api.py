@@ -128,9 +128,7 @@ def _headline_kpi() -> dict:
 
 
 def _yoy_comparison() -> dict:
-    # k-anonymity guard: only return quarters with >= K patients screened.
-    # Citywide quarterly counts are typically 100K+ so this is a safety net,
-    # not the primary defence — but we enforce it everywhere on principle.
+    """Quarterly screening trend from mv_visit_resolved (v3 schema)."""
     from security import K_ANONYMITY_THRESHOLD
     rows = _query("""
         SELECT DATE_TRUNC('quarter', v.visit_date)::date AS quarter,
@@ -138,15 +136,14 @@ def _yoy_comparison() -> dict:
                COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_dm) AS risk_dm,
                COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_hpt) AS risk_hpt,
                COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_obesity) AS found_obesity
-        FROM raw_vitalsigns v
-        WHERE v.cancel_status IS DISTINCT FROM 1
+        FROM public.mv_visit_resolved v
+        WHERE v.cancel_status = 0
           AND v.visit_date IS NOT NULL
           AND v.visit_date >= '2024-01-01'
         GROUP BY DATE_TRUNC('quarter', v.visit_date)
         HAVING COUNT(DISTINCT v.patient_id) >= %s
         ORDER BY quarter
     """, (K_ANONYMITY_THRESHOLD,))
-    # Format as readable text so synthesizer can summarize
     lines = ["เปรียบเทียบรายไตรมาส (2024-ปัจจุบัน):"]
     for r in rows:
         q = str(r.get("quarter", ""))[:10]
@@ -161,7 +158,10 @@ def _yoy_comparison() -> dict:
         prev = rows[-2]
         delta = int(latest.get("screened", 0)) - int(prev.get("screened", 0))
         pct = round(100.0 * delta / max(int(prev.get("screened", 0)), 1), 1)
-        lines.append(f"\nเทียบไตรมาสล่าสุด: {'เพิ่มขึ้น' if delta > 0 else 'ลดลง'} {abs(delta):,} คน ({pct:+.1f}%)")
+        lines.append(
+            f"\nเทียบไตรมาสล่าสุด: {'เพิ่มขึ้น' if delta > 0 else 'ลดลง'} "
+            f"{abs(delta):,} คน ({pct:+.1f}%)"
+        )
     return {"summary": "\n".join(lines)}
 
 
@@ -180,69 +180,117 @@ def _moph_targets() -> dict:
 
 
 def _ncd_cascade() -> dict:
-    total = _scalar("SELECT SUM(total_screened) FROM summary_district_disease") or 0
-    at_risk = _scalar("SELECT SUM(risk_dm_count + risk_hpt_count + risk_cvd_count) FROM summary_district_disease") or 0
-    diagnosed = _scalar("SELECT SUM(found_dm_count + found_hpt_count + found_cvd_count) FROM summary_district_disease") or 0
-    treatment = _scalar("SELECT SUM(dm_on_treatment + hpt_on_treatment) FROM summary_chronic_history") or 0
+    total = int(_scalar("SELECT SUM(total_screened) FROM summary_district_disease") or 0)
+    at_risk = int(_scalar(
+        "SELECT SUM(risk_dm_count + risk_hpt_count + risk_cvd_count) "
+        "FROM summary_district_disease"
+    ) or 0)
+    diagnosed = int(_scalar(
+        "SELECT SUM(found_dm_count + found_hpt_count + found_cvd_count) "
+        "FROM summary_district_disease"
+    ) or 0)
+    # Treatment cohort lives in raw_homehealth, but it is empty in the v3 schema.
+    # Surface that as N/A rather than crashing.
     return {"cascade": [
         {"stage": "คัดกรอง (Screened)", "count": total},
         {"stage": "พบเสี่ยง (At Risk)", "count": at_risk},
         {"stage": "วินิจฉัย (Diagnosed)", "count": diagnosed},
-        {"stage": "รักษา (Treatment)", "count": treatment, "note": "from homehealth self-report"},
+        {"stage": "รักษา (Treatment)", "count": None,
+         "note": "ยังไม่มีข้อมูลการรักษาในระบบนี้"},
     ]}
 
 
 def _screening_coverage() -> dict:
+    """Coverage % per district = total_screened / population.
+
+    Aggregates across data_source so each district appears once.
+    """
     rows = _query("""
-        SELECT d.district_code, d.district_name, d.total_screened,
+        SELECT d.district_code,
+               COALESCE(rd.name_th, d.district_code) AS district_name,
+               SUM(d.total_screened) AS total_screened,
                rd.population,
-               ROUND(100.0 * d.total_screened / NULLIF(rd.population, 0), 2) AS coverage_pct
+               ROUND(100.0 * SUM(d.total_screened) / NULLIF(rd.population, 0), 2) AS coverage_pct
         FROM summary_district_disease d
         JOIN ref_districts rd ON rd.dcode = d.district_code
-        WHERE d.total_screened >= 5
+        GROUP BY d.district_code, rd.name_th, rd.population
+        HAVING SUM(d.total_screened) >= 5
         ORDER BY coverage_pct DESC
     """)
     return {"districts": rows}
 
 
 def _lab_summary() -> dict:
+    """Lab averages per BKK district (filtered to ref_districts)."""
     rows = _query("""
-        SELECT district_code, total_lab_patients,
-               ROUND(avg_fbs::numeric, 1) AS avg_fbs,
-               ROUND(avg_cholesterol::numeric, 1) AS avg_cholesterol,
-               ROUND(avg_triglyceride::numeric, 1) AS avg_triglyceride,
-               ROUND(avg_hdl::numeric, 1) AS avg_hdl,
-               ROUND(avg_ldl::numeric, 1) AS avg_ldl,
-               ROUND(avg_hemoglobin::numeric, 1) AS avg_hemoglobin,
-               ROUND(avg_creatinine::numeric, 2) AS avg_creatinine,
-               ROUND(avg_egfr::numeric, 1) AS avg_egfr,
-               pct_anemia, pct_ckd
-        FROM summary_district_lab
-        ORDER BY district_code
+        SELECT l.district_code,
+               COALESCE(rd.name_th, l.district_code) AS district_name,
+               l.total_lab_patients,
+               ROUND(l.avg_fbs::numeric, 1) AS avg_fbs,
+               ROUND(l.avg_cholesterol::numeric, 1) AS avg_cholesterol,
+               ROUND(l.avg_triglyceride::numeric, 1) AS avg_triglyceride,
+               ROUND(l.avg_hdl::numeric, 1) AS avg_hdl,
+               ROUND(l.avg_ldl::numeric, 1) AS avg_ldl,
+               ROUND(l.avg_hemoglobin::numeric, 1) AS avg_hemoglobin,
+               ROUND(l.avg_creatinine::numeric, 2) AS avg_creatinine,
+               ROUND(l.avg_egfr::numeric, 1) AS avg_egfr,
+               l.pct_anemia, l.pct_ckd
+        FROM summary_district_lab l
+        INNER JOIN ref_districts rd ON rd.dcode = l.district_code
+        ORDER BY l.district_code
     """)
     return {"districts": rows}
 
 
 def _lab_city_average() -> dict:
+    """City-wide BKK lab averages, weighted by patient count.
+
+    Filters to ref_districts (50 BKK districts) so the result reflects "กทม."
+    rather than all 1055 districts in the source table.
+    """
     row = _query("""
-        SELECT SUM(total_lab_patients) AS total,
-               ROUND(AVG(avg_fbs)::numeric, 1) AS avg_fbs,
-               ROUND(AVG(avg_cholesterol)::numeric, 1) AS avg_cholesterol,
-               ROUND(AVG(avg_triglyceride)::numeric, 1) AS avg_triglyceride,
-               ROUND(AVG(avg_hdl)::numeric, 1) AS avg_hdl,
-               ROUND(AVG(avg_ldl)::numeric, 1) AS avg_ldl,
-               ROUND(AVG(avg_hemoglobin)::numeric, 1) AS avg_hemoglobin,
-               ROUND(AVG(avg_creatinine)::numeric, 2) AS avg_creatinine,
-               ROUND(AVG(avg_egfr)::numeric, 1) AS avg_egfr,
-               ROUND(AVG(pct_anemia)::numeric, 1) AS avg_pct_anemia,
-               ROUND(AVG(pct_ckd)::numeric, 1) AS avg_pct_ckd
-        FROM summary_district_lab
+        SELECT SUM(l.total_lab_patients) AS total,
+               ROUND((SUM(l.avg_fbs * l.total_lab_patients)
+                      / NULLIF(SUM(l.total_lab_patients), 0))::numeric, 1) AS avg_fbs,
+               ROUND((SUM(l.avg_cholesterol * l.total_lab_patients)
+                      / NULLIF(SUM(l.total_lab_patients), 0))::numeric, 1) AS avg_cholesterol,
+               ROUND((SUM(l.avg_triglyceride * l.total_lab_patients)
+                      / NULLIF(SUM(l.total_lab_patients), 0))::numeric, 1) AS avg_triglyceride,
+               ROUND((SUM(l.avg_hdl * l.total_lab_patients)
+                      / NULLIF(SUM(l.total_lab_patients), 0))::numeric, 1) AS avg_hdl,
+               ROUND((SUM(l.avg_ldl * l.total_lab_patients)
+                      / NULLIF(SUM(l.total_lab_patients), 0))::numeric, 1) AS avg_ldl
+        FROM summary_district_lab l
+        INNER JOIN ref_districts rd ON rd.dcode = l.district_code
     """)
-    return row[0] if row else {}
+    if not row or not row[0]:
+        return {}
+    r = row[0]
+    return {
+        "total_lab_patients": int(r.get("total") or 0),
+        "avg_fbs": r.get("avg_fbs"),
+        "avg_cholesterol": r.get("avg_cholesterol"),
+        "avg_triglyceride": r.get("avg_triglyceride"),
+        "avg_hdl": r.get("avg_hdl"),
+        "avg_ldl": r.get("avg_ldl"),
+        "summary": (
+            f"ค่าเฉลี่ยผลแลปกรุงเทพมหานคร (จากผู้ตรวจ {int(r.get('total') or 0):,} คน):\n"
+            f"- น้ำตาลในเลือด (FBS): {r.get('avg_fbs')} mg/dL (เกณฑ์ปกติ ≤100)\n"
+            f"- คอเลสเตอรอลรวม: {r.get('avg_cholesterol')} mg/dL (เกณฑ์ปกติ ≤200)\n"
+            f"- ไตรกลีเซอไรด์: {r.get('avg_triglyceride')} mg/dL (เกณฑ์ปกติ ≤150)\n"
+            f"- HDL: {r.get('avg_hdl')} mg/dL (เกณฑ์ปกติ ≥40)\n"
+            f"- LDL: {r.get('avg_ldl')} mg/dL (เกณฑ์ปกติ ≤130)"
+        ),
+    }
 
 
 def _bmi_distribution() -> dict:
-    row = _query("""
+    """City-wide BMI bucket distribution from summary_bmi_waist MV.
+
+    Filters to BKK districts (^10\\d\\d codes) and sex='all' to avoid double-
+    counting per-sex rows.
+    """
+    rows = _query("""
         SELECT SUM(total_measured) AS total,
                SUM(bmi_underweight) AS underweight,
                SUM(bmi_normal) AS normal,
@@ -252,18 +300,23 @@ def _bmi_distribution() -> dict:
                ROUND(AVG(avg_bmi)::numeric, 1) AS avg_bmi,
                ROUND(AVG(avg_waist)::numeric, 1) AS avg_waist
         FROM summary_bmi_waist
-        WHERE district_code ~ '^[0-9]' AND sex = -1
+        WHERE district_code IN (SELECT dcode FROM ref_districts)
+          AND sex = 'all'
     """)
-    if not row:
-        return {}
-    r = row[0]
-    total = int(r.get("total") or 1)
-    def _p(k):
+    if not rows:
+        return {"summary": "ไม่พบข้อมูล BMI"}
+    r = rows[0]
+    total = int(r.get("total") or 0)
+    if total == 0:
+        return {"summary": "ไม่พบข้อมูล BMI ของกรุงเทพมหานคร"}
+
+    def _p(k: str) -> str:
         v = int(r.get(k) or 0)
         return f"{v:,} คน ({round(100*v/total,1)}%)"
+
     return {
         "summary": (
-            f"การกระจายตัว BMI ของผู้คัดกรอง ({total:,} คน):\n"
+            f"การกระจายตัว BMI ของผู้คัดกรองในกทม. ({total:,} คน):\n"
             f"- น้ำหนักต่ำกว่าเกณฑ์ (Underweight): {_p('underweight')}\n"
             f"- ปกติ (Normal): {_p('normal')}\n"
             f"- น้ำหนักเกิน (Overweight): {_p('overweight')}\n"
@@ -288,93 +341,121 @@ def _cost_per_screening() -> dict:
 
 
 def _budget_allocation() -> dict:
+    """Population-weighted budget allocation per district.
+
+    Aggregates across data_source so each district appears once.
+    """
     rows = _query("""
-        SELECT d.district_code, d.district_name, d.total_screened,
+        SELECT d.district_code,
+               COALESCE(rd.name_th, d.district_code) AS district_name,
+               SUM(d.total_screened) AS total_screened,
                rd.population,
                ROUND(350.0 * rd.population * 0.6, 0) AS allocated_budget_thb
         FROM summary_district_disease d
         JOIN ref_districts rd ON rd.dcode = d.district_code
+        GROUP BY d.district_code, rd.name_th, rd.population
         ORDER BY allocated_budget_thb DESC
     """)
     return {"model": "population_weighted_60pct_target", "cost_per_person_thb": 350, "districts": rows}
 
 
 def _screening_tests() -> dict:
-    rows = _query("SELECT * FROM summary_screening_tests ORDER BY district_code")
-    city = _query("""
-        SELECT SUM(total_screened) AS total,
-               SUM(ekg_done) AS ekg_done, SUM(ekg_normal) AS ekg_normal, SUM(ekg_abnormal) AS ekg_abnormal,
-               SUM(xray_done) AS xray_done, SUM(xray_normal) AS xray_normal, SUM(xray_abnormal) AS xray_abnormal,
-               SUM(vision_done) AS vision_done, SUM(vision_normal) AS vision_normal,
-               SUM(dr_done) AS dr_done, SUM(dr_normal) AS dr_normal
-        FROM summary_screening_tests
-    """)
-    return {"city_total": city[0] if city else {}, "by_district": rows}
+    """EKG / chest x-ray / vision / DR screening rates.
+
+    summary_screening_tests was never built under v3. raw_vitalsigns has the
+    column but is empty. Surface a clear "not available" message.
+    """
+    return {
+        "summary": (
+            "ยังไม่มีข้อมูลตรวจคัดกรองพิเศษ (EKG, X-ray, สายตา, DR) ในระบบ — "
+            "ข้อมูลส่วนนี้ยังไม่ได้รับการคัดลอกเข้ามาจากระบบต้นทาง"
+        ),
+    }
 
 
 def _chronic_history() -> dict:
-    rows = _query("SELECT * FROM summary_chronic_history ORDER BY district_code")
-    city = _query("""
-        SELECT SUM(total_respondents) AS total,
-               SUM(history_dm) AS history_dm, SUM(history_hpt) AS history_hpt,
-               SUM(history_stroke) AS history_stroke, SUM(history_heart) AS history_heart,
-               SUM(dm_on_treatment) AS dm_on_treatment, SUM(hpt_on_treatment) AS hpt_on_treatment,
-               SUM(vaccinated_covid) AS vaccinated_covid, SUM(vaccinated_influenza) AS vaccinated_influenza,
-               SUM(exercise_regular) AS exercise_regular, SUM(exercise_sometimes) AS exercise_sometimes,
-               SUM(exercise_never) AS exercise_never
-        FROM summary_chronic_history
-    """)
-    return {"city_total": city[0] if city else {}, "by_district": rows}
+    """Self-reported chronic disease + treatment + vaccination + exercise.
+
+    Source table summary_chronic_history was never built; raw_homehealth is
+    empty. Return a clear notice.
+    """
+    return {
+        "summary": (
+            "ยังไม่มีข้อมูลประวัติโรคเรื้อรังและพฤติกรรม "
+            "(การรักษา/วัคซีน/การออกกำลังกาย) ในระบบ"
+        ),
+    }
 
 
 def _family_history() -> dict:
-    rows = _query("SELECT * FROM summary_family_history ORDER BY district_code")
-    city = _query("""
-        SELECT SUM(total_respondents) AS total,
-               SUM(family_dm_count) AS family_dm,
-               SUM(parent_dm) AS parent_dm, SUM(parent_hpt) AS parent_hpt,
-               SUM(parent_stroke) AS parent_stroke, SUM(parent_heart) AS parent_heart,
-               SUM(parent_kidney) AS parent_kidney
-        FROM summary_family_history
-    """)
-    return {"city_total": city[0] if city else {}, "by_district": rows}
+    """Family disease history (parent DM/HPT/stroke/heart/kidney).
+
+    Source table summary_family_history was never built; raw_homehealth is
+    empty.
+    """
+    return {
+        "summary": "ยังไม่มีข้อมูลประวัติครอบครัวในระบบ",
+    }
 
 
 def _comorbidity_matrix() -> dict:
+    """Person-level disease co-occurrence from summary_comorbidity MV.
+
+    Filters to the 50 BKK districts. Returns city-wide totals plus a
+    human-readable Thai summary.
+    """
     rows = _query("""
-        SELECT district_code, total_screened,
-               dm_only, hpt_only, obesity_only,
-               dm_and_hpt, dm_and_obesity, dm_and_dyslipidemia,
-               hpt_and_obesity, hpt_and_dyslipidemia,
-               cvd_and_stroke, dm_and_cvd,
-               metabolic_syndrome, dm_hpt_obesity,
-               multi_disease_count, no_disease
+        SELECT
+            SUM(total_screened)        AS total_screened,
+            SUM(dm_only)               AS dm_only,
+            SUM(hpt_only)              AS hpt_only,
+            SUM(obesity_only)          AS obesity_only,
+            SUM(dm_and_hpt)            AS dm_and_hpt,
+            SUM(dm_and_obesity)        AS dm_and_obesity,
+            SUM(dm_and_dyslipidemia)   AS dm_and_dyslipidemia,
+            SUM(hpt_and_obesity)       AS hpt_and_obesity,
+            SUM(hpt_and_dyslipidemia)  AS hpt_and_dyslipidemia,
+            SUM(metabolic_syndrome)    AS metabolic_syndrome,
+            SUM(dm_hpt_obesity)        AS dm_hpt_obesity,
+            SUM(multi_disease_count)   AS multi_disease,
+            SUM(no_disease)            AS no_disease
         FROM summary_comorbidity
-        ORDER BY district_code
+        WHERE district_code IN (SELECT dcode FROM ref_districts)
     """)
-    city = _query("""
-        SELECT SUM(total_screened) AS total,
-               SUM(dm_and_hpt) AS dm_and_hpt,
-               SUM(dm_and_obesity) AS dm_and_obesity,
-               SUM(hpt_and_obesity) AS hpt_and_obesity,
-               SUM(metabolic_syndrome) AS metabolic_syndrome,
-               SUM(multi_disease_count) AS multi_disease,
-               SUM(no_disease) AS no_disease
-        FROM summary_comorbidity
-    """)
-    return {"city_total": city[0] if city else {}, "by_district": rows}
+    if not rows:
+        return {"summary": "ไม่พบข้อมูลโรคร่วม"}
+    r = rows[0]
+    total = int(r.get("total_screened") or 0)
+    if total == 0:
+        return {"summary": "ไม่พบข้อมูลโรคร่วมในกทม."}
+
+    def _p(k: str, label: str) -> str:
+        v = int(r.get(k) or 0)
+        return f"- {label}: {v:,} คน ({round(100*v/total,1)}%)"
+
+    return {
+        "summary": (
+            f"ข้อมูลโรคร่วม (กทม., {total:,} คน):\n"
+            f"{_p('dm_and_hpt',         'เบาหวาน + ความดัน')}\n"
+            f"{_p('dm_and_obesity',     'เบาหวาน + อ้วน')}\n"
+            f"{_p('hpt_and_obesity',    'ความดัน + อ้วน')}\n"
+            f"{_p('dm_hpt_obesity',     'เบาหวาน + ความดัน + อ้วน')}\n"
+            f"{_p('metabolic_syndrome', 'Metabolic Syndrome (เมตาบอลิก)')}\n"
+            f"{_p('multi_disease',      'มีโรคตั้งแต่ 2 อย่างขึ้นไป')}\n"
+            f"{_p('no_disease',         'ไม่พบโรค NCD')}"
+        ),
+    }
 
 
 def _repeat_screening() -> dict:
-    # k-anonymity guard: suppress visit-count buckets with fewer than K
-    # patients (a power-user with 50 visits could otherwise be re-identified).
+    """Repeat-visit distribution from mv_visit_resolved (v3)."""
     from security import K_ANONYMITY_THRESHOLD
     rows = _query("""
         SELECT visit_count, COUNT(*) AS patient_count
         FROM (
             SELECT patient_id, COUNT(*) AS visit_count
-            FROM raw_vitalsigns
-            WHERE cancel_status IS DISTINCT FROM 1
+            FROM public.mv_visit_resolved
+            WHERE cancel_status = 0
             GROUP BY patient_id
         ) sub
         GROUP BY visit_count
@@ -411,52 +492,78 @@ def _zone_comparison() -> dict:
 
 
 def _executive_alert() -> dict:
-    # Identify districts with unusually high disease rates
+    """Identify districts with unusually high disease rates.
+
+    Aggregates across data_source (one row per district) so each district
+    appears only once.
+    """
     rows = _query("""
+        WITH d AS (
+            SELECT s.district_code,
+                   MAX(s.zone_code) AS zone_code,
+                   COALESCE(MAX(rd.name_th), s.district_code) AS district_name,
+                   SUM(s.total_screened) AS total_screened,
+                   SUM(s.risk_dm_count)  AS risk_dm,
+                   SUM(s.risk_hpt_count) AS risk_hpt,
+                   SUM(s.risk_cvd_count) AS risk_cvd
+            FROM summary_district_disease s
+            LEFT JOIN ref_districts rd ON rd.dcode = s.district_code
+            GROUP BY s.district_code
+        )
         SELECT district_code, district_name, zone_code, total_screened,
-               pct_risk_dm, pct_risk_hpt, pct_risk_cvd
-        FROM summary_district_disease
-        WHERE total_screened >= 5
-        AND (pct_risk_dm > 15 OR pct_risk_hpt > 20 OR pct_risk_cvd > 10)
+               ROUND(100.0 * risk_dm  / NULLIF(total_screened, 0), 2) AS pct_risk_dm,
+               ROUND(100.0 * risk_hpt / NULLIF(total_screened, 0), 2) AS pct_risk_hpt,
+               ROUND(100.0 * risk_cvd / NULLIF(total_screened, 0), 2) AS pct_risk_cvd
+        FROM d
+        WHERE total_screened >= 100
+          AND ( (100.0 * risk_dm  / NULLIF(total_screened, 0)) > 15
+             OR (100.0 * risk_hpt / NULLIF(total_screened, 0)) > 20
+             OR (100.0 * risk_cvd / NULLIF(total_screened, 0)) > 10 )
         ORDER BY pct_risk_dm DESC
     """)
     return {"alerts": rows, "total_alerts": len(rows)}
 
 
 def _disease_lab_crosstab() -> dict:
-    """FBS/SBP/cholesterol averages stratified by disease status."""
+    """Lab abnormality counts stratified by disease.
+
+    summary_lab_disease_cross stores long-format rows
+    (district_code, lab_test, disease, total_count, pct, total_patients).
+    Aggregate to city-wide for BKK and present as a Thai summary.
+    """
     rows = _query("""
-        SELECT district_code,
-               ROUND(avg_fbs_dm_positive::numeric, 1) AS avg_fbs_dm_positive,
-               ROUND(avg_fbs_dm_negative::numeric, 1) AS avg_fbs_dm_negative,
-               n_fbs_dm_positive, n_fbs_dm_negative,
-               ROUND(avg_sbp_hpt_positive::numeric, 1) AS avg_sbp_hpt_positive,
-               ROUND(avg_sbp_hpt_negative::numeric, 1) AS avg_sbp_hpt_negative,
-               ROUND(avg_chol_dyslip_positive::numeric, 1) AS avg_chol_dyslip_positive,
-               ROUND(avg_chol_dyslip_negative::numeric, 1) AS avg_chol_dyslip_negative
+        SELECT lab_test,
+               disease,
+               SUM(total_count)    AS total_count,
+               SUM(total_patients) AS total_patients,
+               ROUND(100.0 * SUM(total_count)::numeric
+                     / NULLIF(SUM(total_patients), 0), 2) AS pct
         FROM summary_lab_disease_cross
-        WHERE district_code = 'city_total' OR district_code = '__city__'
-        LIMIT 1
+        WHERE district_code IN (SELECT dcode FROM ref_districts)
+        GROUP BY lab_test, disease
+        ORDER BY lab_test, disease
     """)
     if not rows:
-        # Fallback: compute city-wide
-        rows = _query("""
-            SELECT 'city' AS district_code,
-                   ROUND(AVG(avg_fbs_dm_positive)::numeric, 1) AS avg_fbs_dm_positive,
-                   ROUND(AVG(avg_fbs_dm_negative)::numeric, 1) AS avg_fbs_dm_negative,
-                   SUM(n_fbs_dm_positive) AS n_fbs_dm_positive,
-                   SUM(n_fbs_dm_negative) AS n_fbs_dm_negative,
-                   ROUND(AVG(avg_sbp_hpt_positive)::numeric, 1) AS avg_sbp_hpt_positive,
-                   ROUND(AVG(avg_sbp_hpt_negative)::numeric, 1) AS avg_sbp_hpt_negative,
-                   ROUND(AVG(avg_chol_dyslip_positive)::numeric, 1) AS avg_chol_dyslip_positive,
-                   ROUND(AVG(avg_chol_dyslip_negative)::numeric, 1) AS avg_chol_dyslip_negative
-            FROM summary_lab_disease_cross
-            WHERE district_code ~ '^[0-9]'
-        """)
-    return {
-        "cross_tab": rows[0] if rows else {},
-        "note": "ค่าเฉลี่ย FBS/SBP/cholesterol แยกตามสถานะโรค (positive=พบโรค, negative=ไม่พบ)",
+        return {"summary": "ไม่พบข้อมูลผลแลปแยกตามโรค"}
+    lab_th = {
+        "fbs": "น้ำตาลในเลือด (FBS)",
+        "ldl": "ไขมัน LDL",
+        "total_cholesterol": "คอเลสเตอรอลรวม",
+        "triglyceride": "ไตรกลีเซอไรด์",
+        "hdl": "HDL",
+        "creatinine": "ครีเอตินิน",
     }
+    disease_th = {"diabetes": "เบาหวาน", "dyslipidemia": "ไขมันในเลือดสูง",
+                  "hypertension": "ความดันโลหิตสูง", "ckd": "ไตเรื้อรัง"}
+    lines = ["ตารางไขว้ผลแลป × โรค (กทม.):"]
+    for r in rows:
+        lt = lab_th.get(r["lab_test"], r["lab_test"])
+        ds = disease_th.get(r["disease"], r["disease"])
+        n = int(r.get("total_count") or 0)
+        tp = int(r.get("total_patients") or 0)
+        pct = r.get("pct") or 0
+        lines.append(f"- {lt} ผิดปกติในผู้ป่วย{ds}: {n:,} จาก {tp:,} ({pct}%)")
+    return {"summary": "\n".join(lines), "rows": rows}
 
 
 # Dispatch table
@@ -485,7 +592,12 @@ _DISPATCH = {
     "facility_performance": lambda: {"facilities": _query("SELECT * FROM summary_facility ORDER BY total_screened DESC LIMIT 20")},
     "facility_yield_rank": lambda: {"facilities": _query("SELECT * FROM summary_facility ORDER BY total_screened DESC LIMIT 20")},
     "exercise_frequency": _chronic_history,  # exercise data is in chronic_history
-    "district_summary": lambda: {"districts": _query("SELECT district_code, district_name, zone_code, total_screened FROM summary_district_disease ORDER BY district_code")},
+    "district_summary": lambda: {"districts": _query(
+        "SELECT s.district_code, COALESCE(rd.name_th, s.district_code) AS district_name, "
+        "MAX(s.zone_code) AS zone_code, SUM(s.total_screened) AS total_screened "
+        "FROM summary_district_disease s LEFT JOIN ref_districts rd ON rd.dcode = s.district_code "
+        "GROUP BY s.district_code, rd.name_th ORDER BY s.district_code"
+    )},
 }
 
 

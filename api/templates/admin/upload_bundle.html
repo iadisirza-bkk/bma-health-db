@@ -8,8 +8,33 @@
 
     <!-- Page Header -->
     <div>
-        <h1 class="text-lg font-bold text-gray-900">Bundle Upload</h1>
-        <p class="text-xs text-gray-500 mt-1">อัปโหลดทุกไฟล์ CSV พร้อมกัน — ข้อมูลเดิมจะถูกลบและแทนที่ทั้งหมด</p>
+        <h1 class="text-lg font-bold text-gray-900">Bundle Upload (3-Source)</h1>
+        <p class="text-xs text-gray-500 mt-1">
+            อัปโหลดได้ถึง 13 ไฟล์ CSV จาก 3 แหล่ง (Portal + App1 + App2) ในครั้งเดียว —
+            ข้อมูลจะ <b>stack</b> รวมกัน ไม่ merge (คนเดียวใน 2 ระบบ = 2 แถว)
+        </p>
+    </div>
+
+    <!-- Source layout reference -->
+    <div class="grid grid-cols-3 gap-3 text-[11px]">
+        <div class="p-3 bg-emerald-50 border border-emerald-200 rounded-lg">
+            <div class="font-semibold text-emerald-800 mb-1">portal/ (7 ไฟล์)</div>
+            <div class="text-gray-700 leading-relaxed">
+                pt.csv<br>pthistory.csv<br>vitalsignslf.csv<br>homevisit.csv<br>homehealth.csv<br>labhealth.csv<br>labhealthext.csv
+            </div>
+        </div>
+        <div class="p-3 bg-sky-50 border border-sky-200 rounded-lg">
+            <div class="font-semibold text-sky-800 mb-1">app1/ (5 ไฟล์)</div>
+            <div class="text-gray-700 leading-relaxed">
+                pt.csv<br>vitalsignslf.csv<br>homevisit.csv<br>homehealth.csv<br>labhealth.csv
+            </div>
+        </div>
+        <div class="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+            <div class="font-semibold text-amber-800 mb-1">app2/ (1 ไฟล์)</div>
+            <div class="text-gray-700 leading-relaxed">
+                app2.csv
+            </div>
+        </div>
     </div>
 
     <!-- Warning Banner -->
@@ -18,8 +43,17 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z"/>
         </svg>
         <div>
-            <span class="font-bold">ข้อมูลเดิมจะถูกลบทั้งหมด</span> —
-            เมื่อกดนำเข้า ระบบจะลบข้อมูลในฐานข้อมูลทั้งหมดแล้วแทนที่ด้วยไฟล์ที่อัปโหลด
+            <span class="font-bold">ลบเฉพาะข้อมูลของ source ที่อัปโหลด — sources อื่นยังอยู่</span><br>
+            ระบบจะ <code class="px-1 bg-amber-100 rounded">DELETE</code> เฉพาะ
+            <code class="px-1 bg-amber-100 rounded">private.visit_event</code>,
+            <code class="px-1 bg-amber-100 rounded">private.lab_event</code>,
+            <code class="px-1 bg-amber-100 rounded">private.patient_alias</code>
+            ของ source ที่อัปโหลด แล้วลบ <code class="px-1 bg-amber-100 rounded">private.patient</code>
+            ที่ไม่มี alias เหลืออยู่ ก่อนนำเข้าใหม่ —
+            ทั้งหมดอยู่ใน 1 transaction (rollback ได้ถ้าล้มเหลว)
+            <br>
+            <span class="text-amber-700 text-xs">เช่น อัปโหลดเฉพาะ portal/ → app1+app2 ที่อยู่ใน DB จะไม่ถูกแตะต้อง.
+            ขนาดไฟล์สูงสุด 1 GB ต่อไฟล์ รวมได้ถึง ~5 GB</span>
         </div>
     </div>
 
@@ -28,42 +62,65 @@
         <form method="POST" action="/admin/upload-bundle" enctype="multipart/form-data" id="bundleForm">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-            <!-- File Type Reference -->
-            <div class="mb-5 text-xs text-gray-500">
-                <span class="font-semibold uppercase tracking-wider">ไฟล์ที่รองรับ:</span>
-                pt.csv, pthistory.csv, vitalsignslf.csv, homevisit.csv, homehealth.csv, labhealth.csv, labhealthext.csv
+            <!-- Dual upload mode: folder picker OR individual files -->
+            <div class="mb-4 flex gap-2 text-sm">
+                <button type="button" id="modeFolder"
+                        class="px-3 py-1.5 rounded-lg border bg-bma-green text-white">
+                    เลือกโฟลเดอร์ (แนะนำ)
+                </button>
+                <button type="button" id="modeFiles"
+                        class="px-3 py-1.5 rounded-lg border bg-white text-gray-700 hover:bg-gray-50">
+                    เลือกไฟล์ทีละชุด
+                </button>
             </div>
 
-            <!-- Drag & Drop Zone -->
+            <!-- Drop zone / folder picker -->
             <div id="dropZone"
-                 class="border-2 border-dashed border-gray-300 rounded-xl p-10 text-center cursor-pointer transition-colors hover:border-[#00744B] hover:bg-[#e6f5ef]">
+                 class="border-2 border-dashed border-gray-300 rounded-xl p-10 text-center cursor-pointer transition-colors hover:border-bma-green hover:bg-bma-green-light">
                 <svg class="w-12 h-12 mx-auto text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
                 </svg>
-                <p class="text-gray-700 font-medium">ลากไฟล์ CSV ทั้งหมดมาวางที่นี่</p>
-                <p class="text-gray-400 text-sm mt-1">หรือคลิกเพื่อเลือกไฟล์ (เลือกได้หลายไฟล์)</p>
-                <input type="file" name="files" id="fileInput" accept=".csv" multiple class="hidden">
+                <p class="text-gray-700 font-medium" id="zoneLabel">ลากโฟลเดอร์ที่มี portal/ app1/ app2/ มาวางที่นี่</p>
+                <p class="text-gray-400 text-sm mt-1">หรือคลิกเพื่อเลือก</p>
+                <!-- Two inputs, swapped by mode buttons -->
+                <input type="file" name="files" id="fileInputFolder" accept=".csv" multiple webkitdirectory directory class="hidden">
+                <input type="file" name="files" id="fileInputMulti"  accept=".csv" multiple class="hidden">
             </div>
 
-            <!-- File List (hidden by default) -->
+            <!-- Default source selector (used when folder detection fails) -->
+            <div id="defaultSourceRow" class="hidden mt-4 flex items-center gap-3 text-sm">
+                <label class="text-gray-700 font-medium">Default source (ถ้าไฟล์ไม่มี path):</label>
+                <select name="default_source" class="px-3 py-1.5 border border-gray-300 rounded-lg text-sm">
+                    <option value="">— ไม่ระบุ —</option>
+                    <option value="portal">portal</option>
+                    <option value="app1">app1</option>
+                    <option value="app2">app2</option>
+                </select>
+            </div>
+
+            <!-- File list (hidden by default) -->
             <div id="fileList" class="hidden mt-4 space-y-2"></div>
 
-            <!-- Summary (hidden by default) -->
-            <div id="fileSummary" class="hidden mt-4 p-4 bg-[#e6f5ef] rounded-lg border border-green-200">
+            <!-- Hidden relpath siblings (populated by JS so server can detect source) -->
+            <div id="relpathHidden" class="hidden"></div>
+
+            <!-- Summary -->
+            <div id="fileSummary" class="hidden mt-4 p-4 bg-bma-green-light rounded-lg border border-green-200">
                 <div class="flex items-center justify-between">
-                    <span class="text-sm font-medium text-[#00744B]" id="summaryText"></span>
+                    <span class="text-sm font-medium text-bma-green" id="summaryText"></span>
                     <button type="button" id="clearAll" class="text-xs text-gray-500 hover:text-red-500 transition-colors underline">ล้างทั้งหมด</button>
                 </div>
+                <div id="sourceBreakdown" class="text-xs text-gray-600 mt-2"></div>
             </div>
 
-            <!-- Submit Button -->
+            <!-- Submit -->
             <div class="mt-5">
                 <button type="submit" id="uploadBtn" disabled
-                        class="inline-flex items-center gap-2 px-5 py-2.5 bg-[#00744B] text-white rounded-lg font-medium hover:bg-[#005C3B] transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                        class="inline-flex items-center gap-2 px-5 py-2.5 bg-bma-green text-white rounded-lg font-medium hover:bg-bma-green-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                     </svg>
-                    นำเข้าทั้งหมด
+                    นำเข้าทั้งหมด (stack)
                 </button>
             </div>
         </form>
@@ -72,121 +129,196 @@
 </div>
 
 <script>
-    const dropZone = document.getElementById('dropZone');
-    const fileInput = document.getElementById('fileInput');
-    const fileList = document.getElementById('fileList');
-    const fileSummary = document.getElementById('fileSummary');
-    const summaryText = document.getElementById('summaryText');
-    const uploadBtn = document.getElementById('uploadBtn');
-    const clearAll = document.getElementById('clearAll');
+(function() {
+    const dropZone        = document.getElementById('dropZone');
+    const zoneLabel       = document.getElementById('zoneLabel');
+    const fileInputFolder = document.getElementById('fileInputFolder');
+    const fileInputMulti  = document.getElementById('fileInputMulti');
+    const fileList        = document.getElementById('fileList');
+    const fileSummary     = document.getElementById('fileSummary');
+    const summaryText     = document.getElementById('summaryText');
+    const sourceBreakdown = document.getElementById('sourceBreakdown');
+    const uploadBtn       = document.getElementById('uploadBtn');
+    const clearAll        = document.getElementById('clearAll');
+    const defaultSourceRow = document.getElementById('defaultSourceRow');
+    const modeFolder      = document.getElementById('modeFolder');
+    const modeFiles       = document.getElementById('modeFiles');
+    const relpathHidden   = document.getElementById('relpathHidden');
+    const form            = document.getElementById('bundleForm');
 
-    const TYPE_LABELS = {
-        'pt': 'ข้อมูลผู้ป่วย',
-        'pthistory': 'ประวัติผู้ป่วย',
-        'vitalsignslf': 'สัญญาณชีพ',
-        'homevisit': 'การเยี่ยมบ้าน',
-        'homehealth': 'สุขภาพที่บ้าน',
-        'labhealth': 'ผลแลป',
-        'labhealthext': 'ผลแลปเพิ่มเติม',
-    };
+    // Active input = the one the user picked via mode buttons
+    let activeInput = fileInputFolder;
 
-    // Auto-detect file type from filename
-    function guessType(name) {
-        const n = name.toLowerCase();
+    function setMode(mode) {
+        if (mode === 'folder') {
+            activeInput = fileInputFolder;
+            modeFolder.className = 'px-3 py-1.5 rounded-lg border bg-bma-green text-white';
+            modeFiles.className  = 'px-3 py-1.5 rounded-lg border bg-white text-gray-700 hover:bg-gray-50';
+            zoneLabel.textContent = 'ลากโฟลเดอร์ที่มี portal/ app1/ app2/ มาวางที่นี่';
+            defaultSourceRow.classList.add('hidden');
+        } else {
+            activeInput = fileInputMulti;
+            modeFiles.className  = 'px-3 py-1.5 rounded-lg border bg-bma-green text-white';
+            modeFolder.className = 'px-3 py-1.5 rounded-lg border bg-white text-gray-700 hover:bg-gray-50';
+            zoneLabel.textContent = 'ลากไฟล์ CSV หลายไฟล์มาวางที่นี่ (หรือเลือกหลายไฟล์)';
+            defaultSourceRow.classList.remove('hidden');
+        }
+        // Reset selection when mode changes
+        fileInputFolder.value = '';
+        fileInputMulti.value  = '';
+        updateUI();
+    }
+
+    modeFolder.addEventListener('click', () => setMode('folder'));
+    modeFiles.addEventListener('click',  () => setMode('files'));
+
+    dropZone.addEventListener('click', () => activeInput.click());
+
+    // Detect source from path segments
+    function detectSource(relpath) {
+        const parts = (relpath || '').toLowerCase().split('/');
+        for (const p of parts) {
+            if (p === 'portal' || p === 'app1' || p === 'app2') return p;
+        }
+        return null;
+    }
+
+    // Detect file type from filename
+    function detectType(name) {
+        const n = (name || '').toLowerCase();
+        if (n.endsWith('app2.csv') || n.includes('app2')) return 'app2';
         if (n.includes('labhealthext')) return 'labhealthext';
-        if (n.includes('labhealth')) return 'labhealth';
-        if (n.includes('vitalsign')) return 'vitalsignslf';
-        if (n.includes('homehealth')) return 'homehealth';
-        if (n.includes('homevisit')) return 'homevisit';
-        if (n.includes('pthistory')) return 'pthistory';
-        if (/\bpt\b/.test(n) || n === 'pt.csv') return 'pt';
+        if (n.includes('labhealth'))    return 'labhealth';
+        if (n.includes('vitalsign'))    return 'vitalsignslf';
+        if (n.includes('homehealth'))   return 'homehealth';
+        if (n.includes('homevisit'))    return 'homevisit';
+        if (n.includes('pthistory'))    return 'pthistory';
+        if (n === 'pt.csv' || n.endsWith('/pt.csv')) return 'pt';
         return null;
     }
 
     function formatBytes(bytes) {
         if (bytes === 0) return '0 B';
         const k = 1024;
-        const sizes = ['B', 'KB', 'MB'];
+        const sizes = ['B', 'KB', 'MB', 'GB'];
         const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        return (bytes / Math.pow(k, i)).toFixed(1) + ' ' + sizes[i];
     }
 
     function updateUI() {
-        const files = fileInput.files;
+        const files = activeInput.files;
         if (!files || files.length === 0) {
             fileList.classList.add('hidden');
             fileSummary.classList.add('hidden');
             uploadBtn.disabled = true;
+            relpathHidden.innerHTML = '';
             return;
         }
 
         fileList.innerHTML = '';
         fileList.classList.remove('hidden');
         fileSummary.classList.remove('hidden');
+        relpathHidden.innerHTML = '';
 
         let totalSize = 0;
-        for (const file of files) {
-            totalSize += file.size;
-            const type = guessType(file.name);
-            const label = type ? TYPE_LABELS[type] || type : '?';
-            const badgeColor = type ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700';
+        const bySource = { portal: 0, app1: 0, app2: 0, unknown: 0 };
 
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            if (!file.name.toLowerCase().endsWith('.csv')) continue;
+            const relpath = file.webkitRelativePath || file.name;
+            const source = detectSource(relpath);
+            const ftype = detectType(file.name);
+            totalSize += file.size;
+            if (source) bySource[source]++; else bySource.unknown++;
+
+            // Row
+            const srcColor = source === 'portal' ? 'bg-emerald-100 text-emerald-700'
+                           : source === 'app1'   ? 'bg-sky-100 text-sky-700'
+                           : source === 'app2'   ? 'bg-amber-100 text-amber-700'
+                           : 'bg-gray-100 text-gray-500';
+            const typeColor = ftype ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700';
             const row = document.createElement('div');
-            row.className = 'flex items-center gap-3 px-4 py-2.5 bg-gray-50 rounded-lg border border-gray-200';
+            row.className = 'flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-lg border border-gray-200 text-sm';
             row.innerHTML = `
-                <svg class="w-5 h-5 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-                </svg>
-                <span class="text-sm font-medium text-gray-900 flex-1">${file.name}</span>
+                <span class="text-gray-600 flex-1 truncate" title="${relpath}">${relpath}</span>
                 <span class="text-xs text-gray-400">${formatBytes(file.size)}</span>
-                <span class="inline-flex items-center text-xs font-semibold rounded-full px-2.5 py-0.5 ${badgeColor}">${label}</span>
+                <span class="inline-flex items-center text-[11px] font-semibold rounded-full px-2 py-0.5 ${srcColor}">${source || '?'}</span>
+                <span class="inline-flex items-center text-[11px] font-semibold rounded-full px-2 py-0.5 ${typeColor}">${ftype || '?'}</span>
             `;
             fileList.appendChild(row);
+
+            // Add hidden input with relpath so server can reconstruct source
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'relpaths';
+            input.value = relpath;
+            relpathHidden.appendChild(input);
         }
 
+        const parts = [];
+        if (bySource.portal)  parts.push(`portal: ${bySource.portal}`);
+        if (bySource.app1)    parts.push(`app1: ${bySource.app1}`);
+        if (bySource.app2)    parts.push(`app2: ${bySource.app2}`);
+        if (bySource.unknown) parts.push(`<span class="text-red-600">? ${bySource.unknown}</span>`);
         summaryText.textContent = `${files.length} ไฟล์ (${formatBytes(totalSize)})`;
+        sourceBreakdown.innerHTML = parts.join(' · ');
         uploadBtn.disabled = false;
     }
 
-    dropZone.addEventListener('click', () => fileInput.click());
-
+    // Drag-drop works only with file-mode (folders via drag vary by browser).
     dropZone.addEventListener('dragover', (e) => {
         e.preventDefault();
-        dropZone.classList.add('border-[#00744B]', 'bg-[#e6f5ef]');
+        dropZone.classList.add('border-bma-green', 'bg-bma-green-light');
     });
-
     dropZone.addEventListener('dragleave', (e) => {
         e.preventDefault();
-        dropZone.classList.remove('border-[#00744B]', 'bg-[#e6f5ef]');
+        dropZone.classList.remove('border-bma-green', 'bg-bma-green-light');
     });
-
     dropZone.addEventListener('drop', (e) => {
         e.preventDefault();
-        dropZone.classList.remove('border-[#00744B]', 'bg-[#e6f5ef]');
+        dropZone.classList.remove('border-bma-green', 'bg-bma-green-light');
         const dt = e.dataTransfer;
         if (dt.files.length > 0) {
-            fileInput.files = dt.files;
+            // Drag/drop populates the non-directory input best
+            activeInput = fileInputMulti;
+            fileInputMulti.files = dt.files;
+            setMode('files');
+            fileInputMulti.files = dt.files;
             updateUI();
         }
     });
 
-    fileInput.addEventListener('change', updateUI);
+    fileInputFolder.addEventListener('change', updateUI);
+    fileInputMulti.addEventListener('change', updateUI);
 
     clearAll.addEventListener('click', () => {
-        fileInput.value = '';
+        fileInputFolder.value = '';
+        fileInputMulti.value  = '';
         updateUI();
     });
 
-    // Disable button on submit to prevent double-click
-    document.getElementById('bundleForm').addEventListener('submit', function() {
+    // Make sure only the active input is submitted — rename the inactive one
+    // so the server doesn't see duplicate keys with no files
+    form.addEventListener('submit', function() {
         uploadBtn.disabled = true;
         uploadBtn.innerHTML = `
             <svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
             </svg>
-            กำลังนำเข้า...
+            กำลังนำเข้า (อาจใช้เวลาหลายนาที)...
         `;
+        // Disable the inactive input's `name` so it isn't sent
+        if (activeInput === fileInputFolder) {
+            fileInputMulti.name = '';
+        } else {
+            fileInputFolder.name = '';
+        }
     });
+
+    // Initial state
+    setMode('folder');
+})();
 </script>
 {% endblock %}

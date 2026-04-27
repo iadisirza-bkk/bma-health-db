@@ -116,12 +116,39 @@ def compare_districts(dcode1: str, dcode2: str) -> dict:
                 and ind_key in d["diseases"][disease_key]["indicators"]
                 and d["diseases"][disease_key]["indicators"][ind_key].get("mean") is not None
             ])
-            std_pop = float(np.std(all_means, ddof=1)) if len(all_means) > 1 else 1.0
             n1 = dd1["total_screened"]
             n2 = dd2["total_screened"]
-            se = std_pop * np.sqrt(1.0 / max(n1, 1) + 1.0 / max(n2, 1)) if std_pop > 0 else 1.0
-            z_stat = diff / se if se > 0 else 0.0
-            p_value = float(2 * (1 - scipy_stats.norm.cdf(abs(z_stat))))
+
+            # Statistical caveats:
+            # We don't have within-district stds (only district means), so we
+            # approximate sigma using the cross-district std of means. Welch's
+            # t-test is then run via ttest_ind_from_stats — strictly more
+            # correct than the previous z-score approximation because:
+            #   - t-distribution accounts for finite-sample degrees of freedom
+            #   - equal_var=False uses Satterthwaite's df (closer to truth
+            #     when n1 and n2 differ a lot)
+            # Even so, callers should treat p-values as indicative — the
+            # within-district variance assumption is the binding constraint.
+            std_pop = float(np.std(all_means, ddof=1)) if len(all_means) > 1 else None
+            small_sample = (n1 < 30) or (n2 < 30)
+
+            warnings_list: list[str] = []
+            if small_sample:
+                warnings_list.append(f"small sample (n1={n1}, n2={n2}); CI may be wide")
+            if std_pop is None or std_pop <= 0:
+                warnings_list.append("insufficient variance data — p-value not reliable")
+
+            if std_pop is not None and std_pop > 0 and n1 >= 2 and n2 >= 2:
+                t_stat, p_value = scipy_stats.ttest_ind_from_stats(
+                    mean1=mean1, std1=std_pop, nobs1=n1,
+                    mean2=mean2, std2=std_pop, nobs2=n2,
+                    equal_var=False,  # Welch's t — Satterthwaite df
+                )
+                t_stat = float(t_stat)
+                p_value = float(p_value)
+            else:
+                t_stat = 0.0
+                p_value = 1.0
 
             indicator_comparisons.append({
                 "indicator": ind_key,
@@ -131,8 +158,13 @@ def compare_districts(dcode1: str, dcode2: str) -> dict:
                 "district2_mean": mean2,
                 "difference": round(diff, 2),
                 "pct_difference": round(pct_diff, 2),
-                "statistically_significant": p_value < 0.05,
+                "statistically_significant": p_value < 0.05 and not warnings_list,
                 "p_value": round(p_value, 6),
+                "test": "welch_t",
+                "t_stat": round(t_stat, 4),
+                "n1": n1,
+                "n2": n2,
+                "warnings": warnings_list,
             })
 
         disease_comparisons.append({

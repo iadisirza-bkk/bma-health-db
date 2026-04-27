@@ -12,13 +12,105 @@
         <form method="POST" action="/admin/refresh" id="refreshForm">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <button type="submit" id="refreshBtn"
-                    class="inline-flex items-center gap-2 px-4 py-2.5 bg-[#00744B] text-white rounded-lg font-medium hover:bg-[#005C3B] transition-colors">
+                    class="inline-flex items-center gap-2 px-4 py-2.5 bg-bma-green text-white rounded-lg font-medium hover:bg-bma-green-hover transition-colors">
                 <svg id="refreshIcon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
                 </svg>
                 <span id="refreshText">Refresh Views</span>
             </button>
         </form>
+    </div>
+
+    <!-- Coverage Banner (target = 1M people) -->
+    {% if coverage_stats %}
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+        <div class="flex items-baseline justify-between mb-3 flex-wrap gap-2">
+            <h2 class="text-sm font-bold text-gray-900">
+                🎯 เป้าหมายโครงการ
+                <span class="text-gray-400 font-normal">{{ "{:,}".format(coverage_stats.target) }} คน</span>
+            </h2>
+            <div class="text-xs text-gray-500">
+                คน Cross-source unique = idcard_hash distinct ทั้ง 3 ระบบ
+            </div>
+        </div>
+
+        <!-- Big total bar -->
+        <div class="mb-4">
+            <div class="flex items-baseline gap-3 mb-1">
+                <span class="text-3xl font-bold text-bma-green">{{ "{:,}".format(coverage_stats.n_unique_all) }}</span>
+                <span class="text-lg font-semibold text-bma-green">/ {{ "{:,}".format(coverage_stats.target) }}</span>
+                <span class="ml-auto text-xl font-bold text-bma-green">{{ coverage_stats.pct_unique_all }}%</span>
+            </div>
+            <div class="h-3 bg-gray-100 rounded-full overflow-hidden">
+                <div class="h-full bg-gradient-to-r from-bma-green to-emerald-500 transition-all duration-500"
+                     style="width: {{ coverage_stats.pct_unique_all if coverage_stats.pct_unique_all <= 100 else 100 }}%"></div>
+            </div>
+            <div class="text-[11px] text-gray-500 mt-1">
+                คนที่คัดกรองจริง (deduped ข้าม 3 ระบบ) — เหลืออีก
+                <b>{{ "{:,}".format([coverage_stats.target - coverage_stats.n_unique_all, 0] | max) }}</b> คน
+                ถึงจะถึงเป้า
+                {% if coverage_stats.overlap_count > 0 %}
+                · มี <b>{{ "{:,}".format(coverage_stats.overlap_count) }}</b> คน ที่ตรวจมากกว่า 1 ระบบ
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Per-source breakdown -->
+        <div class="grid grid-cols-3 gap-3">
+            {% set src_meta = {
+                "portal": {"label": "Portal", "bar": "bg-emerald-500", "tx": "text-emerald-700", "bg": "bg-emerald-50"},
+                "app1":   {"label": "App1",   "bar": "bg-sky-500",     "tx": "text-sky-700",     "bg": "bg-sky-50"},
+                "app2":   {"label": "App2",   "bar": "bg-amber-500",   "tx": "text-amber-700",   "bg": "bg-amber-50"}
+            } %}
+            {% for s in ["portal", "app1", "app2"] %}
+            {% set meta = src_meta[s] %}
+            {% set n   = coverage_stats.n_per_source.get(s, 0) %}
+            {% set pct = coverage_stats.pct_per_source.get(s, 0) %}
+            <div class="rounded-lg border border-gray-200 {{ meta.bg }} px-3 py-2.5">
+                <div class="flex items-baseline justify-between mb-1">
+                    <span class="text-xs font-bold {{ meta.tx }}">{{ meta.label }}</span>
+                    <span class="text-xs font-mono {{ meta.tx }}">{{ pct }}%</span>
+                </div>
+                <div class="text-lg font-bold text-gray-900 leading-none">{{ "{:,}".format(n) }}</div>
+                <div class="h-1.5 bg-white rounded-full mt-2 overflow-hidden">
+                    <div class="h-full {{ meta.bar }}"
+                         style="width: {{ pct if pct <= 100 else 100 }}%"></div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Source Tabs (Portal / App1 / App2 / รวม) -->
+    {% set source_labels = {
+        "all":    {"label": "รวมทุก source",  "sub": "All sources",  "color": "bg-bma-green text-white"},
+        "portal": {"label": "Portal",          "sub": "ระบบหลัก สนพ.",  "color": "bg-emerald-600 text-white"},
+        "app1":   {"label": "App1",            "sub": "แอปสำนักอนามัย", "color": "bg-sky-600 text-white"},
+        "app2":   {"label": "App2",            "sub": "แดชบอร์ด pre-agg", "color": "bg-amber-600 text-white"}
+    } %}
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-1.5">
+        <div class="grid grid-cols-4 gap-1">
+            {% for src in source_values %}
+            {% set meta = source_labels[src] %}
+            {% set is_active = src == source %}
+            {% set bd_row = source_breakdown | selectattr("data_source", "equalto", src) | list %}
+            {% if src == "all" %}
+              {% set n_src = source_breakdown | sum(attribute="n") %}
+            {% else %}
+              {% set n_src = (bd_row[0].n if bd_row else 0) %}
+            {% endif %}
+            <a href="?source={{ src }}"
+               class="flex flex-col items-center gap-0.5 py-2.5 rounded-lg transition-colors
+                      {% if is_active %}{{ meta.color }} shadow-sm
+                      {% else %}text-gray-700 hover:bg-gray-50{% endif %}">
+                <span class="text-sm font-semibold">{{ meta.label }}</span>
+                <span class="text-[11px] {% if is_active %}text-white/80{% else %}text-gray-500{% endif %}">
+                    {{ "{:,}".format(n_src) }} patients · {{ meta.sub }}
+                </span>
+            </a>
+            {% endfor %}
+        </div>
     </div>
 
     <!-- Summary Cards -->
@@ -33,16 +125,31 @@
     ] %}
     <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-4">
         {% for item in summary_tables %}
+        {% set n_records = table_counts.get(item.key, 0) %}
+        {% set n_people  = people_counts.get(item.key, 0) %}
         <div class="bg-white rounded-xl p-5 border border-gray-200 shadow-sm">
-            <div class="text-2xl mb-2">{{ item.icon|safe }}</div>
-            <p class="text-xs font-semibold uppercase tracking-wider text-gray-500">{{ item.sublabel }}</p>
-            <p class="text-3xl font-bold text-[#00744B] mt-1">
-                {{ "{:,}".format(table_counts.get(item.key, 0)) }}
+            <div class="flex items-baseline justify-between mb-2">
+                <div class="text-2xl">{{ item.icon|safe }}</div>
+                <p class="text-[10px] font-semibold uppercase tracking-wider text-gray-400">{{ item.sublabel }}</p>
+            </div>
+            <!-- Records (จำนวนครั้ง) -->
+            <p class="text-2xl font-bold text-bma-green leading-tight">
+                {{ "{:,}".format(n_records) }}
             </p>
-            <p class="text-xs text-gray-400 mt-1">{{ item.label }}</p>
+            <p class="text-[10px] text-bma-green/70 font-medium uppercase tracking-wider">ครั้ง · records</p>
+            <!-- People (จำนวนคน) -->
+            <p class="text-lg font-semibold text-gray-700 mt-2 leading-tight">
+                {{ "{:,}".format(n_people) }}
+            </p>
+            <p class="text-[10px] text-gray-500 font-medium uppercase tracking-wider">คน · unique</p>
+            <p class="text-xs text-gray-400 mt-2 pt-2 border-t border-gray-100">{{ item.label }}</p>
         </div>
         {% endfor %}
     </div>
+    <p class="text-[11px] text-gray-500 -mt-2 pl-1">
+        <b>ครั้ง</b> (records) = COUNT(*) · ถ้าคนเดียวอยู่ 2 ระบบ = นับ 2.
+        <b>คน</b> (unique) = DISTINCT ของ idcard_hash (raw_patients) หรือ patient_id (ตารางอื่น).
+    </p>
 
     <!-- Materialized Views Section -->
     <div class="bg-white rounded-xl shadow-sm border border-gray-200">

@@ -21,7 +21,7 @@ router = APIRouter(prefix="/api/v2/public", tags=["Public"])
 def public_district_summary(
     district: str = Query(..., description="District code"),
     lang: str = Query("th"),
-):
+) -> dict:
     """Simplified health summary for public. PDPA-safe, Thai language."""
     disease = execute_query(
         """SELECT district_code, district_name, total_screened,
@@ -78,7 +78,7 @@ def public_district_summary(
 # ------------------------------------------------------------------ #
 
 @router.get("/screening-locations")
-def screening_locations(district: Optional[str] = Query(None)):
+def screening_locations(district: Optional[str] = Query(None)) -> dict:
     """Health centers in district (from ref_facilities)."""
     conditions = []
     params = []
@@ -105,7 +105,7 @@ def screening_locations(district: Optional[str] = Query(None)):
 # ------------------------------------------------------------------ #
 
 @router.get("/health-tips")
-def health_tips(risk: str = Query("diabetes")):
+def health_tips(risk: str = Query("diabetes")) -> dict:
     """Health tips/recommendations based on risk factor."""
     tips = {
         "diabetes": {
@@ -144,7 +144,7 @@ def health_tips(risk: str = Query("diabetes")):
 # ------------------------------------------------------------------ #
 
 @router.get("/service-satisfaction")
-def service_satisfaction(district: Optional[str] = Query(None)):
+def service_satisfaction(district: Optional[str] = Query(None)) -> dict:
     """Service satisfaction survey results."""
     return {"data_available": False,
             "message": "ยังไม่มีข้อมูลความพึงพอใจในระบบ — ต้องเชื่อมกับระบบสำรวจความพึงพอใจ กทม.",
@@ -156,7 +156,7 @@ def service_satisfaction(district: Optional[str] = Query(None)):
 # ------------------------------------------------------------------ #
 
 @router.get("/complaint-status")
-def complaint_status(ticket: Optional[str] = Query(None)):
+def complaint_status(ticket: Optional[str] = Query(None)) -> dict:
     """Complaint/service request status."""
     return {"data_available": False,
             "message": "ยังไม่มีระบบร้องเรียนในฐานข้อมูลสุขภาพ — ใช้ระบบ Traffy Fondue หรือ สายด่วน กทม. 1555",
@@ -168,7 +168,7 @@ def complaint_status(ticket: Optional[str] = Query(None)):
 # ------------------------------------------------------------------ #
 
 @router.get("/open-data")
-def open_data(format: str = Query("json")):
+def open_data(format: str = Query("json")) -> dict:
     """Open data portal: aggregate health data for transparency."""
     # Return district-level aggregate data that's safe for public
     districts = execute_query("""
@@ -240,7 +240,7 @@ def _traffic_light(value: float, national_avg: float, lower_is_better: bool = Tr
 def district_health_card(
     district: str = Query(..., description="District code (e.g., 1001)"),
     lang: str = Query("th", description="Language: th or en"),
-):
+) -> dict:
     """Traffic-light health card for a district — designed for ม.6 education level.
     รายงานสุขภาพเขตแบบสัญญาณไฟจราจร (เขียว/เหลือง/แดง) สำหรับประชาชนทั่วไป
     เข้าใจง่าย ไม่ใช้ศัพท์แพทย์"""

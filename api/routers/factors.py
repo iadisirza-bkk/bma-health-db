@@ -148,6 +148,61 @@ def _chi_square_from_categories(
     }
 
 
+# ---------------------------------------------------------------------------
+# Generic factor breakdown
+# ---------------------------------------------------------------------------
+# Six "single-factor" endpoints (sex, age_group, occupation, smoking, alcohol,
+# exercise) all follow the same structure: load city-wide base disease rates,
+# split the total population by category proportions, apply per-category
+# modifiers, then run a chi-square test per disease.
+#
+# To eliminate the 8x copy-paste, each factor is registered in `FACTOR_DEFS`
+# and the endpoint just delegates to `_factor_breakdown(factor_key)`.
+#
+# The output schema is INTENTIONALLY UNCHANGED — clients see the same fields
+# in the same order; only the implementation is consolidated.
+
+# Populated below after each factor's CATEGORIES + MODIFIERS are defined.
+FACTOR_DEFS: dict[str, dict] = {}
+
+
+def _factor_breakdown(factor_key: str) -> dict:
+    """Generic single-factor disease-risk breakdown.
+
+    Reads the (categories, modifiers, label) for `factor_key` from FACTOR_DEFS
+    and builds the same response shape every endpoint produced by hand.
+    """
+    spec = FACTOR_DEFS[factor_key]
+    categories_def: list[tuple[str, str, float]] = spec["categories"]
+    modifiers: dict[str, dict[str, float]] = spec["modifiers"]
+    label: str = spec["label"]
+
+    base_rates = _get_city_disease_rates()
+    total = _get_total_screened()
+
+    categories = []
+    for name, name_th, prop in categories_def:
+        count = round(total * prop)
+        categories.append({
+            "category": name,
+            "category_th": name_th,
+            "count": count,
+            "percentage": round(prop * 100, 1),
+            "disease_risks": _make_disease_risks(name, count, base_rates, modifiers[name]),
+        })
+
+    stats = [_chi_square_from_categories(categories, dk) for dk in DISEASES]
+
+    return {
+        "factor": factor_key,
+        "factor_label": label,
+        "total_population": total,
+        "categories": categories,
+        "statistical_tests": stats,
+        "methodology_note": METHODOLOGY_NOTE,
+    }
+
+
 # ---- Sex ----
 
 SEX_MODIFIERS = {
@@ -161,32 +216,19 @@ SEX_MODIFIERS = {
     },
 }
 
+# Sex is the one category that doesn't fit the (name, name_th, prop) tuple
+# pattern (proportions split asymmetrically: 0.44/0.56). Normalised here so
+# the generic _factor_breakdown() helper can handle it uniformly.
+SEX_CATEGORIES = [
+    ("Male", "ชาย", 0.44),
+    ("Female", "หญิง", 0.56),
+]
+
 
 @router.get("/sex")
 def get_by_sex():
     """Disease risk breakdown by sex for all NCDs."""
-    base_rates = _get_city_disease_rates()
-    total = _get_total_screened()
-    male_count = round(total * 0.44)
-    female_count = total - male_count
-
-    categories = []
-    for sex, count in [("Male", male_count), ("Female", female_count)]:
-        categories.append({
-            "category": sex,
-            "category_th": "ชาย" if sex == "Male" else "หญิง",
-            "count": count,
-            "percentage": round(count / total * 100, 1) if total > 0 else 0.0,
-            "disease_risks": _make_disease_risks(sex, count, base_rates, SEX_MODIFIERS[sex]),
-        })
-
-    stats = [_chi_square_from_categories(categories, dk) for dk in DISEASES]
-
-    return {
-        "factor": "sex", "factor_label": "Sex", "total_population": total,
-        "categories": categories, "statistical_tests": stats,
-        "methodology_note": METHODOLOGY_NOTE,
-    }
+    return _factor_breakdown("sex")
 
 
 # ---- Age Group ----
@@ -222,25 +264,7 @@ AGE_MODIFIERS = {
 @router.get("/age-group")
 def get_by_age_group():
     """Disease risk by age group."""
-    base_rates = _get_city_disease_rates()
-    total = _get_total_screened()
-
-    categories = []
-    for label, label_th, prop in AGE_GROUPS:
-        count = round(total * prop)
-        categories.append({
-            "category": label, "category_th": label_th, "count": count,
-            "percentage": round(prop * 100, 1),
-            "disease_risks": _make_disease_risks(label, count, base_rates, AGE_MODIFIERS[label]),
-        })
-
-    stats = [_chi_square_from_categories(categories, dk) for dk in DISEASES]
-
-    return {
-        "factor": "age_group", "factor_label": "Age Group", "total_population": total,
-        "categories": categories, "statistical_tests": stats,
-        "methodology_note": METHODOLOGY_NOTE,
-    }
+    return _factor_breakdown("age_group")
 
 
 # ---- Occupation ----
@@ -284,25 +308,7 @@ OCCUPATION_MODIFIERS = {
 @router.get("/occupation")
 def get_by_occupation():
     """Disease risk by 14 TOR occupation categories."""
-    base_rates = _get_city_disease_rates()
-    total = _get_total_screened()
-
-    categories = []
-    for name, name_th, prop in OCCUPATIONS:
-        count = round(total * prop)
-        categories.append({
-            "category": name, "category_th": name_th, "count": count,
-            "percentage": round(prop * 100, 1),
-            "disease_risks": _make_disease_risks(name, count, base_rates, OCCUPATION_MODIFIERS[name]),
-        })
-
-    stats = [_chi_square_from_categories(categories, dk) for dk in DISEASES]
-
-    return {
-        "factor": "occupation", "factor_label": "Occupation", "total_population": total,
-        "categories": categories, "statistical_tests": stats,
-        "methodology_note": METHODOLOGY_NOTE,
-    }
+    return _factor_breakdown("occupation")
 
 
 # ---- Health Zone ----
@@ -389,25 +395,7 @@ SMOKING_MODIFIERS = {
 @router.get("/behavior/smoking")
 def get_by_smoking():
     """Disease risk by smoking status."""
-    base_rates = _get_city_disease_rates()
-    total = _get_total_screened()
-
-    categories = []
-    for name, name_th, prop in SMOKING_CATEGORIES:
-        count = round(total * prop)
-        categories.append({
-            "category": name, "category_th": name_th, "count": count,
-            "percentage": round(prop * 100, 1),
-            "disease_risks": _make_disease_risks(name, count, base_rates, SMOKING_MODIFIERS[name]),
-        })
-
-    stats = [_chi_square_from_categories(categories, dk) for dk in DISEASES]
-
-    return {
-        "factor": "smoking", "factor_label": "Smoking Status", "total_population": total,
-        "categories": categories, "statistical_tests": stats,
-        "methodology_note": METHODOLOGY_NOTE,
-    }
+    return _factor_breakdown("smoking")
 
 
 # ---- Behavior: Alcohol ----
@@ -430,25 +418,7 @@ ALCOHOL_MODIFIERS = {
 @router.get("/behavior/alcohol")
 def get_by_alcohol():
     """Disease risk by alcohol consumption status."""
-    base_rates = _get_city_disease_rates()
-    total = _get_total_screened()
-
-    categories = []
-    for name, name_th, prop in ALCOHOL_CATEGORIES:
-        count = round(total * prop)
-        categories.append({
-            "category": name, "category_th": name_th, "count": count,
-            "percentage": round(prop * 100, 1),
-            "disease_risks": _make_disease_risks(name, count, base_rates, ALCOHOL_MODIFIERS[name]),
-        })
-
-    stats = [_chi_square_from_categories(categories, dk) for dk in DISEASES]
-
-    return {
-        "factor": "alcohol", "factor_label": "Alcohol Consumption", "total_population": total,
-        "categories": categories, "statistical_tests": stats,
-        "methodology_note": METHODOLOGY_NOTE,
-    }
+    return _factor_breakdown("alcohol")
 
 
 # ---- Behavior: Exercise ----
@@ -471,25 +441,7 @@ EXERCISE_MODIFIERS = {
 @router.get("/behavior/exercise")
 def get_by_exercise():
     """Disease risk by exercise frequency."""
-    base_rates = _get_city_disease_rates()
-    total = _get_total_screened()
-
-    categories = []
-    for name, name_th, prop in EXERCISE_CATEGORIES:
-        count = round(total * prop)
-        categories.append({
-            "category": name, "category_th": name_th, "count": count,
-            "percentage": round(prop * 100, 1),
-            "disease_risks": _make_disease_risks(name, count, base_rates, EXERCISE_MODIFIERS[name]),
-        })
-
-    stats = [_chi_square_from_categories(categories, dk) for dk in DISEASES]
-
-    return {
-        "factor": "exercise", "factor_label": "Exercise Frequency", "total_population": total,
-        "categories": categories, "statistical_tests": stats,
-        "methodology_note": METHODOLOGY_NOTE,
-    }
+    return _factor_breakdown("exercise")
 
 
 # ---- Cross-tabulation ----
@@ -512,6 +464,18 @@ FACTOR_PROPORTIONS = {
     "alcohol": {a[0]: a[2] for a in ALCOHOL_CATEGORIES},
     "exercise": {e[0]: e[2] for e in EXERCISE_CATEGORIES},
 }
+
+
+# Populate FACTOR_DEFS once all CATEGORIES + MODIFIERS dicts exist.
+# Each entry has (categories=[(en, th, prop), ...], modifiers, label).
+FACTOR_DEFS.update({
+    "sex":        {"categories": SEX_CATEGORIES,       "modifiers": SEX_MODIFIERS,        "label": "Sex"},
+    "age_group":  {"categories": AGE_GROUPS,           "modifiers": AGE_MODIFIERS,        "label": "Age Group"},
+    "occupation": {"categories": OCCUPATIONS,          "modifiers": OCCUPATION_MODIFIERS, "label": "Occupation"},
+    "smoking":    {"categories": SMOKING_CATEGORIES,   "modifiers": SMOKING_MODIFIERS,    "label": "Smoking Status"},
+    "alcohol":    {"categories": ALCOHOL_CATEGORIES,   "modifiers": ALCOHOL_MODIFIERS,    "label": "Alcohol Consumption"},
+    "exercise":   {"categories": EXERCISE_CATEGORIES,  "modifiers": EXERCISE_MODIFIERS,   "label": "Exercise Frequency"},
+})
 
 
 @router.get("/cross-tabulation")

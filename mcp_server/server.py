@@ -108,6 +108,76 @@ def _write_audit_entry(tool: str, params: dict, result_row_count: int, client: s
         logger.warning("Audit log file not writable, logging to stderr: %s", line)
 
 
+def verify_audit_chain(path: Optional[str] = None) -> dict:
+    """Walk the audit log file and verify the SHA-256 chain.
+
+    Each entry's `hash` should equal SHA-256 of the entry JSON with `hash`
+    removed and the entry's `prev_hash` should equal the previous entry's
+    `hash`. Returns a structured report so an operator can:
+      - confirm the chain is intact
+      - find the first broken row (if any)
+      - get the total entry count + last entry's hash for off-line backup
+
+    Designed for periodic auditing — run after compactification, before
+    archival, or as part of incident response.
+    """
+    target = path or AUDIT_LOG_PATH
+    report: dict = {
+        "path": target,
+        "verified": False,
+        "total_entries": 0,
+        "first_broken_line": None,
+        "last_hash": "0" * 64,
+        "errors": [],
+    }
+    try:
+        if not os.path.exists(target):
+            report["errors"].append("audit log file does not exist")
+            return report
+        prev_hash = "0" * 64
+        with open(target, "r", encoding="utf-8") as f:
+            for lineno, raw in enumerate(f, start=1):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    entry = json.loads(raw)
+                except json.JSONDecodeError as e:
+                    report["first_broken_line"] = lineno
+                    report["errors"].append(f"line {lineno}: invalid JSON ({e})")
+                    return report
+                stored_hash = entry.pop("hash", None)
+                if not stored_hash:
+                    report["first_broken_line"] = lineno
+                    report["errors"].append(f"line {lineno}: missing 'hash' field")
+                    return report
+                if entry.get("prev_hash") != prev_hash:
+                    report["first_broken_line"] = lineno
+                    report["errors"].append(
+                        f"line {lineno}: prev_hash mismatch "
+                        f"(expected {prev_hash[:12]}…, got {(entry.get('prev_hash') or '')[:12]}…)"
+                    )
+                    return report
+                expected = hashlib.sha256(
+                    json.dumps(entry, sort_keys=True, ensure_ascii=False).encode()
+                ).hexdigest()
+                if stored_hash != expected:
+                    report["first_broken_line"] = lineno
+                    report["errors"].append(
+                        f"line {lineno}: hash mismatch "
+                        f"(expected {expected[:12]}…, got {stored_hash[:12]}…)"
+                    )
+                    return report
+                prev_hash = stored_hash
+                report["total_entries"] += 1
+        report["last_hash"] = prev_hash
+        report["verified"] = True
+        return report
+    except Exception as e:
+        report["errors"].append(f"verification crashed: {type(e).__name__}: {e}")
+        return report
+
+
 # ---------------------------------------------------------------------------
 # Database helpers (MCP's own pool with security validation)
 # ---------------------------------------------------------------------------

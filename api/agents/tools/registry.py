@@ -64,9 +64,25 @@ class ToolRegistry:
         from agents.tools.zone_info import QueryZoneInfoTool
         from agents.tools.adaptive_report import GenerateAdaptiveReportTool
         from agents.tools.query_api import QueryAPITool
+        from agents.tools.insights import (
+            TimeTrendTool,
+            ProvinceBreakdownTool,
+            FacilityLookupTool,
+            RiskProfileTool,
+            DistrictCompareTool,
+            MentalHealthCompareTool,
+            NCDCascadeTool,
+        )
+        from agents.tools.ncd_report import NcdDiagnosticReportTool
 
         for tool_cls in [QueryHealthDataTool, QueryAPITool, QueryStatisticalTestTool,
                          GenerateReportTool, GenerateAdaptiveReportTool,
-                         AskClarificationTool, QueryZoneInfoTool]:
+                         AskClarificationTool, QueryZoneInfoTool,
+                         # New analyst-style insight tools
+                         TimeTrendTool, ProvinceBreakdownTool, FacilityLookupTool,
+                         RiskProfileTool, DistrictCompareTool,
+                         MentalHealthCompareTool, NCDCascadeTool,
+                         # Doctor-facing 11-disease × 4-metric report
+                         NcdDiagnosticReportTool]:
             registry.register(tool_cls())
         return registry

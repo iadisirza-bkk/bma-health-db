@@ -282,19 +282,69 @@ class QueryStatisticalTestTool(BaseTool):
         return ToolResult(text="ไม่รองรับ test type")
 
     def _chi_square(self, rows, disease_name, factor) -> ToolResult:
+        """Pearson chi-square goodness-of-fit on a single-factor 2-way table.
+
+        Improvements over the previous implementation:
+          - Yates' continuity correction for 2x2 tables (df=1) — recommended
+            when any expected cell count is < 10.
+          - Small-sample warning when ANY expected cell count < 5 (Cochran's
+            rule). chi-square distribution is unreliable here; Fisher's exact
+            would be better but isn't computed yet.
+          - Uses scipy's exact chi2 survival function instead of an erf-based
+            normal approximation that was inaccurate for small df.
+        """
         total_at_risk = sum(r["at_risk"] for r in rows)
         total_n = sum(r["n"] for r in rows)
         expected_rate = total_at_risk / total_n if total_n > 0 else 0
-        chi2 = sum(
-            ((r["at_risk"] - r["n"] * expected_rate) ** 2 / max(r["n"] * expected_rate, 1)) +
-            (((r["n"] - r["at_risk"]) - r["n"] * (1 - expected_rate)) ** 2 / max(r["n"] * (1 - expected_rate), 1))
-            for r in rows
-        )
         df = len(rows) - 1
-        z = max(0, (chi2 - df) / max(1, math.sqrt(2 * df)))
-        p = max(0.0001, round(1 - 0.5 * (1 + math.erf(z / math.sqrt(2))), 4)) if chi2 > df else 1.0
-        sig = "มีนัยสำคัญ" if p < 0.05 else "ไม่มีนัยสำคัญ"
-        text = f"## Chi-Square: {disease_name} x {factor}\n- chi2={chi2:.2f}, df={df}, p={p:.4f}\n- {sig}\n"
+
+        # Compute observed/expected per cell so we can apply Yates correction
+        # and check the small-sample condition cell-by-cell.
+        small_expected = False
+        chi2 = 0.0
+        apply_yates = (df == 1)
+        for r in rows:
+            obs_at_risk = r["at_risk"]
+            obs_not = r["n"] - r["at_risk"]
+            exp_at_risk = r["n"] * expected_rate
+            exp_not = r["n"] * (1 - expected_rate)
+
+            # Cochran's rule of thumb: any expected cell < 5 → warn
+            if min(exp_at_risk, exp_not) < 5:
+                small_expected = True
+
+            # Yates: subtract 0.5 from |O-E| before squaring (only for df=1)
+            d_at_risk = abs(obs_at_risk - exp_at_risk)
+            d_not = abs(obs_not - exp_not)
+            if apply_yates:
+                d_at_risk = max(0, d_at_risk - 0.5)
+                d_not = max(0, d_not - 0.5)
+
+            chi2 += (d_at_risk ** 2) / max(exp_at_risk, 1)
+            chi2 += (d_not ** 2) / max(exp_not, 1)
+
+        # Use scipy's exact chi2 survival function — accurate for any df,
+        # unlike the previous erf-based normal approximation.
+        from scipy import stats as _scipy_stats
+        if df > 0 and chi2 > 0:
+            p = float(_scipy_stats.chi2.sf(chi2, df))
+        else:
+            p = 1.0
+        # Don't underflow to 0 in display
+        p_display = max(0.0001, round(p, 4))
+
+        warnings_list: list[str] = []
+        if small_expected:
+            warnings_list.append("expected cell count < 5; p-value unreliable (consider Fisher's exact)")
+        if apply_yates:
+            warnings_list.append("Yates continuity correction applied (df=1)")
+
+        sig_label = "มีนัยสำคัญ" if (p < 0.05 and not small_expected) else "ไม่มีนัยสำคัญ"
+        text = f"## Chi-Square: {disease_name} x {factor}\n"
+        text += f"- chi2={chi2:.2f}, df={df}, p={p_display:.4f}\n"
+        text += f"- {sig_label}\n"
+        if warnings_list:
+            text += "- ⚠️ " + " | ".join(warnings_list) + "\n"
         chart_data = [{"name": r["label"], "value": r["rate"]} for r in rows]
         for r in rows:
             text += f"- {r['label']}: {r['rate']}%\n"

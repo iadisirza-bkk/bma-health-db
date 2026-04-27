@@ -10,13 +10,31 @@
     <div class="flex items-center justify-between">
         <h1 class="text-lg font-bold text-gray-900">Data Quality</h1>
         <a href="/admin/data-quality"
-           class="inline-flex items-center gap-2 px-4 py-2.5 bg-[#00744B] text-white rounded-lg font-medium hover:bg-[#005C3B] transition-colors">
+           class="inline-flex items-center gap-2 px-4 py-2.5 bg-bma-green text-white rounded-lg font-medium hover:bg-bma-green-hover transition-colors">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
             </svg>
             Refresh
         </a>
     </div>
+
+    {% if v3_pending %}
+    <div class="rounded-xl border border-amber-300 bg-amber-50 px-5 py-4 flex items-start gap-3">
+        <svg class="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <div class="flex-1">
+            <p class="text-sm font-semibold text-amber-900">
+                ฟีเจอร์นี้กำลังย้ายไปใช้ schema v3 — ยังไม่พร้อม
+            </p>
+            <p class="text-xs text-amber-800 mt-1">
+                หน้านี้ยังอ่านจากตาราง <code>raw_*</code> เก่า ซึ่ง migration 105
+                ปลดออกไปแล้ว v3 ใช้ <code>private.visit_measurement</code> (EAV) +
+                <code>public.mv_*</code> แทน — กำลังเขียนใหม่ในรอบถัดไป
+            </p>
+        </div>
+    </div>
+    {% endif %}
 
     <!-- Blocked Fields (100% null) -->
     {% if cleansing and cleansing.blocked_fields %}
