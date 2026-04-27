@@ -1,11 +1,13 @@
 """Zones router — list, detail, dashboard."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Query
 
 from database import execute_query
 from security import K_ANONYMITY_THRESHOLD
-from services.unified_screening import UNIFIED_CTE
+from services.unified_screening import UNIFIED_CTE, build_unified_cte, parse_sources
 
 router = APIRouter(tags=["Zones"])
 
@@ -15,16 +17,15 @@ router = APIRouter(tags=["Zones"])
 # =========================================================================== #
 
 @router.get("/api/v2/summary/zones")
-def list_zones():
+def list_zones(sources: Optional[str] = Query(None, description="Comma-separated subset of {portal,app1,app2}")):
     """All zones with screening totals and disease breakdown.
 
     Uses UNIFIED_CTE — per-source district mapping per the Tier 1 KPI spec
-    (fact/aggregation-base.md):
-      Portal → vital.DISTRICTBKK
-      App1   → hv.DISTRICT (home)
-      App2   → hv.DISTRICT (home, skip null) + visits from HD (homehealth)
+    (fact/aggregation-base.md). Optional `sources=` filter restricts to a
+    subset (e.g. ?sources=portal).
     """
-    rows = execute_query(UNIFIED_CTE + """
+    cte = build_unified_cte(parse_sources(sources))
+    rows = execute_query(cte + """
         SELECT
           z.zone_code, z.name_th, z.name_en,
           COUNT(DISTINCT d.dcode) AS district_count,

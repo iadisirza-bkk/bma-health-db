@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Path, Query
 from database import execute_query, execute_scalar
 from security import enforce_k_anonymity, K_ANONYMITY_THRESHOLD
 from cache import cache_get, cache_set, TTL_T2_AGGREGATE, TTL_T3_FILTERED, TTL_T4_STATIC
-from services.unified_screening import UNIFIED_CTE
+from services.unified_screening import UNIFIED_CTE, build_unified_cte, parse_sources
 
 router = APIRouter(prefix="/api/v2/summary", tags=["Summary"])
 
@@ -20,26 +20,22 @@ TARGET_SCREENED = 1_000_000
 # =========================================================================== #
 
 @router.get("/overview")
-def overview():
+def overview(sources: Optional[str] = Query(None, description="Comma-separated subset of {portal,app1,app2}; default = all")):
     """Top-level screening overview with zone and disease breakdowns.
 
-    NOTE: total_screened uses COUNT DISTINCT on raw_vitalsigns — NOT SUM on
-    summary_district_disease. The materialized view has a hidden data_source
-    dimension (app1/app2/portal) so SUMming double-counts patients who appear
-    in multiple sources. See the dashboard bug Apr 2026: the admin page
-    showed 837k (raw record count) while the public map showed 807k (inflated
-    SUM). Correct public number is ~782k unique patients with BKK dcode.
+    Aggregation = per-source dispatch via UNIFIED_CTE (see fact/aggregation-base.md).
+    Optional `sources` filter restricts to a subset, e.g. ?sources=portal,app1.
     """
-
-    # Cache check (TTL 15 min)
-    hit = cache_get("summary:overview")
+    parsed_sources = parse_sources(sources)
+    cache_key = f"summary:overview:{','.join(parsed_sources) if parsed_sources else 'all'}"
+    hit = cache_get(cache_key)
     if hit is not None:
         return hit
+    cte = build_unified_cte(parsed_sources)
 
-    # Per-source aggregation via the shared UNIFIED_CTE — see
-    # services/unified_screening.py and fact/aggregation-base.md.
+    # Per-source aggregation via UNIFIED_CTE (built dynamically by `cte`).
 
-    totals_row = execute_query(UNIFIED_CTE + """
+    totals_row = execute_query(cte + """
         SELECT
           COUNT(DISTINCT patient_id)            AS total_screened,
           COUNT(DISTINCT (patient_id, day))     AS total_visits
@@ -55,7 +51,7 @@ def overview():
         "SELECT MAX(refreshed_at) FROM summary_district_disease"
     )
 
-    by_zone = execute_query(UNIFIED_CTE + """
+    by_zone = execute_query(cte + """
         SELECT z.zone_code, z.name_th,
                COALESCE(COUNT(DISTINCT u.patient_id), 0) AS total_screened,
                COALESCE(COUNT(DISTINCT (u.patient_id, u.day)), 0) AS total_visits
@@ -66,7 +62,7 @@ def overview():
         ORDER BY z.zone_code
     """)
 
-    disease_rows = execute_query(UNIFIED_CTE + """
+    disease_rows = execute_query(cte + """
         SELECT
           COUNT(DISTINCT patient_id)        AS total_screened,
           COUNT(DISTINCT (patient_id, day)) AS total_visits,
@@ -99,7 +95,7 @@ def overview():
         "by_zone": by_zone,
         "by_disease": by_disease,
     }
-    cache_set("summary:overview", result, TTL_T2_AGGREGATE)
+    cache_set(cache_key, result, TTL_T2_AGGREGATE)
     return result
 
 

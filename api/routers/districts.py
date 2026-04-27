@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from database import execute_query
 from security import enforce_k_anonymity, K_ANONYMITY_THRESHOLD
-from services.unified_screening import UNIFIED_CTE
+from services.unified_screening import UNIFIED_CTE, build_unified_cte, parse_sources
 
 router = APIRouter(prefix="/api/v2/summary", tags=["Districts"])
 
@@ -36,11 +36,14 @@ def _validate_disease_key(disease_key: str) -> None:
 # =========================================================================== #
 
 @router.get("/districts")
-def list_districts(zone_code: Optional[str] = Query(None)):
-    """List districts, optionally filtered by zone_code."""
+def list_districts(
+    zone_code: Optional[str] = Query(None),
+    sources: Optional[str] = Query(None, description="Comma-separated subset of {portal,app1,app2}"),
+):
+    """List districts, optionally filtered by zone_code and/or data sources."""
     # Uses UNIFIED_CTE — per-source district mapping per Tier 1 KPI spec.
-    # found_obesity kept for backward compat; risk_bmi (BMI >=25) is canonical.
-    sql = UNIFIED_CTE + """
+    cte = build_unified_cte(parse_sources(sources))
+    sql = cte + """
         SELECT
           d.dcode                                                              AS district_code,
           d.name_th                                                            AS district_name,
