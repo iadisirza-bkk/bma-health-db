@@ -25,13 +25,41 @@ from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
-from database import execute_query, execute_scalar, get_conn, get_writer_conn
+from database import (
+    execute_query as _execute_query_reader,
+    execute_scalar as _execute_scalar_reader,
+    get_conn,
+    get_writer_conn,
+)
 
 # Admin endpoints write to private.* AND public.import_history — always use the
 # writer pool (etl_user). Auth is enforced via _require_auth + CSRF before any
-# DB call. We alias get_conn → get_writer_conn for the admin module so existing
-# `with get_conn() as conn` blocks pick up the writer pool automatically.
+# DB call.
+#
+# Override get_conn → get_writer_conn for the admin module.
 get_conn = get_writer_conn
+
+
+def execute_query(sql: str, params=None):
+    """Admin variant: runs through writer pool (etl_user) so SELECT private.*
+    works. The reader pool (api_user) has zero access to private."""
+    import psycopg2.extras as _extras
+    with get_writer_conn() as conn:
+        with conn.cursor(cursor_factory=_extras.RealDictCursor) as cur:
+            cur.execute(sql, params)
+            try:
+                return cur.fetchall()
+            except psycopg2.ProgrammingError:
+                return []
+
+
+def execute_scalar(sql: str, params=None):
+    """Admin variant of execute_scalar — uses writer pool."""
+    with get_writer_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            row = cur.fetchone()
+            return row[0] if row else None
 from config import DATABASE_URL, DATABASE_URL_WRITER
 
 # --------------------------------------------------------------------------- #
