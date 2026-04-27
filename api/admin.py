@@ -162,41 +162,45 @@ def _has_data_source_column(cur) -> bool:
     return _HAS_DATA_SOURCE_COL
 
 
-# Children must be deleted before parent — FKs don't have ON DELETE CASCADE
-_RAW_CHILD_TABLES = (
-    "raw_lab_extended", "raw_lab_results", "raw_homehealth",
-    "raw_homevisit", "raw_vitalsigns", "raw_visits",
-)
-
-
 def _delete_for_sources(cur, sources: List[str]) -> str:
-    """Delete rows for the given data_sources only (preserves other sources).
+    """Delete v3 private.* data for the given sources (preserves other sources).
 
-    Falls back to TRUNCATE CASCADE if the multi-source schema isn't applied.
-    Returns a short label for logging/progress, e.g. "delete portal,app1"
-    or "truncate-all".
+    Cascades:
+      - private.patient_alias → patient_id
+      - private.patient (CASCADE deletes patient_address / chronic / family / allergy / attribute)
+      - private.visit_event (CASCADE deletes visit_measurement / pain / etc.)
+      - private.lab_event   (CASCADE deletes lab_measurement)
+
+    Returns a short label for logging.
     """
-    if not _has_data_source_column(cur):
-        cur.execute("TRUNCATE raw_patients CASCADE")
-        return "truncate-all"
-
     if not sources:
         return "noop"
 
     placeholders = ",".join(["%s"] * len(sources))
     params = tuple(sources)
 
-    for tbl in _RAW_CHILD_TABLES:
-        cur.execute(
-            f"DELETE FROM {tbl} WHERE patient_id IN ("
-            f"  SELECT id FROM raw_patients WHERE data_source IN ({placeholders})"
-            f")",
-            params,
+    # Delete visit/lab events for these sources (cascades to measurements)
+    cur.execute(f"DELETE FROM private.visit_event WHERE source_code IN ({placeholders})", params)
+    cur.execute(f"DELETE FROM private.lab_event   WHERE source_code IN ({placeholders})", params)
+
+    # Find patients EXCLUSIVELY in these sources (not in any other source)
+    cur.execute(f"""
+        WITH only_in_sources AS (
+          SELECT pa.patient_id
+          FROM private.patient_alias pa
+          GROUP BY pa.patient_id
+          HAVING bool_and(pa.source_code IN ({placeholders}))
         )
-    cur.execute(
-        f"DELETE FROM raw_patients WHERE data_source IN ({placeholders})",
-        params,
-    )
+        DELETE FROM private.patient_alias
+        WHERE source_code IN ({placeholders})
+    """, params + params)
+
+    # Delete patients now alias-orphaned (no remaining alias)
+    cur.execute("""
+        DELETE FROM private.patient
+        WHERE id NOT IN (SELECT patient_id FROM private.patient_alias)
+    """)
+
     return "delete " + ",".join(sources)
 
 # --------------------------------------------------------------------------- #
@@ -2576,7 +2580,7 @@ def _run_bundle_import(manifest: List[Dict], history_id: int):
         conn = psycopg2.connect(DATABASE_URL_WRITER)
         conn.autocommit = False
         cur = conn.cursor()
-        etl = _load_etl()
+        etlv3 = _load_etl_v3()   # v3 ETL — writes to private.*
 
         if not _try_acquire_import_lock(cur):
             _update_history(
@@ -2595,106 +2599,125 @@ def _run_bundle_import(manifest: List[Dict], history_id: int):
         sources_in_bundle = [s for s, files in by_source.items() if files]
 
         # One transaction across all files — rollback on any failure.
-        # Per-source delete preserves data from sources NOT in this bundle
-        # (e.g. importing only portal won't wipe existing app1/app2 data).
+        # Per-source delete preserves data from sources NOT in this bundle.
         _update_progress(history_id, "delete prior data", 1)
         delete_label = _delete_for_sources(cur, sources_in_bundle)
         logger.info("Bundle import: %s", delete_label)
 
-        # Estimate total work for progress percentage. Reserve ~10% for the
-        # post-import view refresh + cache flush, so file imports cover 0..90%.
+        # Create import_batch row for audit trail
+        cur.execute("""
+            INSERT INTO private.import_batch
+              (source_code, filename, csv_file_type, status)
+            VALUES ('bundle', %s, 'bundle', 'running') RETURNING id
+        """, (f"bundle-{history_id}",))
+        batch_id = cur.fetchone()[0]
+
+        # Estimate total work
         total_files = sum(len(v) for v in by_source.values())
         files_done = 0
 
         import pandas as _pd
 
-        # Per-file progress band (each file gets a slice of the 5..90% global bar)
         def _pct_bounds(file_idx: int) -> tuple[int, int]:
             span = 85 / max(total_files, 1)
-            start = 5 + int(span * file_idx)
-            end   = 5 + int(span * (file_idx + 1))
-            return start, end
+            s = 5 + int(span * file_idx)
+            e = 5 + int(span * (file_idx + 1))
+            return s, e
 
         for source in SOURCE_IMPORT_ORDER:
             files = by_source.get(source, {})
             if not files:
                 continue
-
             logger.info("Processing source: %s (%d files)", source, len(files))
 
+            # ─── App2: combined CSV — split internally ──────────────────
             if source == "app2":
                 m = files.get("app2")
                 if m:
-                    s, e = _pct_bounds(files_done)
+                    s, _e = _pct_bounds(files_done)
                     _update_progress(history_id, f"{source}/app2", s)
                     df = _pd.read_csv(m["tmp_path"], dtype=str, low_memory=False,
                                       keep_default_na=True)
-                    cb = _make_progress_cb(history_id, f"{source}/app2", s, e)
-                    etl.import_app2(cur, df, CURRENT_YEAR, history_id, progress_cb=cb)
-                    total_imported += len(df)
-                    steps_done.append(f"{m['filename']}(app2)")
+                    n_pat, n_vis = etlv3.import_app2(cur, df, batch_id)
+                    total_imported += n_vis
+                    steps_done.append(f"{m['filename']}(app2:{n_pat}p/{n_vis}v)")
                     del df
                     files_done += 1
                 continue
 
-            # Portal / App1 — pt.csv first
-            patient_map: Dict = {}
+            # ─── Portal / App1: pt.csv first to populate patient table ──
             m_pt = files.get("pt")
             if m_pt:
-                s, e = _pct_bounds(files_done)
+                s, _e = _pct_bounds(files_done)
                 _update_progress(history_id, f"{source}/pt", s)
                 df = _pd.read_csv(m_pt["tmp_path"], dtype=str, low_memory=False,
                                   keep_default_na=True)
-                cb = _make_progress_cb(history_id, f"{source}/pt", s, e)
-                patient_map = etl.import_patients(cur, df, source, CURRENT_YEAR,
-                                                  history_id, progress_cb=cb)
-                total_imported += len(df)
-                steps_done.append(f"{m_pt['filename']}({source}/pt)")
+                pid_map_pt = etlv3.import_patients(cur, df, source, batch_id)
+                total_imported += len(pid_map_pt)
+                steps_done.append(f"{m_pt['filename']}({source}/pt:{len(pid_map_pt)})")
                 del df
                 files_done += 1
 
-            # Child tables in stable order
-            child_types = [
-                ("pthistory", etl.import_visits),
-                ("vitalsignslf", etl.import_vitalsigns),
-                ("homevisit", etl.import_homevisit),
-                ("homehealth", etl.import_homehealth),
-                ("labhealth", etl.import_lab_results),
-                ("labhealthext", etl.import_lab_extended),
-            ]
-            for ft, importer_fn in child_types:
+            # Build pid_map from patient_alias (resolve idcard_hash → patient_id)
+            cur.execute("""
+                SELECT p.idcard_hash, p.id FROM private.patient p
+                JOIN private.patient_alias pa ON pa.patient_id = p.id
+                WHERE pa.source_code = %s
+            """, (source,))
+            pid_map = {h: pid for h, pid in cur.fetchall()}
+
+            # ─── Child files: vital, hv, hh, lab, labext, pthistory ─────
+            for ft in ("vitalsignslf", "homevisit", "homehealth",
+                       "pthistory", "labhealth", "labhealthext"):
                 m = files.get(ft)
                 if not m:
                     continue
-                s, e = _pct_bounds(files_done)
+                s, _e = _pct_bounds(files_done)
                 _update_progress(history_id, f"{source}/{ft}", s)
                 df = _pd.read_csv(m["tmp_path"], dtype=str, low_memory=False,
                                   keep_default_na=True)
-                etl._batch_ensure_patients(df, source, patient_map, cur, history_id)
-                cb = _make_progress_cb(history_id, f"{source}/{ft}", s, e)
-                importer_fn(cur, df, patient_map, source, history_id, progress_cb=cb)
-                total_imported += len(df)
-                steps_done.append(f"{m['filename']}({source}/{ft})")
+
+                if ft in ("labhealth", "labhealthext"):
+                    n = etlv3.import_lab(cur, df, source, pid_map, batch_id)
+                else:
+                    n = etlv3.import_visits_and_measurements(
+                        cur, df, source, ft, pid_map, batch_id,
+                    )
+                total_imported += n
+                steps_done.append(f"{m['filename']}({source}/{ft}:{n})")
                 del df
                 files_done += 1
+
+        # Update import_batch row
+        cur.execute("""
+            UPDATE private.import_batch
+            SET status='completed', rows_inserted=%s, rows_parsed=%s,
+                duration_ms=%s, progress_pct=90
+            WHERE id=%s
+        """, (total_imported, total_imported,
+              int((time.time() - start) * 1000), batch_id))
 
         _update_progress(history_id, "commit", 92)
         conn.commit()
         logger.info("Bundle import: data committed (%d rows total)", total_imported)
 
-        # Refresh materialized views (non-fatal)
-        _update_progress(history_id, "refresh views", 95)
+        # Refresh public.mv_* (k-anonymized aggregates) — non-fatal
+        _update_progress(history_id, "refresh public MVs", 95)
         view_status = "skipped"
         view_err = None
         try:
-            etl.refresh_all_summaries(cur)
+            cur.execute("SELECT view_name, status FROM public.refresh_all_mvs()")
+            results = cur.fetchall()
+            failed = [r[0] for r in results if r[1] != 'ok']
+            view_status = "partial" if failed else "success"
+            if failed:
+                view_err = f"failed: {', '.join(failed)}"
             conn.commit()
-            view_status = "success"
         except Exception as exc:
             conn.rollback()
             view_status = "failed"
             view_err = _sanitize_error(exc)
-            logger.error("View refresh failed after bundle import: %s", view_err)
+            logger.error("MV refresh failed after bundle import: %s", view_err)
 
         # Flush caches
         _update_progress(history_id, "flush caches", 99)
