@@ -25,7 +25,13 @@ from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
-from database import execute_query, execute_scalar, get_conn
+from database import execute_query, execute_scalar, get_conn, get_writer_conn
+
+# Admin endpoints write to private.* AND public.import_history — always use the
+# writer pool (etl_user). Auth is enforced via _require_auth + CSRF before any
+# DB call. We alias get_conn → get_writer_conn for the admin module so existing
+# `with get_conn() as conn` blocks pick up the writer pool automatically.
+get_conn = get_writer_conn
 from config import DATABASE_URL, DATABASE_URL_WRITER
 
 # --------------------------------------------------------------------------- #
