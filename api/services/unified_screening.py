@@ -42,19 +42,30 @@ def build_unified_cte(sources: list[str] | None = None) -> str:
     """
     legs = []
 
+    # Resolution rules per source (final spec from team 2026-04-27):
+    #
+    #   Source  | Field (CSV)                                   | DB column resolution
+    #   --------|----------------------------------------------|-------------------------------
+    #   Portal  | homevisit.csv DISTRICT                        | home_district fallback chain
+    #   App1    | homevisit.csv DISTRICT                        | home_district (well-populated)
+    #   App2    | DISTRICT, backfill with WRKDISTRICT if 9999  | home_district || work_district
+    #
+    # Why Portal needs a fallback: the ETL doesn't reliably land Portal CSV's
+    # `DISTRICT` value into `home_district` — it spreads across home/current/
+    # work columns. Until ETL is fixed, COALESCE recovers the operational data.
+    # 9999 is a sentinel meaning "no district / out of BKK / unknown" so
+    # NULLIF(col, 9999) treats it as missing.
+
     if sources is None or 'portal' in sources:
-        # Portal source CSV has BOTH HDISTRICT (per schema, ~2% populated)
-        # AND DISTRICT (the field actually used by the operational system,
-        # well-populated). The spec says "DISTRICT (ใช้จริงในระบบ)" — i.e.
-        # use whichever district field has actual data. Fallback chain:
-        #   home_district → current_district → work_district
-        # gives 80.8% Portal coverage (vs 2% with home_district alone).
-        # Documented in fact/aggregation-base.md.
         legs.append("""
-          -- Portal: home → current → work fallback for sparse home_district
+          -- Portal: homevisit DISTRICT — COALESCE recovers ETL spread
           SELECT 'portal'::text AS source,
                  v.patient_id,
-                 COALESCE(hv.home_district, hv.current_district, hv.work_district)::text AS dc,
+                 COALESCE(
+                   NULLIF(hv.home_district,    9999),
+                   NULLIF(hv.current_district, 9999),
+                   NULLIF(hv.work_district,    9999)
+                 )::text AS dc,
                  v.visit_date::date AS day,
                  v.risk_dm, v.risk_hpt, v.risk_cvd, v.risk_bmi,
                  v.found_dyslipidemia, v.found_stroke
@@ -62,13 +73,16 @@ def build_unified_cte(sources: list[str] | None = None) -> str:
           JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
           WHERE v.data_source = 'portal'
             AND v.cancel_status IS DISTINCT FROM 1
-            AND COALESCE(hv.home_district, hv.current_district, hv.work_district)
-                  BETWEEN 1001 AND 1050
+            AND COALESCE(
+                  NULLIF(hv.home_district,    9999),
+                  NULLIF(hv.current_district, 9999),
+                  NULLIF(hv.work_district,    9999)
+                ) BETWEEN 1001 AND 1050
         """)
 
     if sources is None or 'app1' in sources:
         legs.append("""
-          -- App1: vital.PID + VSTDATE for visits, home_district for location
+          -- App1: homevisit DISTRICT (home_district, ~86% populated)
           SELECT 'app1'::text AS source,
                  v.patient_id,
                  hv.home_district::text AS dc,
@@ -84,10 +98,13 @@ def build_unified_cte(sources: list[str] | None = None) -> str:
 
     if sources is None or 'app2' in sources:
         legs.append("""
-          -- App2: HD count for visits, home_district for location
+          -- App2: DISTRICT (home_district), backfill with WRKDISTRICT if 9999
           SELECT 'app2'::text AS source,
                  hh.patient_id,
-                 hv.home_district::text AS dc,
+                 COALESCE(
+                   NULLIF(hv.home_district, 9999),
+                   NULLIF(hv.work_district, 9999)
+                 )::text AS dc,
                  hh.visit_date::date AS day,
                  v.risk_dm, v.risk_hpt, v.risk_cvd, v.risk_bmi,
                  v.found_dyslipidemia, v.found_stroke
@@ -98,7 +115,10 @@ def build_unified_cte(sources: list[str] | None = None) -> str:
             AND v.cancel_status IS DISTINCT FROM 1
           WHERE hh.data_source = 'app2'
             AND hh.cancel_status IS DISTINCT FROM 1
-            AND hv.home_district BETWEEN 1001 AND 1050
+            AND COALESCE(
+                  NULLIF(hv.home_district, 9999),
+                  NULLIF(hv.work_district, 9999)
+                ) BETWEEN 1001 AND 1050
         """)
 
     if not legs:
