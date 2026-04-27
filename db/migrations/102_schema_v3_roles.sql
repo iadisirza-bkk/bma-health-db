@@ -42,6 +42,34 @@ GRANT SELECT, INSERT, UPDATE, DELETE
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA private TO bma_etl_writer;
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO bma_etl_writer;
 
+-- Legacy admin tracking tables in public schema (admin upload writes here):
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables
+             WHERE table_schema='public' AND table_name='import_history') THEN
+    GRANT SELECT, INSERT, UPDATE, DELETE ON public.import_history TO bma_etl_writer;
+    GRANT USAGE, SELECT ON SEQUENCE public.import_history_id_seq TO bma_etl_writer;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables
+             WHERE table_schema='public' AND table_name='erasure_requests') THEN
+    GRANT SELECT, INSERT, UPDATE, DELETE ON public.erasure_requests TO bma_etl_writer;
+    GRANT USAGE, SELECT ON SEQUENCE public.erasure_requests_id_seq TO bma_etl_writer;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.tables
+             WHERE table_schema='public' AND table_name='mv_refresh_log') THEN
+    GRANT SELECT, INSERT ON public.mv_refresh_log TO bma_etl_writer;
+    GRANT USAGE, SELECT ON SEQUENCE public.mv_refresh_log_id_seq TO bma_etl_writer;
+  END IF;
+END $$;
+
+-- Read access to legacy ref tables (admin pages display facilities/zones/districts):
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables
+             WHERE table_schema='public' AND table_name='ref_districts') THEN
+    GRANT SELECT ON public.ref_districts, public.ref_health_zones, public.ref_facilities
+      TO bma_etl_writer;
+  END IF;
+END $$;
+
 -- Default privileges for future tables created in private
 ALTER DEFAULT PRIVILEGES IN SCHEMA private
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO bma_etl_writer;
