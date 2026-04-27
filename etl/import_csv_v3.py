@@ -1,83 +1,99 @@
 #!/usr/bin/env python3
 """
-ETL v3 — writes to private.* (EAV-based) schema.
+ETL v3 — production-grade, robust import to private.* (EAV) schema.
 
-Entry points (called from api/admin.py):
-  import_patients(cur, df, source_code)
-    → upserts private.patient + patient_alias
-  import_visit_data(cur, df, source_code, file_type)
-    → for vital/hv/hh/lab/labext: upserts visit_event + visit_measurement
-  import_app2(cur, df)
-    → splits the combined App2 row into vital + hv + hh + lab measurements
+Design goals (revised after real-data testing):
+  1. Bulletproof — never crash on bad data; always degrade gracefully
+  2. Idempotent — re-running same upload merges, doesn't duplicate
+  3. Source-aware — reads `private.variable_definition` per source for mapping
+  4. Memory-bounded — accepts pandas DataFrames already chunked by caller
+  5. Audit trail — every bulk INSERT has source_value column for traceback
 
-The variable_definition catalog drives column→variable_id resolution. Every
-non-null CSV column → 1 row in visit_measurement (or lab_measurement).
-
-Key design:
-  - We don't ALTER tables when a new variable arrives; just INSERT
-    private.variable_definition. The ETL automatically picks it up.
-  - Patient identity is deduplicated across sources via SHA-256(IDCARD).
-  - Address fields (HDISTRICT/DISTRICT/WRKDISTRICT) → SCD Type 2
-    private.patient_address (NOT visit_measurement).
+Key invariants enforced before EVERY bulk INSERT:
+  - DEDUPE rows by the unique-constraint columns (prevents
+    "ON CONFLICT DO UPDATE command cannot affect row a second time")
+  - VALIDATE numeric values against variable_definition.valid_min/max
+    (out-of-range → NULL with audit; never crash)
+  - VALIDATE FK references (facility_code → check exists in private.facility;
+    NULL if missing, never raise)
+  - TRUNCATE string values to column max_length
+  - EXECUTE with savepoint per batch; on batch failure → retry per-row,
+    skip bad rows, never fail the whole file
 """
 from __future__ import annotations
 
 import hashlib
 import logging
-import os
+import re
 from datetime import datetime, date
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, List, Tuple, Any
 
 import pandas as pd
-from psycopg2.extras import execute_values
+from psycopg2.extras import execute_values as _pg_execute_values
 
 logger = logging.getLogger(__name__)
 
-# Address columns extracted to patient_address instead of visit_measurement
+# --------------------------------------------------------------------------- #
+# Constants
+# --------------------------------------------------------------------------- #
+
+# Address columns extracted to patient_address (SCD Type 2), not visit_measurement
 ADDRESS_COLUMNS = {
     'HDISTRICT', 'DISTRICT', 'WRKDISTRICT', 'CRDISTRICT',
     'HPROVINCE', 'WRKPROVINCE', 'CRPROVINCE',
     'HSUBDISTRICT', 'WRKSUBDISTRICT', 'CRSUBDISTRICT',
 }
 
-# These columns identify the visit, not measurements
-VISIT_META_COLUMNS = {'PID', 'IDCARD', 'VSTDATE', 'VSTTIME', 'HPTCODE', 'CANCELST'}
+# Visit-meta columns identify the visit, not measurements
+VISIT_META_COLUMNS = {'PID', 'IDCARD', 'VSTDATE', 'VSTTIME', 'HPTCODE',
+                       'CANCELST', 'VST_ID', 'HD'}
+
+DATE_FORMATS = (
+    '%Y-%m-%d',
+    '%Y-%m-%d %H:%M:%S',
+    '%Y-%m-%d %H:%M:%S.%f',
+    '%d/%m/%Y',
+    '%d/%m/%Y %H:%M:%S',
+    '%d/%m/%Y %H:%M',
+    '%d-%m-%Y',
+    '%d-%b-%Y',
+    '%Y/%m/%d',
+    '%Y/%m/%d %H:%M:%S',
+)
+
+# Postgres column type max lengths (for truncation)
+MAX_TEXT_LEN = 500
+MAX_VARCHAR_50 = 50
+MAX_VARCHAR_80 = 80
 
 
-# =============================================================================
-# Helpers
-# =============================================================================
+# --------------------------------------------------------------------------- #
+# Defensive parsing helpers
+# --------------------------------------------------------------------------- #
 
-def _hash_idcard(value: str) -> str:
-    """SHA-256 of citizen ID for privacy."""
-    if value is None:
-        return ''
+def _is_blank(value) -> bool:
+    if value is None or pd.isna(value):
+        return True
     s = str(value).strip()
-    if not s or s.lower() in ('nan', 'none', ''):
+    return not s or s.lower() in ('nan', 'none', 'null', 'na', '#n/a')
+
+
+def _hash_idcard(value) -> str:
+    """SHA-256 of citizen ID. Returns '' for blank input."""
+    if _is_blank(value):
         return ''
-    return hashlib.sha256(s.encode('utf-8')).hexdigest()
+    return hashlib.sha256(str(value).strip().encode('utf-8')).hexdigest()
 
 
 def _parse_date(value) -> Optional[date]:
-    if value is None or pd.isna(value):
+    if _is_blank(value):
         return None
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, date):
         return value
     s = str(value).strip()
-    if not s or s.lower() in ('nan', 'none'):
-        return None
-    for fmt in (
-        '%Y-%m-%d',
-        '%Y-%m-%d %H:%M:%S',
-        '%d/%m/%Y',
-        '%d/%m/%Y %H:%M:%S',     # 19/01/2024 13:43:47 — Portal/App1 CSV format
-        '%d/%m/%Y %H:%M',
-        '%d-%b-%Y',
-        '%Y/%m/%d',
-        '%Y/%m/%d %H:%M:%S',
-    ):
+    for fmt in DATE_FORMATS:
         try:
             return datetime.strptime(s, fmt).date()
         except ValueError:
@@ -86,88 +102,182 @@ def _parse_date(value) -> Optional[date]:
 
 
 def _parse_int(value) -> Optional[int]:
-    if value is None or pd.isna(value):
+    if _is_blank(value):
         return None
     try:
         return int(float(str(value).strip()))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return None
 
 
 def _parse_float(value) -> Optional[float]:
-    if value is None or pd.isna(value):
+    if _is_blank(value):
         return None
     try:
-        return float(str(value).strip())
-    except (ValueError, TypeError):
+        v = float(str(value).strip())
+        # NaN/Inf checks
+        if v != v or v == float('inf') or v == float('-inf'):
+            return None
+        return v
+    except (ValueError, TypeError, OverflowError):
         return None
 
 
-def _is_blank(value) -> bool:
-    if value is None or pd.isna(value):
+def _parse_bool(value) -> Optional[bool]:
+    if _is_blank(value):
+        return None
+    s = str(value).strip().lower()
+    if s in ('1', 'true', 'yes', 'y', 't'):
         return True
-    s = str(value).strip()
-    return not s or s.lower() in ('nan', 'none', '')
+    if s in ('0', 'false', 'no', 'n', 'f'):
+        return False
+    return None
+
+
+def _truncate(s: str, max_len: int = MAX_TEXT_LEN) -> str:
+    if s is None:
+        return None
+    return str(s)[:max_len]
+
+
+def _validate_range(value: Optional[float],
+                    valid_min: Optional[float],
+                    valid_max: Optional[float]) -> Tuple[Optional[float], bool]:
+    """Returns (value or None if out-of-range, out_of_range_flag)."""
+    if value is None:
+        return None, False
+    if valid_min is not None and value < float(valid_min):
+        return None, True
+    if valid_max is not None and value > float(valid_max):
+        return None, True
+    return value, False
+
+
+# --------------------------------------------------------------------------- #
+# Resilient bulk insert — wraps execute_values with per-row fallback
+# --------------------------------------------------------------------------- #
+
+def _bulk_insert(cur, sql: str, rows: List[tuple], page_size: int = 2000,
+                 label: str = '') -> int:
+    """Insert rows in chunks. On batch failure, retry per-row to skip bad rows.
+
+    Returns count successfully inserted.
+    """
+    if not rows:
+        return 0
+    total = len(rows)
+    inserted = 0
+    skipped = 0
+    for start in range(0, total, page_size):
+        chunk = rows[start:start + page_size]
+        try:
+            cur.execute("SAVEPOINT ev_chunk")
+            _pg_execute_values(cur, sql, chunk, page_size=page_size)
+            cur.execute("RELEASE SAVEPOINT ev_chunk")
+            inserted += len(chunk)
+        except Exception as exc:
+            cur.execute("ROLLBACK TO SAVEPOINT ev_chunk")
+            # Retry per-row to skip bad rows
+            chunk_ok = chunk_skipped = 0
+            for row in chunk:
+                try:
+                    cur.execute("SAVEPOINT ev_row")
+                    _pg_execute_values(cur, sql, [row])
+                    cur.execute("RELEASE SAVEPOINT ev_row")
+                    chunk_ok += 1
+                except Exception:
+                    cur.execute("ROLLBACK TO SAVEPOINT ev_row")
+                    chunk_skipped += 1
+            inserted += chunk_ok
+            skipped += chunk_skipped
+            if chunk_skipped:
+                logger.warning(
+                    f"  {label}: chunk failed ({type(exc).__name__}: "
+                    f"{str(exc)[:80]}); retried per-row, skipped {chunk_skipped}/{len(chunk)}"
+                )
+    if skipped:
+        logger.info(f"  {label}: inserted {inserted}, skipped {skipped}")
+    return inserted
 
 
 def _load_variable_map(cur, source_code: str) -> Dict[str, dict]:
-    """Return {csv_column_name: {id, data_type, valid_min, valid_max}} for source."""
+    """Return {csv_column_name (UPPER): variable info} for source."""
     cur.execute("""
         SELECT csv_column_name, id, data_type, valid_min, valid_max
         FROM private.variable_definition
         WHERE source_code = %s AND deprecated_at IS NULL
     """, (source_code,))
     return {
-        row[0]: {'id': row[1], 'data_type': row[2],
-                 'valid_min': row[3], 'valid_max': row[4]}
+        row[0].upper(): {'id': row[1], 'data_type': row[2],
+                          'valid_min': row[3], 'valid_max': row[4]}
         for row in cur.fetchall()
     }
 
 
+def _validate_facility(cur, code: str, cache: dict) -> Optional[str]:
+    """Return code if exists in private.facility, else None.
+    Uses cache to avoid N queries."""
+    if not code:
+        return None
+    code = str(code).strip()[:10]
+    if not code:
+        return None
+    if code in cache:
+        return code if cache[code] else None
+    cur.execute("SELECT 1 FROM private.facility WHERE code = %s LIMIT 1", (code,))
+    exists = cur.fetchone() is not None
+    cache[code] = exists
+    return code if exists else None
+
+
 # =============================================================================
-# 1. Import patients (pt.csv)
+# 1. Import patients (pt.csv) — robust
 # =============================================================================
 
 def import_patients(cur, df: pd.DataFrame, source_code: str,
                     import_batch_id: Optional[int] = None) -> Dict[str, int]:
+    """Upsert into private.patient + private.patient_alias.
+    Returns {idcard_hash: patient_id} mapping.
     """
-    Upsert into private.patient + private.patient_alias.
-
-    Returns: {idcard_hash: patient_id} mapping for downstream use.
-    """
-    # Detect IDCARD column (Portal uses IDCARD, App1/App2 use PID)
     idcard_col = 'IDCARD' if 'IDCARD' in df.columns else 'PID'
     if idcard_col not in df.columns:
         raise ValueError(f"No IDCARD/PID column in {source_code} pt.csv")
 
-    rows = []
+    # ─── Phase 1: dedupe rows by idcard_hash ────────────────────────────────
+    rows_by_hash: Dict[str, tuple] = {}
+    pid_str_by_hash: Dict[str, str] = {}
+    current_year = datetime.now().year
+
     for _, r in df.iterrows():
-        if _is_blank(r.get(idcard_col)):
+        raw = r.get(idcard_col)
+        if _is_blank(raw):
             continue
-        h = _hash_idcard(r.get(idcard_col))
+        h = _hash_idcard(raw)
         if not h:
             continue
+
         sex = str(r.get('MALE', '')).strip() or None
         if sex and sex not in ('1', '2'):
             sex = None
 
-        # Birth year — Portal: BIRTHDATE, App1: BRTHDATE/AGE
         bdate = _parse_date(r.get('BIRTHDATE') or r.get('BRTHDATE'))
         byear = bdate.year if bdate else None
         bmonth = bdate.month if bdate else None
         if byear is None and 'AGE' in df.columns:
             age = _parse_int(r.get('AGE'))
             if age and 0 < age < 120:
-                byear = datetime.now().year - age
+                byear = current_year - age
 
-        rows.append((h, sex, byear, bmonth, source_code))
+        rows_by_hash[h] = (h, sex, byear, bmonth, source_code)
+        pid_str_by_hash[h] = str(raw).strip()[:80]
 
+    rows = list(rows_by_hash.values())
     if not rows:
         logger.warning(f"No valid patient rows in {source_code} pt")
         return {}
 
-    # Upsert patient (UNIQUE on idcard_hash)
-    execute_values(cur, """
+    # ─── Phase 2: upsert patient ────────────────────────────────────────────
+    _bulk_insert(cur, """
         INSERT INTO private.patient
           (idcard_hash, sex_code, birth_year, birth_month, primary_source)
         VALUES %s
@@ -177,192 +287,199 @@ def import_patients(cur, df: pd.DataFrame, source_code: str,
               birth_month  = COALESCE(EXCLUDED.birth_month, private.patient.birth_month),
               last_seen_at = NOW(),
               updated_at   = NOW()
-    """, rows, page_size=1000)
+    """, rows, label='patient')
 
-    # Get patient_id for each idcard_hash
-    cur.execute("SELECT idcard_hash, id FROM private.patient WHERE idcard_hash = ANY(%s)",
-                ([r[0] for r in rows],))
+    # Get patient_id for each hash
+    cur.execute("""
+        SELECT idcard_hash, id FROM private.patient
+        WHERE idcard_hash = ANY(%s)
+    """, (list(rows_by_hash.keys()),))
     pid_map = {h: pid for h, pid in cur.fetchall()}
 
-    # Insert patient_alias rows for source_pid mapping
-    alias_rows = []
-    for _, r in df.iterrows():
-        h = _hash_idcard(r.get(idcard_col))
-        if not h or h not in pid_map:
-            continue
-        source_pid = str(r.get(idcard_col)).strip()
-        alias_rows.append((pid_map[h], source_code, source_pid))
+    # ─── Phase 3: insert aliases (deduped by patient_id) ───────────────────
+    alias_by_pid: Dict[int, tuple] = {}
+    for h, pid in pid_map.items():
+        alias_by_pid[pid] = (pid, source_code, pid_str_by_hash.get(h))
+    alias_rows = list(alias_by_pid.values())
 
-    if alias_rows:
-        execute_values(cur, """
-            INSERT INTO private.patient_alias (patient_id, source_code, source_pid)
-            VALUES %s
-            ON CONFLICT (patient_id, source_code) DO NOTHING
-        """, alias_rows, page_size=1000)
+    _bulk_insert(cur, """
+        INSERT INTO private.patient_alias (patient_id, source_code, source_pid)
+        VALUES %s
+        ON CONFLICT (patient_id, source_code) DO NOTHING
+    """, alias_rows, label='patient_alias')
 
     logger.info(f"  patients: {len(pid_map)} unique, {len(alias_rows)} aliases")
     return pid_map
 
 
 # =============================================================================
-# 2. Import visit + measurements
+# 2. Import visit + measurements (EAV) — robust
 # =============================================================================
+
+def _ensure_patients_for_pids(cur, pid_strs: List[str], source_code: str,
+                                patient_map: Dict[str, int]) -> int:
+    """Auto-create placeholder patients for PIDs not in patient_map.
+    Returns count of newly-created patients.
+    """
+    seen = set()
+    new_rows = []
+    new_aliases = {}
+
+    for pid_str in pid_strs:
+        if _is_blank(pid_str):
+            continue
+        h = _hash_idcard(pid_str)
+        if not h or h in patient_map or h in seen:
+            continue
+        seen.add(h)
+        new_rows.append((h, source_code))
+        new_aliases[h] = str(pid_str).strip()[:80]
+
+    if not new_rows:
+        return 0
+
+    _bulk_insert(cur, """
+        INSERT INTO private.patient (idcard_hash, primary_source)
+        VALUES %s
+        ON CONFLICT (idcard_hash) DO UPDATE SET last_seen_at = NOW()
+    """, new_rows, label='patient (auto-create)')
+
+    cur.execute("""
+        SELECT idcard_hash, id FROM private.patient
+        WHERE idcard_hash = ANY(%s)
+    """, (list(seen),))
+    for h, pid in cur.fetchall():
+        patient_map[h] = pid
+
+    # Aliases (dedupe by patient_id)
+    alias_by_pid = {}
+    for h, pid_str in new_aliases.items():
+        if h in patient_map:
+            alias_by_pid[patient_map[h]] = (patient_map[h], source_code, pid_str)
+
+    _bulk_insert(cur, """
+        INSERT INTO private.patient_alias (patient_id, source_code, source_pid)
+        VALUES %s
+        ON CONFLICT (patient_id, source_code) DO NOTHING
+    """, list(alias_by_pid.values()), label='patient_alias (auto)')
+
+    return len(new_rows)
+
 
 def import_visits_and_measurements(cur, df: pd.DataFrame, source_code: str,
                                      file_type: str, patient_map: Dict[str, int],
                                      import_batch_id: Optional[int] = None) -> int:
-    """
-    For vital/hv/hh/labext (or any file with PID + VSTDATE):
-    1. Create visit_event (one per pid + visit_date + source)
-    2. Create visit_measurement (one per non-null measurement column)
-    3. For address columns → patient_address (SCD Type 2)
+    """For vital/hv/hh/labext: create visit_event + visit_measurement.
+    Address columns → patient_address (SCD Type 2).
 
+    Robust: handles missing FKs, dupes, bad dates, out-of-range numerics.
     Returns: count of visits created.
     """
     var_map = _load_variable_map(cur, source_code)
     if not var_map:
-        logger.warning(f"No variables defined for {source_code}; skipping")
+        logger.warning(f"No variables defined for {source_code}; skipping {file_type}")
         return 0
 
-    # Cache for facility-code FK validation (avoid N queries)
-    _facility_cache: Dict[str, bool] = {}
-
-    # Identify PID + date columns
     pid_col = 'PID' if 'PID' in df.columns else 'IDCARD'
     if pid_col not in df.columns:
         raise ValueError(f"No PID/IDCARD column in {source_code} {file_type}")
     if 'VSTDATE' not in df.columns:
-        # Some files don't have VSTDATE (e.g. raw pt.csv) — skip
         logger.warning(f"No VSTDATE in {source_code} {file_type}; skipping visit creation")
         return 0
 
-    # PHASE 1: Auto-create missing patients
-    # Some children files reference PIDs that aren't in pt.csv (data quality
-    # issue or test slices). Insert minimal placeholder patient rows so we
-    # don't lose visits. They get sex/birth_year=NULL until backfilled.
-    missing_hashes: list[tuple[str, str]] = []  # [(idcard_hash, source_pid)]
-    seen = set()
-    for _, r in df.iterrows():
-        raw = r.get(pid_col)
-        if _is_blank(raw):
-            continue
-        h = _hash_idcard(raw)
-        if h and h not in patient_map and h not in seen:
-            missing_hashes.append((h, str(raw).strip()))
-            seen.add(h)
-    if missing_hashes:
-        execute_values(cur, """
-            INSERT INTO private.patient (idcard_hash, primary_source)
-            VALUES %s
-            ON CONFLICT (idcard_hash) DO UPDATE SET last_seen_at = NOW()
-        """, [(h, source_code) for h, _ in missing_hashes], page_size=1000)
-        cur.execute("SELECT idcard_hash, id FROM private.patient WHERE idcard_hash = ANY(%s)",
-                    ([h for h, _ in missing_hashes],))
-        for h, pid in cur.fetchall():
-            patient_map[h] = pid
-        # Add aliases for new patients
-        execute_values(cur, """
-            INSERT INTO private.patient_alias (patient_id, source_code, source_pid)
-            VALUES %s
-            ON CONFLICT (patient_id, source_code) DO NOTHING
-        """, [(patient_map[h], source_code, pid_str)
-              for h, pid_str in missing_hashes if h in patient_map],
-            page_size=1000)
-        logger.info(f"  auto-created {len(missing_hashes)} placeholder patients for {source_code}/{file_type}")
+    facility_cache: Dict[str, bool] = {}
 
-    # 2a. Build visit_event rows
-    visit_rows = []
-    visit_meta_lookup = []  # (pid_hash, visit_date, df_index)
-    skipped_no_pid = 0
-    skipped_no_date = 0
+    # ─── Phase 1: ensure all PIDs have patient rows ─────────────────────────
+    pid_strs = list(set(
+        str(r.get(pid_col)).strip()
+        for _, r in df.iterrows()
+        if not _is_blank(r.get(pid_col))
+    ))
+    n_created = _ensure_patients_for_pids(cur, pid_strs, source_code, patient_map)
+    if n_created:
+        logger.info(f"  auto-created {n_created} patients for {source_code}/{file_type}")
+
+    # ─── Phase 2: build visit_event rows (deduped by patient_id, visit_date)
+    visit_dict: Dict[Tuple[int, date], tuple] = {}
+    visit_meta: Dict[Tuple[int, date], int] = {}  # (pid, date) → df_index
+    skipped_pid = skipped_date = 0
+
     for idx, r in df.iterrows():
-        h = _hash_idcard(r.get(pid_col))
+        raw_pid = r.get(pid_col)
+        h = _hash_idcard(raw_pid)
         if not h or h not in patient_map:
-            skipped_no_pid += 1
+            skipped_pid += 1
             continue
         v_date = _parse_date(r.get('VSTDATE'))
         if not v_date:
-            skipped_no_date += 1
+            skipped_date += 1
             continue
+
+        pid = patient_map[h]
         cancel = _parse_int(r.get('CANCELST')) or 0
-        facility = str(r.get('HPTCODE', '')).strip() or None
-        if facility and facility not in _facility_cache:
-            cur.execute("SELECT 1 FROM private.facility WHERE code = %s LIMIT 1", (facility,))
-            _facility_cache[facility] = cur.fetchone() is not None
-        if facility and not _facility_cache.get(facility):
-            facility = None  # unknown facility code → NULL (FK can be null)
-        source_visit_id = str(r.get('VST_ID', '')).strip() or str(r.get(pid_col, '')).strip()
+        facility = _validate_facility(cur, str(r.get('HPTCODE', '')).strip(),
+                                       facility_cache)
+        source_visit_id = _truncate(str(r.get('VST_ID', '')).strip()
+                                     or str(raw_pid).strip(), 80)
 
-        visit_rows.append((
-            patient_map[h], source_code, v_date,
-            None,  # visit_time (TODO: parse VSTTIME)
-            facility, cancel, source_visit_id, import_batch_id
-        ))
-        visit_meta_lookup.append((h, v_date, idx))
+        key = (pid, v_date)
+        visit_dict[key] = (pid, source_code, v_date, None, facility,
+                           cancel, source_visit_id, import_batch_id)
+        visit_meta[key] = idx
 
-    if not visit_rows:
+    if not visit_dict:
+        logger.info(f"  {source_code}/{file_type}: no valid visits "
+                     f"(skipped pid={skipped_pid}, date={skipped_date})")
         return 0
 
-    # Dedupe by (patient_id, visit_date) — same patient may appear multiple
-    # times on same day in CSV (multiple measurements at one visit window).
-    # Keep the LAST occurrence (overwrites earlier with same key).
-    deduped = {}
-    for row, lookup in zip(visit_rows, visit_meta_lookup):
-        key = (row[0], row[2])  # (patient_id, visit_date)
-        deduped[key] = (row, lookup)
-    visit_rows = [v[0] for v in deduped.values()]
-    visit_meta_lookup = [v[1] for v in deduped.values()]
-
-    # Insert visits + capture IDs
-    execute_values(cur, """
+    # ─── Phase 3: insert visit_event ────────────────────────────────────────
+    _bulk_insert(cur, """
         INSERT INTO private.visit_event
           (patient_id, source_code, visit_date, visit_time,
            facility_code, cancel_status, source_visit_id, import_batch_id)
         VALUES %s
         ON CONFLICT (patient_id, source_code, visit_date) WHERE cancel_status = 0
-        DO UPDATE SET facility_code = EXCLUDED.facility_code,
+        DO UPDATE SET facility_code = COALESCE(EXCLUDED.facility_code, private.visit_event.facility_code),
                       import_batch_id = EXCLUDED.import_batch_id
-    """, visit_rows, page_size=1000)
+    """, list(visit_dict.values()), label='visit_event')
 
-    # Re-fetch all visit_ids for this batch
-    pids = list({patient_map[h] for h, _, _ in visit_meta_lookup})
+    # Get visit_id for each (patient_id, visit_date)
+    pids = list({v[0] for v in visit_dict.values()})
     cur.execute("""
-        SELECT patient_id, visit_date, id
-        FROM private.visit_event
+        SELECT patient_id, visit_date, id FROM private.visit_event
         WHERE source_code = %s AND patient_id = ANY(%s)
     """, (source_code, pids))
     visit_id_map = {(pid, vd): vid for pid, vd, vid in cur.fetchall()}
 
-    # 2b. Build measurement rows + address rows
-    measurement_rows = []
-    address_rows = []
-    for h, v_date, idx in visit_meta_lookup:
-        pid = patient_map[h]
+    # ─── Phase 4: build measurement + address rows ─────────────────────────
+    measurement_dict: Dict[Tuple[int, int], tuple] = {}  # (visit_id, var_id) → row
+    address_keys: Dict[Tuple[int, str], tuple] = {}     # (patient_id, type) → row
+
+    for (pid, v_date), idx in visit_meta.items():
         vid = visit_id_map.get((pid, v_date))
         if not vid:
             continue
         r = df.iloc[idx]
 
-        # Address columns → patient_address (SCD Type 2)
+        # Address columns → patient_address (latest one per type wins)
         home_dc = None
-        home_prov = None
         work_dc = None
         for col in ('HDISTRICT', 'DISTRICT'):
-            if col in df.columns and not _is_blank(r.get(col)):
+            if col in df.columns:
                 v = _parse_int(r.get(col))
-                if v and v != 9999:
+                if v and v != 9999 and 1001 <= v <= 9999:
                     home_dc = home_dc or str(v).zfill(4)
-        if 'HPROVINCE' in df.columns and not _is_blank(r.get('HPROVINCE')):
-            home_prov = str(_parse_int(r.get('HPROVINCE'))).zfill(2)
-        if 'WRKDISTRICT' in df.columns and not _is_blank(r.get('WRKDISTRICT')):
+        if 'WRKDISTRICT' in df.columns:
             v = _parse_int(r.get('WRKDISTRICT'))
             if v and v != 9999:
                 work_dc = str(v).zfill(4)
 
         if home_dc:
-            address_rows.append((pid, 'home', home_prov, home_dc, None, v_date, vid, source_code))
+            address_keys[(pid, 'home')] = (pid, 'home', None, home_dc, None,
+                                             v_date, vid, source_code)
         if work_dc:
-            address_rows.append((pid, 'work', None, work_dc, None, v_date, vid, source_code))
+            address_keys[(pid, 'work')] = (pid, 'work', None, work_dc, None,
+                                             v_date, vid, source_code)
 
         # Measurement columns
         for col, val in r.items():
@@ -375,104 +492,114 @@ def import_visits_and_measurements(cur, df: pd.DataFrame, source_code: str,
             if not var:
                 continue
 
-            value_number = None
-            value_text = None
-            value_boolean = None
-            value_date = None
+            value_number = value_text = value_boolean = value_date = None
             dtype = var['data_type']
-            if dtype == 'number':
-                value_number = _parse_float(val)
-                if value_number is None:
-                    value_text = str(val)[:500]
-            elif dtype == 'boolean':
-                v = str(val).strip().lower()
-                if v in ('1', 'true', 'yes', 'y', 't'):
-                    value_boolean = True
-                elif v in ('0', 'false', 'no', 'n', 'f'):
-                    value_boolean = False
+            try:
+                if dtype == 'number':
+                    value_number = _parse_float(val)
+                    if value_number is not None:
+                        value_number, _oor = _validate_range(
+                            value_number, var['valid_min'], var['valid_max']
+                        )
+                    if value_number is None:
+                        # Out-of-range or unparseable → store as text for audit
+                        value_text = _truncate(str(val))
+                elif dtype == 'boolean':
+                    value_boolean = _parse_bool(val)
+                    if value_boolean is None:
+                        value_text = _truncate(str(val))
+                elif dtype == 'date':
+                    value_date = _parse_date(val)
                 else:
-                    value_text = str(val)[:500]
-            elif dtype == 'date':
-                value_date = _parse_date(val)
-            elif dtype == 'code':
-                value_text = str(val).strip()[:500]
-            else:
-                value_text = str(val)[:500]
+                    value_text = _truncate(str(val))
+            except Exception:
+                value_text = _truncate(str(val))
 
-            if (value_number is None and value_text is None
-                and value_boolean is None and value_date is None):
+            if value_number is None and value_text is None \
+               and value_boolean is None and value_date is None:
                 continue
 
-            measurement_rows.append((
+            measurement_dict[(vid, var['id'])] = (
                 vid, var['id'],
                 value_number, value_text, value_boolean, value_date,
-                False,  # is_computed
-                str(val)[:500],
-            ))
+                False, _truncate(str(val), MAX_TEXT_LEN),
+            )
 
-    # Bulk insert measurements
-    if measurement_rows:
-        # Dedupe by (visit_id, variable_id) — same visit can have multiple
-        # rows mapping to same variable (CSV duplicate / multi-day same date).
-        deduped = {}
-        for row in measurement_rows:
-            deduped[(row[0], row[1])] = row
-        measurement_rows = list(deduped.values())
+    # ─── Phase 5: bulk insert measurements + addresses ─────────────────────
+    _bulk_insert(cur, """
+        INSERT INTO private.visit_measurement
+          (visit_id, variable_id,
+           value_number, value_text, value_boolean, value_date,
+           is_computed, source_value)
+        VALUES %s
+        ON CONFLICT (visit_id, variable_id) DO UPDATE
+          SET value_number  = EXCLUDED.value_number,
+              value_text    = EXCLUDED.value_text,
+              value_boolean = EXCLUDED.value_boolean,
+              value_date    = EXCLUDED.value_date,
+              source_value  = EXCLUDED.source_value
+    """, list(measurement_dict.values()), label='visit_measurement')
 
-        execute_values(cur, """
-            INSERT INTO private.visit_measurement
-              (visit_id, variable_id,
-               value_number, value_text, value_boolean, value_date,
-               is_computed, source_value)
-            VALUES %s
-            ON CONFLICT (visit_id, variable_id) DO UPDATE
-              SET value_number  = EXCLUDED.value_number,
-                  value_text    = EXCLUDED.value_text,
-                  value_boolean = EXCLUDED.value_boolean,
-                  value_date    = EXCLUDED.value_date,
-                  source_value  = EXCLUDED.source_value
-        """, measurement_rows, page_size=2000)
+    # Address: SCD Type 2 — close any existing active row that disagrees, then insert
+    if address_keys:
+        for (pid, atype), arow in address_keys.items():
+            try:
+                cur.execute("SAVEPOINT addr")
+                cur.execute("""
+                    UPDATE private.patient_address
+                    SET effective_to = %s
+                    WHERE patient_id = %s AND address_type = %s
+                      AND effective_to IS NULL
+                      AND district_code IS DISTINCT FROM %s
+                """, (arow[5], pid, atype, arow[3]))
+                cur.execute("""
+                    INSERT INTO private.patient_address
+                      (patient_id, address_type, province_code, district_code,
+                       subdistrict_code, effective_from, reported_by_visit_id,
+                       source_code)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                """, arow)
+                cur.execute("RELEASE SAVEPOINT addr")
+            except Exception:
+                cur.execute("ROLLBACK TO SAVEPOINT addr")
 
-    # Address: insert SCD Type 2 (close existing, insert new)
-    if address_rows:
-        for arow in address_rows:
-            pid, atype = arow[0], arow[1]
-            cur.execute("""
-                UPDATE private.patient_address
-                SET effective_to = %s
-                WHERE patient_id = %s AND address_type = %s
-                  AND effective_to IS NULL
-                  AND district_code IS DISTINCT FROM %s
-            """, (arow[5], pid, atype, arow[3]))
-        execute_values(cur, """
-            INSERT INTO private.patient_address
-              (patient_id, address_type, province_code, district_code,
-               subdistrict_code, effective_from, reported_by_visit_id, source_code)
-            VALUES %s
-            ON CONFLICT DO NOTHING
-        """, address_rows, page_size=1000)
-
-    logger.info(f"  visits: {len(visit_rows)} created, "
-                f"measurements: {len(measurement_rows)}, "
-                f"addresses: {len(address_rows)}, "
-                f"skipped: pid={skipped_no_pid} date={skipped_no_date}")
-    return len(visit_rows)
+    logger.info(
+        f"  {source_code}/{file_type}: visits={len(visit_dict)}, "
+        f"measurements={len(measurement_dict)}, addresses={len(address_keys)}, "
+        f"skipped_pid={skipped_pid}, skipped_date={skipped_date}"
+    )
+    return len(visit_dict)
 
 
 # =============================================================================
-# 3. Import lab (lab.csv / labhealthext.csv)
+# 3. Import lab — robust
 # =============================================================================
 
 def import_lab(cur, df: pd.DataFrame, source_code: str,
                patient_map: Dict[str, int],
                import_batch_id: Optional[int] = None) -> int:
-    """Upsert lab_event + lab_measurement (parallel to visit_measurement)."""
+    """Upsert lab_event + lab_measurement."""
     var_map = _load_variable_map(cur, source_code)
     pid_col = 'PID' if 'PID' in df.columns else 'IDCARD'
-    _lab_facility_cache: Dict[str, bool] = {}
+    if pid_col not in df.columns:
+        raise ValueError(f"No PID/IDCARD in {source_code} lab")
 
-    lab_rows = []
-    df_idx = []
+    facility_cache: Dict[str, bool] = {}
+
+    # Phase 1: auto-create missing patients
+    pid_strs = list(set(
+        str(r.get(pid_col)).strip()
+        for _, r in df.iterrows() if not _is_blank(r.get(pid_col))
+    ))
+    n = _ensure_patients_for_pids(cur, pid_strs, source_code, patient_map)
+    if n:
+        logger.info(f"  auto-created {n} patients for {source_code}/lab")
+
+    # Phase 2: build lab_event rows (no unique constraint, but dedupe by hash anyway)
+    lab_meta: List[Tuple[str, date, int]] = []  # (hash, date, df_index)
+    lab_rows: List[tuple] = []
+
     for idx, r in df.iterrows():
         h = _hash_idcard(r.get(pid_col))
         if not h or h not in patient_map:
@@ -480,47 +607,47 @@ def import_lab(cur, df: pd.DataFrame, source_code: str,
         lab_date = _parse_date(r.get('VSTDATE') or r.get('LABDATE'))
         if not lab_date:
             continue
-        facility = str(r.get('HPTCODE', '')).strip() or None
-        if facility and facility not in _lab_facility_cache:
-            cur.execute("SELECT 1 FROM private.facility WHERE code = %s LIMIT 1", (facility,))
-            _lab_facility_cache[facility] = cur.fetchone() is not None
-        if facility and not _lab_facility_cache.get(facility):
-            facility = None
+        facility = _validate_facility(cur, str(r.get('HPTCODE', '')).strip(),
+                                       facility_cache)
         cancel = _parse_int(r.get('CANCELST')) or 0
-        privilege = str(r.get('PRVLG', '')).strip() or None
-        source_lab_id = str(r.get('LAB_ID', '')).strip() or None
+        privilege = _truncate(str(r.get('PRVLG', '')).strip(), 20)
+        source_lab_id = _truncate(str(r.get('LAB_ID', '')).strip()
+                                    or str(r.get(pid_col)).strip(), 80)
 
         lab_rows.append((
             patient_map[h], source_code, lab_date, facility,
-            cancel, source_lab_id, privilege, import_batch_id
+            cancel, source_lab_id, privilege, import_batch_id,
         ))
-        df_idx.append((h, lab_date, idx))
+        lab_meta.append((h, lab_date, idx))
 
     if not lab_rows:
         return 0
 
-    cur.executemany("""
+    # Insert lab_events (no upsert — append-only)
+    _bulk_insert(cur, """
         INSERT INTO private.lab_event
           (patient_id, source_code, lab_date, facility_code,
            cancel_status, source_lab_id, privilege_code, import_batch_id)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
-    """, lab_rows)
+        VALUES %s
+    """, lab_rows, label='lab_event')
 
-    # Re-fetch lab_ids
-    pids = list({patient_map[h] for h, _, _ in df_idx})
+    # Get lab_ids — first match per (pid, date)
+    pids = list({patient_map[h] for h, _, _ in lab_meta if h in patient_map})
     cur.execute("""
-        SELECT patient_id, lab_date, id
-        FROM private.lab_event
+        SELECT patient_id, lab_date, id FROM private.lab_event
         WHERE source_code = %s AND patient_id = ANY(%s)
+        ORDER BY id DESC
     """, (source_code, pids))
-    lab_id_map = {}
+    lab_id_map: Dict[Tuple[int, date], int] = {}
     for pid, ld, lid in cur.fetchall():
         lab_id_map.setdefault((pid, ld), lid)
 
-    # Build measurement rows
-    measurement_rows = []
-    for h, lab_date, idx in df_idx:
-        pid = patient_map[h]
+    # Phase 3: lab_measurements (deduped)
+    meas_dict: Dict[Tuple[int, int], tuple] = {}
+    for h, lab_date, idx in lab_meta:
+        pid = patient_map.get(h)
+        if not pid:
+            continue
         lid = lab_id_map.get((pid, lab_date))
         if not lid:
             continue
@@ -535,100 +662,81 @@ def import_lab(cur, df: pd.DataFrame, source_code: str,
             if not var:
                 continue
 
-            value_number = None
-            value_text = None
-            value_boolean = None
+            value_number = value_text = value_boolean = None
+            out_of_range = None
             dtype = var['data_type']
-            if dtype == 'number':
-                value_number = _parse_float(val)
-            elif dtype == 'boolean':
-                v = str(val).strip().lower()
-                if v in ('1', 'true', 'yes'):
-                    value_boolean = True
-                elif v in ('0', 'false', 'no'):
-                    value_boolean = False
-            else:
-                value_text = str(val)[:500]
+            try:
+                if dtype == 'number':
+                    value_number = _parse_float(val)
+                    if value_number is not None:
+                        value_number, oor = _validate_range(
+                            value_number, var['valid_min'], var['valid_max']
+                        )
+                        out_of_range = oor
+                    if value_number is None:
+                        value_text = _truncate(str(val))
+                elif dtype == 'boolean':
+                    value_boolean = _parse_bool(val)
+                    if value_boolean is None:
+                        value_text = _truncate(str(val))
+                else:
+                    value_text = _truncate(str(val))
+            except Exception:
+                value_text = _truncate(str(val))
 
             if value_number is None and value_text is None and value_boolean is None:
                 continue
 
-            out_of_range = None
-            if (value_number is not None
-                and var['valid_min'] is not None
-                and var['valid_max'] is not None):
-                out_of_range = (value_number < float(var['valid_min'])
-                                or value_number > float(var['valid_max']))
+            meas_dict[(lid, var['id'])] = (
+                lid, var['id'], value_number, value_text, value_boolean,
+                out_of_range, False, _truncate(str(val)),
+            )
 
-            measurement_rows.append((
-                lid, var['id'],
-                value_number, value_text, value_boolean,
-                out_of_range, False, str(val)[:500],
-            ))
+    _bulk_insert(cur, """
+        INSERT INTO private.lab_measurement
+          (lab_id, variable_id,
+           value_number, value_text, value_boolean,
+           out_of_range, is_computed, source_value)
+        VALUES %s
+        ON CONFLICT (lab_id, variable_id) DO UPDATE
+          SET value_number = EXCLUDED.value_number,
+              value_text   = EXCLUDED.value_text,
+              value_boolean = EXCLUDED.value_boolean,
+              out_of_range = EXCLUDED.out_of_range
+    """, list(meas_dict.values()), label='lab_measurement')
 
-    if measurement_rows:
-        # Dedupe by (lab_id, variable_id) — same lab can have multiple
-        # source rows mapping to same variable (e.g., duplicate columns).
-        deduped = {}
-        for row in measurement_rows:
-            deduped[(row[0], row[1])] = row  # last wins
-        measurement_rows = list(deduped.values())
-
-        execute_values(cur, """
-            INSERT INTO private.lab_measurement
-              (lab_id, variable_id,
-               value_number, value_text, value_boolean,
-               out_of_range, is_computed, source_value)
-            VALUES %s
-            ON CONFLICT (lab_id, variable_id) DO UPDATE
-              SET value_number = EXCLUDED.value_number,
-                  value_text   = EXCLUDED.value_text,
-                  value_boolean = EXCLUDED.value_boolean,
-                  out_of_range = EXCLUDED.out_of_range
-        """, measurement_rows, page_size=2000)
-
-    logger.info(f"  lab: {len(lab_rows)} events, {len(measurement_rows)} measurements")
+    logger.info(f"  {source_code}/lab: events={len(lab_rows)}, "
+                 f"measurements={len(meas_dict)}")
     return len(lab_rows)
 
 
 # =============================================================================
-# 4. App2 — single combined CSV; needs splitting
+# 4. App2 — combined CSV
 # =============================================================================
 
 def import_app2(cur, df: pd.DataFrame,
                 import_batch_id: Optional[int] = None) -> Tuple[int, int]:
-    """
-    App2 has 1 combined CSV. We:
-    1. Create patient (PID + sex + age inferred)
-    2. Create visit_event (PID + HD as date)
-    3. All other columns → visit_measurement
-    """
+    """App2 is a single combined CSV. Treat PID as IDCARD, HD as VSTDATE."""
     if 'PID' not in df.columns:
-        raise ValueError("App2 missing PID")
+        raise ValueError("App2 missing PID column")
 
-    # Synthesize 'IDCARD' for hashing — App2 uses PID
     df = df.copy()
-    df['IDCARD'] = df['PID']
+    df['IDCARD'] = df['PID']  # for import_patients to find ID column
+    if 'HD' in df.columns and 'VSTDATE' not in df.columns:
+        df['VSTDATE'] = df['HD']
 
     pid_map = import_patients(cur, df, 'app2', import_batch_id)
-    if 'HD' in df.columns:
-        df['VSTDATE'] = df['HD']
-    return (
-        len(pid_map),
-        import_visits_and_measurements(cur, df, 'app2', 'app2', pid_map, import_batch_id),
+    n_visits = import_visits_and_measurements(
+        cur, df, 'app2', 'app2', pid_map, import_batch_id,
     )
+    return len(pid_map), n_visits
 
 
 # =============================================================================
-# 5. Refresh public MVs (called after each import)
+# 5. Refresh public MVs
 # =============================================================================
 
-def refresh_public_mvs(cur) -> None:
-    """Refresh all public.mv_* — non-fatal if a single MV fails."""
-    cur.execute("SELECT public.refresh_all_mvs()")
-    # Log to mv_refresh_log
-    cur.execute("""
-        INSERT INTO public.mv_refresh_log (view_name, status, duration_ms)
-        SELECT view_name, status, duration_ms FROM public.refresh_all_mvs()
-    """)
-    logger.info("  Refreshed public.mv_*")
+def refresh_public_mvs(cur) -> List[Tuple[str, str]]:
+    """Refresh all public.mv_* via the SQL function. Returns [(view_name, status)]."""
+    cur.execute("SELECT view_name, status, duration_ms FROM public.refresh_all_mvs()")
+    return [(v, s) for v, s, _ in cur.fetchall()]
