@@ -950,36 +950,78 @@ async def dashboard(request: Request, source: str = "all"):
 
     try:
         where_clause, params = _source_where_clause(source)
+        # v3 dashboard reads from private.* via patient_alias.source_code
+        src_filter_sql = ""
+        src_filter_params = ()
+        if source != "all":
+            src_filter_sql = " AND pa.source_code = %s"
+            src_filter_params = (source,)
 
-        # For each raw table compute 2 counts:
-        #   n_records = "ครั้ง" (visits) — defined per spec:
-        #     - raw_patients: COUNT(*) (each row = 1 registration / 1 person-source)
-        #     - child tables: COUNT(DISTINCT (patient_id, visit_date::date))
-        #         → matches the project spec "vital.PID + VSTDATE (count)"
-        #         → drops within-day duplicates (e.g. App1 has ~2% same-day dups)
-        #   n_people  = "คน" — unique persons
-        #     - raw_patients: COUNT(DISTINCT idcard_hash)
-        #     - child tables: COUNT(DISTINCT patient_id)
-        #
-        # `records_expr` is interpolated as raw SQL — the values are static
-        # (no user input), so it's safe.
-        _table_specs = [
-            ("raw_patients",     "patients",     "COUNT(*)",                                                    "COUNT(DISTINCT idcard_hash)"),
-            ("raw_vitalsigns",   "vitalsigns",   "COUNT(DISTINCT (patient_id, visit_date::date))",              "COUNT(DISTINCT patient_id)"),
-            ("raw_visits",       "visits",       "COUNT(DISTINCT (patient_id, visit_date::date))",              "COUNT(DISTINCT patient_id)"),
-            ("raw_lab_results",  "lab",          "COUNT(DISTINCT (patient_id, visit_date::date))",              "COUNT(DISTINCT patient_id)"),
-            ("raw_homevisit",    "homevisit",    "COUNT(DISTINCT (patient_id, visit_date::date))",              "COUNT(DISTINCT patient_id)"),
-            ("raw_homehealth",   "homehealth",   "COUNT(DISTINCT (patient_id, visit_date::date))",              "COUNT(DISTINCT patient_id)"),
-            ("raw_lab_extended", "lab_extended", "COUNT(DISTINCT (patient_id, visit_date::date))",              "COUNT(DISTINCT patient_id)"),
+        # ─── v3: counts from private.* ────────────────────────────────────
+        # Table specs map old raw_* names → new private.* aggregations.
+        # n_records ("ครั้ง"):  visit/measurement-level row counts
+        # n_people  ("คน"):     distinct patient_id
+        _v3_specs = [
+            ("private.patient",            "patients",
+             """SELECT COUNT(DISTINCT pa.patient_id) AS n_records,
+                       COUNT(DISTINCT pa.patient_id) AS n_people
+                FROM private.patient_alias pa
+                WHERE 1=1{src}""" ),
+            ("private.visit_event",        "vitalsigns",
+             """SELECT COUNT(*) AS n_records,
+                       COUNT(DISTINCT patient_id) AS n_people
+                FROM private.visit_event WHERE cancel_status = 0{src_visit}"""),
+            ("private.visit_event",        "visits",
+             """SELECT COUNT(*) AS n_records,
+                       COUNT(DISTINCT patient_id) AS n_people
+                FROM private.visit_event WHERE cancel_status = 0{src_visit}"""),
+            ("private.lab_event",          "lab",
+             """SELECT COUNT(*) AS n_records,
+                       COUNT(DISTINCT patient_id) AS n_people
+                FROM private.lab_event WHERE cancel_status = 0{src_lab}"""),
+            ("private.patient_address",    "homevisit",
+             """SELECT COUNT(*) AS n_records,
+                       COUNT(DISTINCT patient_id) AS n_people
+                FROM private.patient_address{src_addr}"""),
+            ("private.visit_measurement",  "homehealth",
+             """SELECT COUNT(*) AS n_records,
+                       COUNT(DISTINCT ve.patient_id) AS n_people
+                FROM private.visit_measurement vm
+                JOIN private.visit_event ve ON ve.id = vm.visit_id
+                WHERE 1=1{src_visit_v}"""),
+            ("private.lab_measurement",    "lab_extended",
+             """SELECT COUNT(*) AS n_records,
+                       COUNT(DISTINCT le.patient_id) AS n_people
+                FROM private.lab_measurement lm
+                JOIN private.lab_event le ON le.id = lm.lab_id
+                WHERE 1=1{src_lab_l}"""),
         ]
+        # Source filter substitutions
+        v_src       = " AND source_code = %s" if source != "all" else ""
+        v_visit_v   = " AND ve.source_code = %s" if source != "all" else ""
+        v_lab_l     = " AND le.source_code = %s" if source != "all" else ""
+        v_addr      = (" WHERE source_code = %s" if source != "all" else "")
+        v_params    = (source,) if source != "all" else ()
+
         raw_tables = []
-        for tbl, key, records_expr, people_expr in _table_specs:
-            sql = (
-                f'SELECT {records_expr} AS n_records, '
-                f'{people_expr} AS n_people '
-                f'FROM "{tbl}" {where_clause}'
+        for tbl, key, sql_template in _v3_specs:
+            sql = sql_template.format(
+                src=src_filter_sql,
+                src_visit=v_src,
+                src_lab=v_src,
+                src_visit_v=v_visit_v,
+                src_lab_l=v_lab_l,
+                src_addr=v_addr,
             )
-            rows = execute_query(sql, params) or [{"n_records": 0, "n_people": 0}]
+            try:
+                if key == "patients":
+                    rows = execute_query(sql, src_filter_params)
+                else:
+                    rows = execute_query(sql, v_params if v_params else None)
+                rows = rows or [{"n_records": 0, "n_people": 0}]
+            except Exception as exc:
+                logger.warning(f"Dashboard query failed for {tbl}: {exc}")
+                rows = [{"n_records": 0, "n_people": 0}]
             row = rows[0]
             n_rec = int(row.get("n_records") or 0)
             n_ppl = int(row.get("n_people") or 0)
@@ -990,30 +1032,29 @@ async def dashboard(request: Request, source: str = "all"):
                 "n_records": n_rec,
                 "n_people": n_ppl,
             })
-        people_counts = {key: rt["n_people"] for rt, (_, key, _, _) in
-                         zip(raw_tables, _table_specs)}
+        people_counts = {key: rt["n_people"] for rt, (_, key, _) in
+                         zip(raw_tables, _v3_specs)}
 
-        # Per-source breakdown on top of the page (always computed, source-independent)
+        # ─── Per-source breakdown ────────────────────────────────────────
         try:
-            source_breakdown = execute_query(
-                "SELECT data_source, COUNT(*) AS n "
-                "FROM raw_patients GROUP BY data_source ORDER BY data_source"
-            ) or []
+            source_breakdown = execute_query("""
+                SELECT pa.source_code AS data_source, COUNT(*) AS n
+                FROM private.patient_alias pa
+                GROUP BY pa.source_code ORDER BY pa.source_code
+            """) or []
         except Exception:
             source_breakdown = []
 
-        # Coverage stats vs project target (e.g. 1,000,000 people)
-        # n_per_source[X]      = unique people in source X
-        # n_unique_all_sources = unique idcard_hash across ALL 3 sources (people who
-        #                        have been screened anywhere, deduped cross-source)
+        # ─── Coverage stats vs project target ────────────────────────────
         try:
-            cov_rows = execute_query(
-                "SELECT data_source, COUNT(DISTINCT idcard_hash) AS n "
-                "FROM raw_patients GROUP BY data_source"
-            ) or []
+            cov_rows = execute_query("""
+                SELECT pa.source_code AS data_source, COUNT(DISTINCT pa.patient_id) AS n
+                FROM private.patient_alias pa
+                GROUP BY pa.source_code
+            """) or []
             n_per_source = {r["data_source"]: int(r["n"]) for r in cov_rows}
             n_unique_all = int(execute_scalar(
-                "SELECT COUNT(DISTINCT idcard_hash) FROM raw_patients"
+                "SELECT COUNT(*) FROM private.patient WHERE NOT is_erased"
             ) or 0)
             coverage_stats = {
                 "target":            COVERAGE_TARGET,
