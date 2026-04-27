@@ -38,6 +38,29 @@ def overview(sources: Optional[str] = Query(None, description="Comma-separated s
     # `unified_visits` = distinct (source, patient_id, day) with >30-day
     # dedup applied (for visit counts) — see services/unified_screening.py.
 
+    # Audit counts — visits dropped at each stage of the pipeline.
+    # Used by the OverviewBoard info tooltip ("วิธีนับ" / "ตัดออก ...").
+    audit_row = execute_query("""
+        SELECT
+          -- Cancelled rows: raw_vitalsigns has Portal + App1, App2 lives on raw_homehealth
+          COUNT(*) FILTER (WHERE v.data_source IN ('portal', 'app1') AND v.cancel_status = 1) AS vital_cancelled,
+          -- Total raw rows after cancel filter, per the project's row-level
+          -- definition (same as user's `WHERE CANCELST != 1` count). This is
+          -- what `dropped_retry_30d` is measured against.
+          COUNT(*) FILTER (WHERE v.data_source IN ('portal', 'app1') AND v.cancel_status IS DISTINCT FROM 1) AS vital_after_cancel
+        FROM raw_vitalsigns v
+    """) or [{}]
+    a = audit_row[0]
+    app2_audit = execute_query("""
+        SELECT
+          COUNT(*) FILTER (WHERE cancel_status = 1)                  AS cancelled,
+          COUNT(*) FILTER (WHERE cancel_status IS DISTINCT FROM 1)   AS after_cancel
+        FROM raw_homehealth WHERE data_source = 'app2'
+    """) or [{}]
+    a2 = app2_audit[0] if app2_audit else {}
+    cancelled_total = int(a.get("vital_cancelled") or 0) + int(a2.get("cancelled") or 0)
+    raw_after_cancel = int(a.get("vital_after_cancel") or 0) + int(a2.get("after_cancel") or 0)
+
     # Totals span ALL buckets (bkk + non_bkk + unknown) so the headline
     # number reconciles with the project total. Per-bucket counts are
     # returned in `breakdown` so the dashboard can show the split as a
@@ -65,6 +88,10 @@ def overview(sources: Optional[str] = Query(None, description="Comma-separated s
     non_bkk_visits = int(r0.get("non_bkk_visits") or 0)
     unknown_screened = int(r0.get("unknown_screened") or 0)
     unknown_visits = int(r0.get("unknown_visits") or 0)
+    # `dropped_retry_30d` = rows after CANCEL filter minus the deduped visit
+    # count (matches the user's row-level definition: rows-in-vital with
+    # CANCELST=0 minus the rn=1 final count).
+    dropped_retry = max(0, raw_after_cancel - total_visits)
 
     zone_count = execute_scalar("SELECT COUNT(*) FROM ref_health_zones") or 0
     district_count = execute_scalar("SELECT COUNT(*) FROM ref_districts") or 0
@@ -133,6 +160,13 @@ def overview(sources: Optional[str] = Query(None, description="Comma-separated s
             "bkk":         {"total_screened": bkk_screened,     "total_visits": bkk_visits},
             "non_bangkok": {"total_screened": non_bkk_screened, "total_visits": non_bkk_visits},
             "unknown":     {"total_screened": unknown_screened, "total_visits": unknown_visits},
+        },
+        # Audit / methodology counts — surfaced via the OverviewBoard info
+        # tooltip ("วิธีนับ ... ตัดออก ..."). Project-wide totals.
+        "audit": {
+            "dropped_cancelled": cancelled_total,
+            "dropped_retry_30d": dropped_retry,
+            "raw_after_cancel":  raw_after_cancel,
         },
     }
     cache_set(cache_key, result, TTL_T2_AGGREGATE)

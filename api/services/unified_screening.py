@@ -197,41 +197,53 @@ unified AS MATERIALIZED (
     ]
 
     if include_visits:
-        # `unified_visits` — canonical visit set with the >30-day dedup rule.
+        # `unified_visits` — canonical visit set with the 30-day dedup rule.
         #
-        # Spec (2026-04-27): "ตัวแปรครั้งในโครงการ คือ PID + VSTDATE
-        # กันเคสที่กรอกข้อมูลผิดแล้วกรอกใหม่ — PID เดิมซ้ำได้แต่ต้องเกิน 1 เดือน".
-        # When the same patient has visits within 30 days, only the first is
-        # kept; subsequent ones are treated as data-correction duplicates.
+        # Spec (2026-04-27): "กันเคสที่กรอกข้อมูลผิดแล้วกรอกใหม่ — PID เดิม
+        # ซ้ำได้แต่ต้องเกิน 1 เดือน". Implementation matches the user's
+        # CTE precisely:
         #
-        # Two-pass construction (PostgreSQL evaluates DISTINCT *after* window
-        # functions, so we use nested subqueries to force the right order):
+        #   1. DISTINCT ON (source, pid, day) — collapse JOIN multiplication
+        #      from patients with multiple homevisit rows.
+        #   2. group_id = cumulative count of "new windows" — increments
+        #      whenever the gap from the previous visit is NULL (first
+        #      visit) or >= 30 days. Visits in the same window share an id.
+        #   3. Within each (source, pid, group_id), keep the LATEST visit
+        #      (ORDER BY day DESC, rn=1) — the corrected entry, not the
+        #      original mistaken one.
         #
-        #   1. DISTINCT ON (source, patient_id, day) — collapse JOIN
-        #      multiplication caused by patients with multiple homevisit rows.
-        #      ORDER BY ..., dc NULLS LAST deterministically picks a BKK dc
-        #      over NULL when a single visit has both available.
-        #   2. LAG(day) over (source, patient_id) — find the previous visit.
-        #   3. WHERE prev_day IS NULL OR (day - prev_day) > 30 — drop
-        #      duplicates entered within 30 days of the prior record.
+        # Net effect: same visit COUNT as user's Python pivot
+        # (Portal 473,391 / App1 375,678 / App2 34,624) and the kept row is
+        # the latest in each 30-day window.
         cte_parts.append("""
 unified_visits AS MATERIALIZED (
   SELECT source, patient_id, day, dc, bucket
   FROM (
-    SELECT source, patient_id, day, dc, bucket,
-           LAG(day) OVER (PARTITION BY source, patient_id ORDER BY day) AS prev_day
+    SELECT source, patient_id, day, dc, bucket, group_id,
+           ROW_NUMBER() OVER (
+             PARTITION BY source, patient_id, group_id
+             ORDER BY day DESC
+           ) AS rn
     FROM (
-      -- ORDER BY dc NULLS LAST: BKK codes ('1001'..'1050') sort before
-      -- non-BKK ('1101'+) by text comparison, so when a single visit has
-      -- both BKK and non-BKK matches the BKK one wins. NULL (unknown)
-      -- ranks last.
-      SELECT DISTINCT ON (source, patient_id, day)
-             source, patient_id, day, dc, bucket
-      FROM unified
-      ORDER BY source, patient_id, day, dc NULLS LAST
-    ) collapsed
-  ) lagged
-  WHERE prev_day IS NULL OR (day - prev_day) > 30
+      SELECT source, patient_id, day, dc, bucket,
+             SUM(CASE WHEN prev_day IS NULL OR (day - prev_day) >= 30
+                      THEN 1 ELSE 0 END)
+               OVER (PARTITION BY source, patient_id ORDER BY day) AS group_id
+      FROM (
+        SELECT source, patient_id, day, dc, bucket,
+               LAG(day) OVER (PARTITION BY source, patient_id ORDER BY day) AS prev_day
+        FROM (
+          -- ORDER BY dc NULLS LAST: BKK codes sort before non-BKK,
+          -- and NULL (unknown) ranks last.
+          SELECT DISTINCT ON (source, patient_id, day)
+                 source, patient_id, day, dc, bucket
+          FROM unified
+          ORDER BY source, patient_id, day, dc NULLS LAST
+        ) collapsed
+      ) lagged
+    ) grouped
+  ) ranked
+  WHERE rn = 1
 )
 """.strip())
 
