@@ -9,39 +9,103 @@ from decimal import Decimal
 from typing import Optional, List, Dict
 from urllib.parse import urlparse
 
+import os
+
 import psycopg2
 import psycopg2.pool
 import psycopg2.extras
 
-from config import DATABASE_URL
+from config import DATABASE_URL, DATABASE_URL_READER, DATABASE_URL_WRITER
 
 # --------------------------------------------------------------------------- #
-# Connection pool (singleton)
+# Connection pools — separate for reader (api_user) and writer (etl_user)
 # --------------------------------------------------------------------------- #
+# Two least-privilege pools (v3, 2026-04-27):
+#   - reader pool: api_user (bma_api_reader) — SELECT on public.* only
+#   - writer pool: etl_user (bma_etl_writer) — INSERT/UPDATE on private.*
+#
+# Default `get_conn()` uses the reader pool. Use `get_writer_conn()` from
+# admin/ETL paths that need to write to private.*.
+#
+# In dev (DATABASE_URL_READER == DATABASE_URL_WRITER == DATABASE_URL), both
+# pools resolve to the same DSN — backward-compatible.
 
-_parsed = urlparse(DATABASE_URL)
-_pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
+_pool_reader: Optional[psycopg2.pool.ThreadedConnectionPool] = None
+_pool_writer: Optional[psycopg2.pool.ThreadedConnectionPool] = None
+
+DB_POOL_MIN = int(os.getenv("DB_POOL_MIN", "5"))
+DB_POOL_MAX = int(os.getenv("DB_POOL_MAX", "50"))
+
+
+def _make_pool(dsn: str) -> psycopg2.pool.ThreadedConnectionPool:
+    p = urlparse(dsn)
+    return psycopg2.pool.ThreadedConnectionPool(
+        minconn=DB_POOL_MIN,
+        maxconn=DB_POOL_MAX,
+        host=p.hostname,
+        port=p.port or 5432,
+        dbname=p.path.lstrip("/"),
+        user=p.username,
+        password=p.password,
+    )
 
 
 def _get_pool() -> psycopg2.pool.ThreadedConnectionPool:
-    global _pool
-    if _pool is None or _pool.closed:
-        _pool = psycopg2.pool.ThreadedConnectionPool(
-            minconn=2,
-            maxconn=20,
-            host=_parsed.hostname,
-            port=_parsed.port or 5432,
-            dbname=_parsed.path.lstrip("/"),
-            user=_parsed.username,
-            password=_parsed.password,
-        )
-    return _pool
+    """Reader pool (api_user). Returns least-privilege connection.
+    Most API endpoints query public.* MVs only — this is what they should use.
+    """
+    global _pool_reader
+    if _pool_reader is None or _pool_reader.closed:
+        _pool_reader = _make_pool(DATABASE_URL_READER)
+    return _pool_reader
+
+
+def _get_writer_pool() -> psycopg2.pool.ThreadedConnectionPool:
+    """Writer pool (etl_user). Use ONLY from /admin/* and ETL paths."""
+    global _pool_writer
+    if _pool_writer is None or _pool_writer.closed:
+        _pool_writer = _make_pool(DATABASE_URL_WRITER)
+    return _pool_writer
+
+
+def get_pool_status() -> dict:
+    """Return pool stats for /health debugging. Best-effort, never raises."""
+    def _stats(p):
+        if p is None:
+            return {"in_use": 0, "available": 0}
+        used = len(getattr(p, "_used", {}))
+        free = len(getattr(p, "_pool", []))
+        return {"in_use": used, "available": free,
+                "saturation_pct": round(100 * used / max(DB_POOL_MAX, 1), 1)}
+    try:
+        return {
+            "min": DB_POOL_MIN, "max": DB_POOL_MAX,
+            "reader": _stats(_pool_reader),
+            "writer": _stats(_pool_writer),
+        }
+    except Exception:
+        return {"min": DB_POOL_MIN, "max": DB_POOL_MAX, "error": "unavailable"}
 
 
 @contextmanager
 def get_conn():
-    """Yield a connection from the pool; return it when done."""
+    """Yield a READER connection (api_user) — SELECT public.* only.
+    Default for /api/v2/* endpoints that read MVs.
+    """
     pool = _get_pool()
+    conn = pool.getconn()
+    try:
+        yield conn
+    finally:
+        pool.putconn(conn)
+
+
+@contextmanager
+def get_writer_conn():
+    """Yield a WRITER connection (etl_user) — INSERT/UPDATE private.*.
+    Use ONLY from admin upload / ETL background threads.
+    """
+    pool = _get_writer_pool()
     conn = pool.getconn()
     try:
         yield conn

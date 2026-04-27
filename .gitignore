@@ -31,3 +31,4 @@ minimal_data/portal_top/district_health_data.json
 # Claude internal
 .claude/plans/
 .claude/launch.json
+.env.bak.*

@@ -1,0 +1,3 @@
+# Don't commit private keys or certs
+server.key
+server.crt

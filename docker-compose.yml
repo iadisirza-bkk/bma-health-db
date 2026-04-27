@@ -11,12 +11,18 @@ services:
       POSTGRES_DB: bma_health
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${DB_PASSWORD:-bma_health_dev}
-    # Postgres tuning for analytics workload (unified_screening CTEs).
-    # work_mem 64M  — each sort/hash op gets up to 64M before spilling
-    # shared_buffers 512M  — disk page cache (~25% of expected RAM)
-    # effective_cache_size 1500M  — planner hint for OS+PG cache
-    # maintenance_work_mem 256M  — speeds up VACUUM, CREATE INDEX
-    # max_parallel_workers_per_gather 2  — parallel scans for big tables
+    # Postgres tuning + audit logging (v3 hardening, 2026-04-27).
+    #
+    # Performance:
+    #   work_mem 64M, shared_buffers 512M, effective_cache_size 1500M,
+    #   maintenance_work_mem 256M, max_parallel_workers_per_gather 2
+    #
+    # Security audit (gap 4 — replaces pgaudit, not in alpine image):
+    #   log_statement = 'mod'           — log INSERT/UPDATE/DELETE/DDL
+    #   log_connections = on            — log every login attempt
+    #   log_disconnections = on         — log session ends
+    #   log_min_duration_statement 1000 — log slow queries (>1s)
+    #   log_line_prefix '%t [%p] %u@%d' — timestamp + pid + user + db
     command: >
       postgres
       -c work_mem=64MB
@@ -26,13 +32,34 @@ services:
       -c max_parallel_workers_per_gather=2
       -c temp_buffers=32MB
       -c random_page_cost=1.1
+      -c log_statement=mod
+      -c log_connections=on
+      -c log_disconnections=on
+      -c log_min_duration_statement=1000
+      -c log_line_prefix='%t [%p] %u@%d '
+      -c log_lock_waits=on
+      -c logging_collector=off
+      -c hba_file=/etc/postgres/pg_hba.conf
+      -c ssl=on
+      -c ssl_cert_file=/etc/postgres/ssl/server.crt
+      -c ssl_key_file=/etc/postgres/ssl/server.key
+      -c password_encryption=scram-sha-256
+      -c archive_mode=on
+      -c archive_command='test ! -f /var/lib/postgresql/wal_archive/%f && cp %p /var/lib/postgresql/wal_archive/%f'
+      -c wal_level=replica
+      -c max_wal_senders=3
     ports:
-      - "127.0.0.1:5433:5432"
+      - "127.0.0.1:5433:5432"   # localhost-only — no external access
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db/migrations:/docker-entrypoint-initdb.d/migrations
       - ./db/seeds:/docker-entrypoint-initdb.d/seeds
       - ./db/init.sh:/docker-entrypoint-initdb.d/00_init.sh
+      # v3 hardening: strict pg_hba + SSL certs + WAL archive dir
+      - ./db/postgres-config/pg_hba.conf:/etc/postgres/pg_hba.conf:ro
+      - ./db/postgres-config/ssl/server.crt:/etc/postgres/ssl/server.crt:ro
+      - ./db/postgres-config/ssl/server.key:/etc/postgres/ssl/server.key:ro
+      - pgwal:/var/lib/postgresql/wal_archive
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d bma_health"]
       interval: 5s
@@ -79,3 +106,4 @@ services:
 
 volumes:
   pgdata:
+  pgwal:    # WAL archive (for PITR — point-in-time recovery)

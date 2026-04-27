@@ -26,7 +26,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from database import execute_query, execute_scalar, get_conn
-from config import DATABASE_URL
+from config import DATABASE_URL, DATABASE_URL_WRITER
 
 # --------------------------------------------------------------------------- #
 # Logging
@@ -471,7 +471,7 @@ def _update_history(
     """
     conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = psycopg2.connect(DATABASE_URL_WRITER)
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute(
@@ -515,7 +515,7 @@ def _update_progress(history_id: int, step_label: str, pct: int,
     pct = max(0, min(100, int(pct)))
     conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = psycopg2.connect(DATABASE_URL_WRITER)
         conn.autocommit = True
         with conn.cursor() as cur:
             # Only update non-None counters to avoid clobbering between files
@@ -598,7 +598,7 @@ def _run_import(upload_id: str, history_id: int):
     start = time.time()
     conn = None
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = psycopg2.connect(DATABASE_URL_WRITER)
         conn.autocommit = False
         cur = conn.cursor()
 
@@ -2534,7 +2534,7 @@ def _run_bundle_import(manifest: List[Dict], history_id: int):
     tmp_paths = [m["tmp_path"] for m in manifest]
 
     try:
-        conn = psycopg2.connect(DATABASE_URL)
+        conn = psycopg2.connect(DATABASE_URL_WRITER)
         conn.autocommit = False
         cur = conn.cursor()
         etl = _load_etl()
