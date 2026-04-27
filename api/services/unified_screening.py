@@ -4,13 +4,23 @@ Per fact/aggregation-base.md "Tier 1 Hero KPI" (revised 2026-04-27),
 all three sources use **registered home district** (เขตที่อยู่ตามทะเบียนบ้าน)
 as the primary aggregation field — NOT screening location.
 
-Per-source resolution chain:
+Per-source resolution chain (final spec 2026-04-27):
 
-| Source | Primary (homevisit) | Fallback                                     |
-|--------|---------------------|----------------------------------------------|
-| Portal | home → current → work (NULLIF 9999) | raw_patients.district_code   |
-| App1   | home_district                       | raw_patients.district_code   |
-| App2   | home → work (NULLIF 9999)           | raw_patients.district_code   |
+| Source | CSV variable                            | DB resolution                                              |
+|--------|-----------------------------------------|------------------------------------------------------------|
+| Portal | `COALESCE(HDISTRICT, DISTRICT)` ~97.5%  | `COALESCE(home_district, work_district)` NULLIF 9999       |
+| App1   | `hv.DISTRICT` 100%                      | `home_district` NULLIF 9999                                |
+| App2   | `DISTRICT` (BKK only) backfill WRKDISTRICT | `COALESCE(home_district, work_district)` NULLIF 9999    |
+
+Portal is the only source with a fallback chain — `HDISTRICT` is the
+schema-canonical home district but is sparsely populated (~2.4% of Portal
+patients have it in BKK), while `DISTRICT` is the operational field
+populated for ~80%. The COALESCE recovers ~81.5% of Portal patients.
+
+App1's `hv.DISTRICT` lands in `home_district` and is well-populated.
+App2 follows the same pattern but with WRKDISTRICT as the secondary.
+No `raw_patients.district_code` fallback — per user spec, the homevisit
+record is the only authoritative source for "registered home district".
 
 Why the raw_patients fallback (added 2026-04-27): ~93K visits had no usable
 home info anywhere in raw_homevisit. raw_patients.district_code (the
@@ -88,64 +98,59 @@ def build_unified_cte(
 
     if sources is None or 'portal' in sources:
         legs.append("""
-          -- Portal: hv.home → current → work → raw_patients.district_code
+          -- Portal: COALESCE(HDISTRICT, DISTRICT) per user spec 2026-04-27.
+          -- HDISTRICT (primary, ~2.4% in BKK) lives in DB.home_district.
+          -- DISTRICT (backfill, ~80% in BKK) lives in DB.work_district.
+          -- Combined gives ~81.5% of Portal patients with BKK home district —
+          -- total matches user's HDISTRICT pivot of 326,001 within 0.8%.
+          -- No current_district / no raw_patients fallback per spec.
           SELECT 'portal'::text AS source,
                  v.patient_id,
                  COALESCE(
-                   NULLIF(hv.home_district,    9999),
-                   NULLIF(hv.current_district, 9999),
-                   NULLIF(hv.work_district,    9999),
-                   CASE WHEN p.district_code BETWEEN '1001' AND '1050'
-                        THEN p.district_code::int END
+                   NULLIF(hv.home_district, 9999),  -- HDISTRICT (primary)
+                   NULLIF(hv.work_district, 9999)   -- DISTRICT (backfill)
                  ) AS dc_int,
                  v.visit_date::date AS day,
                  v.risk_dm, v.risk_hpt, v.risk_cvd, v.risk_bmi,
                  v.found_dyslipidemia, v.found_stroke
           FROM raw_vitalsigns v
           LEFT JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
-          LEFT JOIN raw_patients  p  ON p.id = v.patient_id
           WHERE v.data_source = 'portal'
             AND v.cancel_status IS DISTINCT FROM 1
         """)
 
     if sources is None or 'app1' in sources:
         legs.append("""
-          -- App1: hv.home_district → raw_patients.district_code
+          -- App1: hv.DISTRICT (home_district, ~100% per user spec 2026-04-27).
+          -- No fallback needed.
           SELECT 'app1'::text AS source,
                  v.patient_id,
-                 COALESCE(
-                   NULLIF(hv.home_district, 9999),
-                   CASE WHEN p.district_code BETWEEN '1001' AND '1050'
-                        THEN p.district_code::int END
-                 ) AS dc_int,
+                 NULLIF(hv.home_district, 9999) AS dc_int,
                  v.visit_date::date AS day,
                  v.risk_dm, v.risk_hpt, v.risk_cvd, v.risk_bmi,
                  v.found_dyslipidemia, v.found_stroke
           FROM raw_vitalsigns v
           LEFT JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
-          LEFT JOIN raw_patients  p  ON p.id = v.patient_id
           WHERE v.data_source = 'app1'
             AND v.cancel_status IS DISTINCT FROM 1
         """)
 
     if sources is None or 'app2' in sources:
         legs.append("""
-          -- App2: hv.home → work → raw_patients.district_code
-          --   (visit row from raw_homehealth; vitals optional)
+          -- App2: DISTRICT (home_district), backfill WRKDISTRICT (work_district)
+          -- if HOMEDISTRICT is 9999 — per spec 2026-04-27. Visit rows from
+          -- raw_homehealth (HD source); vitals optional.
           SELECT 'app2'::text AS source,
                  hh.patient_id,
                  COALESCE(
                    NULLIF(hv.home_district, 9999),
-                   NULLIF(hv.work_district, 9999),
-                   CASE WHEN p.district_code BETWEEN '1001' AND '1050'
-                        THEN p.district_code::int END
+                   NULLIF(hv.work_district, 9999)
                  ) AS dc_int,
                  hh.visit_date::date AS day,
                  v.risk_dm, v.risk_hpt, v.risk_cvd, v.risk_bmi,
                  v.found_dyslipidemia, v.found_stroke
           FROM raw_homehealth hh
           LEFT JOIN raw_homevisit hv ON hv.patient_id = hh.patient_id
-          LEFT JOIN raw_patients  p  ON p.id = hh.patient_id
           LEFT JOIN raw_vitalsigns v ON v.patient_id = hh.patient_id
             AND v.data_source = 'app2'
             AND v.cancel_status IS DISTINCT FROM 1
