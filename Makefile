@@ -418,6 +418,21 @@ uninstall-prune-cron: ## Remove the weekly Docker prune LaunchAgent
 	@rm -f $$HOME/Library/LaunchAgents/com.bma.docker-prune.plist
 	@echo "Uninstalled"
 
+.PHONY: install-mv-refresh-cron
+install-mv-refresh-cron: ## Install daily LaunchAgent that refreshes public.mv_* (macOS, 03:00)
+	@bash scripts/install-mv-refresh-cron.sh
+
+.PHONY: uninstall-mv-refresh-cron
+uninstall-mv-refresh-cron: ## Remove the daily MV refresh LaunchAgent
+	@launchctl unload $$HOME/Library/LaunchAgents/com.bma.mv-refresh.plist 2>/dev/null || true
+	@rm -f $$HOME/Library/LaunchAgents/com.bma.mv-refresh.plist
+	@echo "Uninstalled"
+
+.PHONY: refresh-mvs
+refresh-mvs: ## Manually refresh all public.mv_* (uses public.refresh_all_mvs())
+	@docker exec bma-health-db psql -U postgres -d bma_health -c \
+	  "SELECT view_name, status, duration_ms FROM public.refresh_all_mvs();"
+
 .PHONY: clean-venv
 clean-venv: ## Remove virtual environment
 	rm -rf $(VENV_DIR)

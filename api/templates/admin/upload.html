@@ -18,25 +18,43 @@
         <form method="POST" action="/admin/upload" enctype="multipart/form-data" id="uploadForm">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
+            <!-- Source Selector (NEW for v3 schema — required) -->
+            <div class="mb-5">
+                <label for="source_code" class="block text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">
+                    แหล่งข้อมูล (Data Source) <span class="text-red-500">*</span>
+                </label>
+                <select id="source_code" name="source_code" required
+                        class="w-full max-w-sm px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-bma-green focus:border-bma-green bg-white text-gray-900">
+                    <option value="">— เลือกแหล่งข้อมูล —</option>
+                    <option value="portal">Portal (BMA Portal)</option>
+                    <option value="app1">App1 (Mobile App 1)</option>
+                    <option value="app2">App2 (Mobile App 2 — combined CSV)</option>
+                </select>
+                <p class="text-[11px] text-gray-400 mt-1">
+                    Variable mapping จะอ่านจาก <code>private.variable_definition</code> ตาม source ที่เลือก
+                </p>
+            </div>
+
             <!-- File Type Selector -->
             <div class="mb-5">
                 <label for="file_type" class="block text-xs font-semibold uppercase tracking-wider text-gray-500 mb-2">ประเภทไฟล์ CSV</label>
                 <select id="file_type" name="file_type"
-                        class="w-full max-w-sm px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#00744B] focus:border-[#00744B] bg-white text-gray-900">
+                        class="w-full max-w-sm px-4 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-bma-green focus:border-bma-green bg-white text-gray-900">
                     <option value="auto">Auto-detect (ตรวจจับอัตโนมัติ)</option>
                     <option value="pt">pt - ข้อมูลผู้ป่วย</option>
-                    <option value="pthistory">pthistory - ประวัติผู้ป่วย</option>
-                    <option value="vitalsignslf">vitalsignslf - สัญญาณชีพ</option>
-                    <option value="homevisit">homevisit - การเยี่ยมบ้าน</option>
-                    <option value="homehealth">homehealth - สุขภาพที่บ้าน</option>
+                    <option value="pthistory">pthistory - ประวัติผู้ป่วย (Portal only)</option>
+                    <option value="vitalsignslf">vitalsignslf - สัญญาณชีพ + คัดกรอง</option>
+                    <option value="homevisit">homevisit - การเยี่ยมบ้าน + ที่อยู่</option>
+                    <option value="homehealth">homehealth - สุขภาพ + พฤติกรรม</option>
                     <option value="labhealth">labhealth - ผลแลป</option>
-                    <option value="labhealthext">labhealthext - ผลแลปเพิ่มเติม</option>
+                    <option value="labhealthext">labhealthext - ผลแลปเพิ่มเติม (Portal only)</option>
+                    <option value="app2">app2 - ไฟล์รวม App2</option>
                 </select>
             </div>
 
             <!-- Drag & Drop Zone -->
             <div id="dropZone"
-                 class="border-2 border-dashed border-gray-300 rounded-xl p-10 text-center cursor-pointer transition-colors hover:border-[#00744B] hover:bg-[#e6f5ef]">
+                 class="border-2 border-dashed border-gray-300 rounded-xl p-10 text-center cursor-pointer transition-colors hover:border-bma-green hover:bg-bma-green-light">
                 <svg class="w-12 h-12 mx-auto text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
                 </svg>
@@ -46,10 +64,10 @@
             </div>
 
             <!-- File Info (hidden by default) -->
-            <div id="fileInfo" class="hidden mt-4 p-4 bg-[#e6f5ef] rounded-lg border border-green-200">
+            <div id="fileInfo" class="hidden mt-4 p-4 bg-bma-green-light rounded-lg border border-green-200">
                 <div class="flex items-center justify-between">
                     <div class="flex items-center gap-3">
-                        <svg class="w-8 h-8 text-[#00744B]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg class="w-8 h-8 text-bma-green" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                         </svg>
                         <div>
@@ -68,7 +86,7 @@
             <!-- Submit Button -->
             <div class="mt-5">
                 <button type="submit" id="uploadBtn" disabled
-                        class="inline-flex items-center gap-2 px-4 py-2.5 bg-[#00744B] text-white rounded-lg font-medium hover:bg-[#005C3B] transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+                        class="inline-flex items-center gap-2 px-4 py-2.5 bg-bma-green text-white rounded-lg font-medium hover:bg-bma-green-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
                     </svg>
@@ -82,7 +100,7 @@
     <!-- Preview Section -->
     <div class="bg-white rounded-xl shadow-sm border border-gray-200">
         <!-- File Info Banner -->
-        <div class="px-6 py-4 border-b border-gray-200 bg-[#e6f5ef] rounded-t-xl">
+        <div class="px-6 py-4 border-b border-gray-200 bg-bma-green-light rounded-t-xl">
             <div class="flex flex-wrap items-center gap-x-6 gap-y-2">
                 <div>
                     <span class="text-xs font-semibold uppercase tracking-wider text-gray-500">ไฟล์</span>
@@ -94,11 +112,11 @@
                 </div>
                 <div>
                     <span class="text-xs font-semibold uppercase tracking-wider text-gray-500">แถว</span>
-                    <p class="text-sm font-bold text-[#00744B]">{{ "{:,}".format(preview.total_rows) }}</p>
+                    <p class="text-sm font-bold text-bma-green">{{ "{:,}".format(preview.total_rows) }}</p>
                 </div>
                 <div>
                     <span class="text-xs font-semibold uppercase tracking-wider text-gray-500">คอลัมน์</span>
-                    <p class="text-sm font-bold text-[#00744B]">{{ preview.columns|length }}</p>
+                    <p class="text-sm font-bold text-bma-green">{{ preview.columns|length }}</p>
                 </div>
             </div>
         </div>
@@ -134,7 +152,7 @@
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <input type="hidden" name="upload_id" value="{{ preview.upload_id }}">
                     <button type="submit"
-                            class="inline-flex items-center gap-2 px-4 py-2.5 bg-[#00744B] text-white rounded-lg font-medium hover:bg-[#005C3B] transition-colors">
+                            class="inline-flex items-center gap-2 px-4 py-2.5 bg-bma-green text-white rounded-lg font-medium hover:bg-bma-green-hover transition-colors">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
                         </svg>
@@ -167,17 +185,17 @@
 
         dropZone.addEventListener('dragover', (e) => {
             e.preventDefault();
-            dropZone.classList.add('border-[#00744B]', 'bg-[#e6f5ef]');
+            dropZone.classList.add('border-bma-green', 'bg-bma-green-light');
         });
 
         dropZone.addEventListener('dragleave', (e) => {
             e.preventDefault();
-            dropZone.classList.remove('border-[#00744B]', 'bg-[#e6f5ef]');
+            dropZone.classList.remove('border-bma-green', 'bg-bma-green-light');
         });
 
         dropZone.addEventListener('drop', (e) => {
             e.preventDefault();
-            dropZone.classList.remove('border-[#00744B]', 'bg-[#e6f5ef]');
+            dropZone.classList.remove('border-bma-green', 'bg-bma-green-light');
             const files = e.dataTransfer.files;
             if (files.length > 0 && files[0].name.endsWith('.csv')) {
                 fileInput.files = files;
