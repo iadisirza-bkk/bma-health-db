@@ -68,7 +68,16 @@ def _parse_date(value) -> Optional[date]:
     s = str(value).strip()
     if not s or s.lower() in ('nan', 'none'):
         return None
-    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%Y-%m-%d %H:%M:%S', '%d-%b-%Y'):
+    for fmt in (
+        '%Y-%m-%d',
+        '%Y-%m-%d %H:%M:%S',
+        '%d/%m/%Y',
+        '%d/%m/%Y %H:%M:%S',     # 19/01/2024 13:43:47 — Portal/App1 CSV format
+        '%d/%m/%Y %H:%M',
+        '%d-%b-%Y',
+        '%Y/%m/%d',
+        '%Y/%m/%d %H:%M:%S',
+    ):
         try:
             return datetime.strptime(s, fmt).date()
         except ValueError:
@@ -215,6 +224,9 @@ def import_visits_and_measurements(cur, df: pd.DataFrame, source_code: str,
         logger.warning(f"No variables defined for {source_code}; skipping")
         return 0
 
+    # Cache for facility-code FK validation (avoid N queries)
+    _facility_cache: Dict[str, bool] = {}
+
     # Identify PID + date columns
     pid_col = 'PID' if 'PID' in df.columns else 'IDCARD'
     if pid_col not in df.columns:
@@ -224,18 +236,61 @@ def import_visits_and_measurements(cur, df: pd.DataFrame, source_code: str,
         logger.warning(f"No VSTDATE in {source_code} {file_type}; skipping visit creation")
         return 0
 
+    # PHASE 1: Auto-create missing patients
+    # Some children files reference PIDs that aren't in pt.csv (data quality
+    # issue or test slices). Insert minimal placeholder patient rows so we
+    # don't lose visits. They get sex/birth_year=NULL until backfilled.
+    missing_hashes: list[tuple[str, str]] = []  # [(idcard_hash, source_pid)]
+    seen = set()
+    for _, r in df.iterrows():
+        raw = r.get(pid_col)
+        if _is_blank(raw):
+            continue
+        h = _hash_idcard(raw)
+        if h and h not in patient_map and h not in seen:
+            missing_hashes.append((h, str(raw).strip()))
+            seen.add(h)
+    if missing_hashes:
+        execute_values(cur, """
+            INSERT INTO private.patient (idcard_hash, primary_source)
+            VALUES %s
+            ON CONFLICT (idcard_hash) DO UPDATE SET last_seen_at = NOW()
+        """, [(h, source_code) for h, _ in missing_hashes], page_size=1000)
+        cur.execute("SELECT idcard_hash, id FROM private.patient WHERE idcard_hash = ANY(%s)",
+                    ([h for h, _ in missing_hashes],))
+        for h, pid in cur.fetchall():
+            patient_map[h] = pid
+        # Add aliases for new patients
+        execute_values(cur, """
+            INSERT INTO private.patient_alias (patient_id, source_code, source_pid)
+            VALUES %s
+            ON CONFLICT (patient_id, source_code) DO NOTHING
+        """, [(patient_map[h], source_code, pid_str)
+              for h, pid_str in missing_hashes if h in patient_map],
+            page_size=1000)
+        logger.info(f"  auto-created {len(missing_hashes)} placeholder patients for {source_code}/{file_type}")
+
     # 2a. Build visit_event rows
     visit_rows = []
     visit_meta_lookup = []  # (pid_hash, visit_date, df_index)
+    skipped_no_pid = 0
+    skipped_no_date = 0
     for idx, r in df.iterrows():
         h = _hash_idcard(r.get(pid_col))
         if not h or h not in patient_map:
+            skipped_no_pid += 1
             continue
         v_date = _parse_date(r.get('VSTDATE'))
         if not v_date:
+            skipped_no_date += 1
             continue
         cancel = _parse_int(r.get('CANCELST')) or 0
         facility = str(r.get('HPTCODE', '')).strip() or None
+        if facility and facility not in _facility_cache:
+            cur.execute("SELECT 1 FROM private.facility WHERE code = %s LIMIT 1", (facility,))
+            _facility_cache[facility] = cur.fetchone() is not None
+        if facility and not _facility_cache.get(facility):
+            facility = None  # unknown facility code → NULL (FK can be null)
         source_visit_id = str(r.get('VST_ID', '')).strip() or str(r.get(pid_col, '')).strip()
 
         visit_rows.append((
@@ -247,6 +302,16 @@ def import_visits_and_measurements(cur, df: pd.DataFrame, source_code: str,
 
     if not visit_rows:
         return 0
+
+    # Dedupe by (patient_id, visit_date) — same patient may appear multiple
+    # times on same day in CSV (multiple measurements at one visit window).
+    # Keep the LAST occurrence (overwrites earlier with same key).
+    deduped = {}
+    for row, lookup in zip(visit_rows, visit_meta_lookup):
+        key = (row[0], row[2])  # (patient_id, visit_date)
+        deduped[key] = (row, lookup)
+    visit_rows = [v[0] for v in deduped.values()]
+    visit_meta_lookup = [v[1] for v in deduped.values()]
 
     # Insert visits + capture IDs
     execute_values(cur, """
@@ -347,6 +412,13 @@ def import_visits_and_measurements(cur, df: pd.DataFrame, source_code: str,
 
     # Bulk insert measurements
     if measurement_rows:
+        # Dedupe by (visit_id, variable_id) — same visit can have multiple
+        # rows mapping to same variable (CSV duplicate / multi-day same date).
+        deduped = {}
+        for row in measurement_rows:
+            deduped[(row[0], row[1])] = row
+        measurement_rows = list(deduped.values())
+
         execute_values(cur, """
             INSERT INTO private.visit_measurement
               (visit_id, variable_id,
@@ -382,7 +454,8 @@ def import_visits_and_measurements(cur, df: pd.DataFrame, source_code: str,
 
     logger.info(f"  visits: {len(visit_rows)} created, "
                 f"measurements: {len(measurement_rows)}, "
-                f"addresses: {len(address_rows)}")
+                f"addresses: {len(address_rows)}, "
+                f"skipped: pid={skipped_no_pid} date={skipped_no_date}")
     return len(visit_rows)
 
 
@@ -396,6 +469,7 @@ def import_lab(cur, df: pd.DataFrame, source_code: str,
     """Upsert lab_event + lab_measurement (parallel to visit_measurement)."""
     var_map = _load_variable_map(cur, source_code)
     pid_col = 'PID' if 'PID' in df.columns else 'IDCARD'
+    _lab_facility_cache: Dict[str, bool] = {}
 
     lab_rows = []
     df_idx = []
@@ -407,6 +481,11 @@ def import_lab(cur, df: pd.DataFrame, source_code: str,
         if not lab_date:
             continue
         facility = str(r.get('HPTCODE', '')).strip() or None
+        if facility and facility not in _lab_facility_cache:
+            cur.execute("SELECT 1 FROM private.facility WHERE code = %s LIMIT 1", (facility,))
+            _lab_facility_cache[facility] = cur.fetchone() is not None
+        if facility and not _lab_facility_cache.get(facility):
+            facility = None
         cancel = _parse_int(r.get('CANCELST')) or 0
         privilege = str(r.get('PRVLG', '')).strip() or None
         source_lab_id = str(r.get('LAB_ID', '')).strip() or None
@@ -488,6 +567,13 @@ def import_lab(cur, df: pd.DataFrame, source_code: str,
             ))
 
     if measurement_rows:
+        # Dedupe by (lab_id, variable_id) — same lab can have multiple
+        # source rows mapping to same variable (e.g., duplicate columns).
+        deduped = {}
+        for row in measurement_rows:
+            deduped[(row[0], row[1])] = row  # last wins
+        measurement_rows = list(deduped.values())
+
         execute_values(cur, """
             INSERT INTO private.lab_measurement
               (lab_id, variable_id,
