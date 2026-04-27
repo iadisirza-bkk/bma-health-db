@@ -25,12 +25,19 @@ def list_zones(sources: Optional[str] = Query(None, description="Comma-separated
     subset (e.g. ?sources=portal).
     """
     cte = build_unified_cte(parse_sources(sources))
+    # total_visits sourced from `unified_visits` (>30-day dedup applied).
+    # See services/unified_screening.py. Subquery scans the small per-zone
+    # district set — fast even at 8 zones.
     rows = execute_query(cte + """
         SELECT
           z.zone_code, z.name_th, z.name_en,
           COUNT(DISTINCT d.dcode) AS district_count,
           COUNT(DISTINCT u.patient_id) AS total_screened,
-          COUNT(DISTINCT (u.patient_id, u.day)) AS total_visits,
+          COALESCE((
+            SELECT COUNT(*) FROM unified_visits uv
+            JOIN ref_districts d2 ON d2.dcode = uv.dc
+            WHERE d2.zone_code = z.zone_code
+          ), 0) AS total_visits,
           COUNT(DISTINCT u.patient_id) FILTER (WHERE u.risk_dm)            AS diabetes,
           COUNT(DISTINCT u.patient_id) FILTER (WHERE u.risk_hpt)           AS hypertension,
           COUNT(DISTINCT u.patient_id) FILTER (WHERE u.risk_cvd)           AS cardiovascular,

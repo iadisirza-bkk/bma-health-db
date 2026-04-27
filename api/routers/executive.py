@@ -1,4 +1,9 @@
-"""Executive router -- extracted from main.py."""
+"""Executive router -- extracted from main.py.
+
+All numeric aggregates here delegate to the unified CTE
+(`services.unified_screening`) so the executive dashboard, Header banner
+and `/summary/overview` all show the same number for "ผู้คัดกรองทั้งหมด".
+"""
 from __future__ import annotations
 
 from datetime import datetime
@@ -8,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from database import execute_query, execute_scalar
 from security import K_ANONYMITY_THRESHOLD
+from services.unified_screening import build_unified_cte
 
 router = APIRouter(prefix="/api/v2/executive", tags=["Executive"])
 
@@ -20,20 +26,30 @@ TARGET_SCREENED = 1_000_000
 
 @router.get("/headline-kpi")
 def headline_kpi():
-    """3 headline KPIs for the Governor's press conference."""
-    total = execute_scalar("SELECT COALESCE(SUM(total_screened), 0) FROM summary_district_disease") or 0
+    """3 headline KPIs for the Governor's press conference.
+
+    Uses the unified CTE (same source as `/summary/overview`) so the Header
+    banner and OverviewBoard always agree. `total_screened` and disease
+    counts are project-wide (BKK + non-BKK + unknown).
+    """
+    cte = build_unified_cte(include_visits=False)
+
+    # Headline numbers — same calc as /summary/overview
+    rows = execute_query(cte + """
+        SELECT
+          (SELECT COUNT(DISTINCT patient_id) FROM unified) AS total,
+          COUNT(DISTINCT patient_id) FILTER (WHERE risk_dm)            AS diabetes,
+          COUNT(DISTINCT patient_id) FILTER (WHERE risk_hpt)           AS hypertension,
+          COUNT(DISTINCT patient_id) FILTER (WHERE risk_cvd)           AS cardiovascular,
+          COUNT(DISTINCT patient_id) FILTER (WHERE risk_bmi)           AS obesity,
+          COUNT(DISTINCT patient_id) FILTER (WHERE found_dyslipidemia) AS dyslipidemia,
+          COUNT(DISTINCT patient_id) FILTER (WHERE found_stroke)       AS stroke
+        FROM unified
+    """)
+    d = rows[0] if rows else {}
+    total = int(d.get("total") or 0)
     target = TARGET_SCREENED
     coverage = round(100.0 * total / target, 2) if target > 0 else 0
-
-    # Top disease by prevalence
-    disease_rows = execute_query("""
-        SELECT
-            SUM(risk_dm_count) as diabetes, SUM(risk_hpt_count) as hypertension,
-            SUM(risk_cvd_count) as cardiovascular, SUM(risk_bmi_count) as obesity,
-            SUM(found_dyslipidemia_count) as dyslipidemia, SUM(found_stroke_count) as stroke,
-            SUM(total_screened) as total
-        FROM summary_district_disease
-    """)
 
     disease_names_th = {
         "diabetes": "เบาหวาน", "hypertension": "ความดันโลหิตสูง",
@@ -41,12 +57,11 @@ def headline_kpi():
         "dyslipidemia": "ไขมันในเลือดผิดปกติ", "stroke": "หลอดเลือดสมอง",
     }
 
-    d = disease_rows[0] if disease_rows else {}
-    ts = d.get("total") or 1
+    ts = total or 1
     top_disease = None
     top_pct = 0
     for key in disease_names_th:
-        cnt = d.get(key) or 0
+        cnt = int(d.get(key) or 0)
         pct = round(100.0 * cnt / ts, 1) if ts else 0
         if pct > top_pct:
             top_pct = pct

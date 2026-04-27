@@ -42,6 +42,7 @@ def list_districts(
 ):
     """List districts, optionally filtered by zone_code and/or data sources."""
     # Uses UNIFIED_CTE — per-source district mapping per Tier 1 KPI spec.
+    # total_visits sourced from `unified_visits` (>30-day dedup applied).
     cte = build_unified_cte(parse_sources(sources))
     sql = cte + """
         SELECT
@@ -49,7 +50,8 @@ def list_districts(
           d.name_th                                                            AS district_name,
           d.zone_code,
           COUNT(DISTINCT u.patient_id)                                         AS total_screened,
-          COUNT(DISTINCT (u.patient_id, u.day))                                AS total_visits,
+          COALESCE((SELECT COUNT(*) FROM unified_visits uv WHERE uv.dc = d.dcode),
+                   0)                                                          AS total_visits,
           COUNT(DISTINCT u.patient_id) FILTER (WHERE u.risk_dm)                AS risk_dm_count,
           ROUND(100.0 * COUNT(DISTINCT u.patient_id) FILTER (WHERE u.risk_dm)
                       / NULLIF(COUNT(DISTINCT u.patient_id), 0), 2)            AS pct_risk_dm,

@@ -182,12 +182,12 @@ env: ## Copy .env.example to .env (if not exists)
 # ---------------------------------------------------------------------------
 
 .PHONY: migrate
-migrate: ## Run all SQL migrations (001-010) via Docker
+migrate: ## Run all SQL migrations (001-015) via Docker
 	@for f in db/migrations/*.sql; do \
 		echo "Applying $$f ..."; \
 		docker exec -i bma-health-db psql -U postgres -d bma_health < "$$f"; \
 	done
-	@echo "Migrations complete (10 files)."
+	@echo "Migrations complete (11 files)."
 
 .PHONY: seed
 seed: ## Run seed data via Docker
@@ -198,24 +198,23 @@ seed: ## Run seed data via Docker
 	@echo "Seeding complete."
 
 .PHONY: refresh-views
-refresh-views: ## Refresh all materialized views
-	@echo "Refreshing materialized views..."
+refresh-views: ## Refresh all materialized views (auto-discovered from pg_matviews)
+	@echo "Refreshing all materialized views (CONCURRENTLY)..."
 	@docker exec bma-health-db psql -U postgres -d bma_health -c "\
-		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_district_disease; \
-		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_district_risk_factors; \
-		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_district_lab; \
-		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_district_mental; \
-		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_district_demographics; \
-		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_bmi_waist; \
-		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_disease_age_sex; \
-		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_comorbidity; \
-		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_lab_disease_cross; \
-		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_facility; \
-		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_screening_tests; \
-		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_chronic_history; \
-		REFRESH MATERIALIZED VIEW CONCURRENTLY summary_family_history; \
+		DO \$$\$$ DECLARE v RECORD; BEGIN \
+			FOR v IN SELECT matviewname FROM pg_matviews WHERE schemaname='public' LOOP \
+				EXECUTE format('REFRESH MATERIALIZED VIEW CONCURRENTLY %I', v.matviewname); \
+				RAISE NOTICE 'Refreshed %', v.matviewname; \
+			END LOOP; \
+		END \$$\$$; \
 	"
-	@echo "All 13 views refreshed."
+	@echo "All views refreshed."
+
+# To schedule view refresh in production, install pg_cron and run:
+#   SELECT cron.schedule('refresh-views', '15 * * * *',
+#       'DO $$ DECLARE v RECORD; BEGIN FOR v IN SELECT matviewname FROM pg_matviews WHERE schemaname=''public'' LOOP EXECUTE format(''REFRESH MATERIALIZED VIEW CONCURRENTLY %I'', v.matviewname); END LOOP; END $$;'
+#   );
+# This refreshes every hour at :15. For lower-frequency data, use '0 3 * * *' (daily 3am).
 
 .PHONY: db-stats
 db-stats: ## Show row counts for all tables and views
@@ -399,6 +398,25 @@ clean: ## Stop services and remove Docker volumes (DESTRUCTIVE)
 	@read -p "Continue? [y/N] " confirm && [ "$$confirm" = "y" ] || exit 1
 	docker compose down -v
 	@echo "Cleaned up."
+
+.PHONY: prune
+prune: ## Reclaim Docker disk space (images/build cache/stopped containers)
+	@echo "Pruning Docker disk space..."
+	@docker system prune -f
+	@docker builder prune -f
+	@echo ""
+	@echo "Disk usage after prune:"
+	@docker exec bma-health-db df -h / 2>/dev/null | head -3 || echo "  (postgres container not running)"
+
+.PHONY: install-prune-cron
+install-prune-cron: ## Install weekly LaunchAgent that runs `docker system prune` (macOS, Sun 03:00)
+	@bash scripts/install-prune-cron.sh
+
+.PHONY: uninstall-prune-cron
+uninstall-prune-cron: ## Remove the weekly Docker prune LaunchAgent
+	@launchctl unload $$HOME/Library/LaunchAgents/com.bma.docker-prune.plist 2>/dev/null || true
+	@rm -f $$HOME/Library/LaunchAgents/com.bma.docker-prune.plist
+	@echo "Uninstalled"
 
 .PHONY: clean-venv
 clean-venv: ## Remove virtual environment

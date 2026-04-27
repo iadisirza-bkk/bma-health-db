@@ -34,15 +34,37 @@ def overview(sources: Optional[str] = Query(None, description="Comma-separated s
     cte = build_unified_cte(parsed_sources)
 
     # Per-source aggregation via UNIFIED_CTE (built dynamically by `cte`).
+    # `unified` = all rows (for person + risk-flag counts).
+    # `unified_visits` = distinct (source, patient_id, day) with >30-day
+    # dedup applied (for visit counts) — see services/unified_screening.py.
 
+    # Totals span ALL buckets (bkk + non_bkk + unknown) so the headline
+    # number reconciles with the project total. Per-bucket counts are
+    # returned in `breakdown` so the dashboard can show the split as a
+    # footnote ("กทม X | ตจว Y | ไม่ระบุ Z").
     totals_row = execute_query(cte + """
         SELECT
-          COUNT(DISTINCT patient_id)            AS total_screened,
-          COUNT(DISTINCT (patient_id, day))     AS total_visits
-        FROM unified
+          (SELECT COUNT(DISTINCT patient_id) FROM unified)        AS total_screened,
+          (SELECT COUNT(*)                   FROM unified_visits) AS total_visits,
+          -- BKK bucket
+          (SELECT COUNT(DISTINCT patient_id) FROM unified        WHERE bucket = 'bkk')      AS bkk_screened,
+          (SELECT COUNT(*)                   FROM unified_visits WHERE bucket = 'bkk')      AS bkk_visits,
+          -- Non-BKK bucket (other provinces; detail in /non-bangkok-overview)
+          (SELECT COUNT(DISTINCT patient_id) FROM unified        WHERE bucket = 'non_bkk')  AS non_bkk_screened,
+          (SELECT COUNT(*)                   FROM unified_visits WHERE bucket = 'non_bkk')  AS non_bkk_visits,
+          -- Unknown bucket (no district info anywhere)
+          (SELECT COUNT(DISTINCT patient_id) FROM unified        WHERE bucket = 'unknown')  AS unknown_screened,
+          (SELECT COUNT(*)                   FROM unified_visits WHERE bucket = 'unknown')  AS unknown_visits
     """) or [{}]
-    total = int(totals_row[0].get("total_screened") or 0)
-    total_visits = int(totals_row[0].get("total_visits") or 0)
+    r0 = totals_row[0]
+    total = int(r0.get("total_screened") or 0)
+    total_visits = int(r0.get("total_visits") or 0)
+    bkk_screened = int(r0.get("bkk_screened") or 0)
+    bkk_visits = int(r0.get("bkk_visits") or 0)
+    non_bkk_screened = int(r0.get("non_bkk_screened") or 0)
+    non_bkk_visits = int(r0.get("non_bkk_visits") or 0)
+    unknown_screened = int(r0.get("unknown_screened") or 0)
+    unknown_visits = int(r0.get("unknown_visits") or 0)
 
     zone_count = execute_scalar("SELECT COUNT(*) FROM ref_health_zones") or 0
     district_count = execute_scalar("SELECT COUNT(*) FROM ref_districts") or 0
@@ -51,10 +73,16 @@ def overview(sources: Optional[str] = Query(None, description="Comma-separated s
         "SELECT MAX(refreshed_at) FROM summary_district_disease"
     )
 
+    # by_zone = BKK-only; non-BKK and unknown are auto-excluded because
+    # `u.dc = d.dcode` only matches BKK district codes 1001..1050.
     by_zone = execute_query(cte + """
         SELECT z.zone_code, z.name_th,
                COALESCE(COUNT(DISTINCT u.patient_id), 0) AS total_screened,
-               COALESCE(COUNT(DISTINCT (u.patient_id, u.day)), 0) AS total_visits
+               COALESCE((
+                 SELECT COUNT(*) FROM unified_visits uv
+                 JOIN ref_districts d2 ON d2.dcode = uv.dc
+                 WHERE d2.zone_code = z.zone_code
+               ), 0) AS total_visits
         FROM ref_health_zones z
         LEFT JOIN ref_districts d ON d.zone_code = z.zone_code
         LEFT JOIN unified u ON u.dc = d.dcode
@@ -62,10 +90,13 @@ def overview(sources: Optional[str] = Query(None, description="Comma-separated s
         ORDER BY z.zone_code
     """)
 
+    # by_disease aggregates over ALL records so prevalence pct matches the
+    # ALL-buckets headline denominator. Frontend already has a separate
+    # /non-bangkok-overview if a BKK-only view is needed.
     disease_rows = execute_query(cte + """
         SELECT
-          COUNT(DISTINCT patient_id)        AS total_screened,
-          COUNT(DISTINCT (patient_id, day)) AS total_visits,
+          (SELECT COUNT(DISTINCT patient_id) FROM unified)        AS total_screened,
+          (SELECT COUNT(*)                   FROM unified_visits) AS total_visits,
           COUNT(DISTINCT patient_id) FILTER (WHERE risk_dm)            AS diabetes,
           COUNT(DISTINCT patient_id) FILTER (WHERE risk_hpt)           AS hypertension,
           COUNT(DISTINCT patient_id) FILTER (WHERE risk_cvd)           AS cardiovascular,
@@ -86,14 +117,23 @@ def overview(sources: Optional[str] = Query(None, description="Comma-separated s
         })
 
     result = {
+        # Headline = ALL buckets (project total). Frontend can show as
+        # "X คน · กทม Y · ตจว Z · ไม่ระบุ W" using the breakdown below.
         "total_screened": total,
         "total_visits": total_visits,
         "target": TARGET_SCREENED,
         "zones_count": zone_count,
         "districts_count": district_count,
         "last_updated": str(last_updated) if last_updated else None,
-        "by_zone": by_zone,
+        "by_zone": by_zone,    # 8 BKK zones only — sums to bkk bucket
         "by_disease": by_disease,
+        # Per-bucket split for the dashboard footnote. The three buckets
+        # are mutually exclusive and exhaustive — total = sum of all three.
+        "breakdown": {
+            "bkk":         {"total_screened": bkk_screened,     "total_visits": bkk_visits},
+            "non_bangkok": {"total_screened": non_bkk_screened, "total_visits": non_bkk_visits},
+            "unknown":     {"total_screened": unknown_screened, "total_visits": unknown_visits},
+        },
     }
     cache_set(cache_key, result, TTL_T2_AGGREGATE)
     return result
@@ -401,17 +441,47 @@ def demographics_summary(
 
 @router.get("/non-bangkok-overview")
 def non_bangkok_overview():
-    """Aggregated health stats for patients whose home province is outside Bangkok.
+    """Aggregated health stats for patients whose home is outside Bangkok.
 
-    The patient was screened at a BMA facility (district_code in 1001–1050) but
-    self-reported a home province other than Bangkok (home_province <> 10 in
-    raw_homevisit). This surfaces "outsiders" who use Bangkok health services.
+    Headline numbers (total_screened, by_disease) come from the same unified
+    CTE as /summary/overview — specifically `bucket = 'non_bkk'` — so the
+    "ตจว" footnote on the dashboard and the "คนต่างจังหวัด" virtual zone
+    in StatisticsBoard always show the same number.
+
+    Per-province drill-down (by_home_province) and lab/mental aggregates
+    use the legacy `home_province <> 10` query because those are the only
+    rows where the upstream province code is filled in. Sum of
+    by_home_province may therefore be < total_screened when records have
+    a non-BKK district code but missing home_province — that's a known
+    data-quality gap.
     """
 
     # Cache check (TTL 15 min)
     hit = cache_get("summary:non_bangkok_overview")
     if hit is not None:
         return hit
+
+    # ── Headline counts via unified CTE — same source as /summary/overview ──
+    from services.unified_screening import build_unified_cte
+    cte = build_unified_cte(include_visits=True)
+    headline_row = execute_query(cte + """
+        SELECT
+          (SELECT COUNT(DISTINCT patient_id) FROM unified
+             WHERE bucket = 'non_bkk')                              AS total_screened,
+          (SELECT COUNT(*) FROM unified_visits
+             WHERE bucket = 'non_bkk')                              AS total_visits,
+          COUNT(DISTINCT patient_id) FILTER (WHERE risk_dm)            AS risk_dm_count,
+          COUNT(DISTINCT patient_id) FILTER (WHERE risk_hpt)           AS risk_hpt_count,
+          COUNT(DISTINCT patient_id) FILTER (WHERE risk_cvd)           AS risk_cvd_count,
+          COUNT(DISTINCT patient_id) FILTER (WHERE risk_bmi)           AS risk_bmi_count,
+          COUNT(DISTINCT patient_id) FILTER (WHERE found_dyslipidemia) AS found_dyslipidemia_count,
+          COUNT(DISTINCT patient_id) FILTER (WHERE found_stroke)       AS found_stroke_count
+        FROM unified
+        WHERE bucket = 'non_bkk'
+    """) or [{}]
+    h = headline_row[0]
+    headline_total = int(h.get("total_screened") or 0)
+    headline_visits = int(h.get("total_visits") or 0)
 
     # Step 1: Find k-anonymity-safe provinces (n >= threshold). All overall
     # aggregates below restrict to these provinces so every number on every
@@ -429,10 +499,11 @@ def non_bangkok_overview():
     """, (K_ANONYMITY_THRESHOLD,)) or []
     safe_provinces = [r["pc"] for r in safe_provinces_rows]
 
-    # Short-circuit: if no province meets k-anon, whole payload is suppressed
-    if not safe_provinces:
+    # If both unified and safe_provinces are empty, suppress whole payload
+    if headline_total == 0 and not safe_provinces:
         result = {
             "total_screened": 0,
+            "total_visits": 0,
             "suppressed": True,
             "reason": f"k-anonymity: no province with n >= {K_ANONYMITY_THRESHOLD}",
             "by_disease": [],
@@ -446,21 +517,13 @@ def non_bangkok_overview():
         cache_set("summary:non_bangkok_overview", result, TTL_T2_AGGREGATE)
         return result
 
-    # Core aggregation: screenings + physical vitals for non-Bangkok residents
-    # (restricted to k-anonymity-safe provinces)
+    # ── Province-based detail query (lab / vitals / mental) ──
+    # Uses the legacy `home_province <> 10` filter because those columns
+    # only exist on the raw join. Sum may differ from headline_total —
+    # that gap is the data-quality issue documented above.
     rows = execute_query("""
         SELECT
           COUNT(DISTINCT v.patient_id)                                     AS total_screened,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_dm)            AS risk_dm_count,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_hpt)           AS risk_hpt_count,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_cvd)           AS risk_cvd_count,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_bmi)           AS risk_bmi_count,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_dm)           AS found_dm_count,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_hpt)          AS found_hpt_count,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_cvd)          AS found_cvd_count,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_obesity)      AS found_obesity_count,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_stroke)       AS found_stroke_count,
-          COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_dyslipidemia) AS found_dyslipidemia_count,
           COUNT(DISTINCT v.patient_id) FILTER (WHERE v.smoking = 1)        AS smoking_count,
           COUNT(DISTINCT v.patient_id) FILTER (WHERE v.smoking IS NOT NULL) AS smoking_answered,
           AVG(v.sbp)        AS avg_sbp,
@@ -473,10 +536,23 @@ def non_bangkok_overview():
         JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
         WHERE v.cancel_status IS DISTINCT FROM 1
           AND hv.home_province = ANY(%s)
-    """, (safe_provinces,))
+    """, (safe_provinces,)) if safe_provinces else [{}]
 
     row = rows[0] if rows else {}
-    total = int(row.get("total_screened") or 0)
+    # Headline replaced with unified — but keep `row` for province-based stats below.
+    # Local helper: merge headline counts into `row` so disease_map (which reads
+    # from `row`) picks up unified-derived numbers, while smoking/lab/mental
+    # detail stays from the province-based row.
+    row = {**row,
+           "total_screened":              headline_total,
+           "risk_dm_count":               int(h.get("risk_dm_count") or 0),
+           "risk_hpt_count":              int(h.get("risk_hpt_count") or 0),
+           "risk_cvd_count":              int(h.get("risk_cvd_count") or 0),
+           "risk_bmi_count":              int(h.get("risk_bmi_count") or 0),
+           "found_dyslipidemia_count":    int(h.get("found_dyslipidemia_count") or 0),
+           "found_stroke_count":          int(h.get("found_stroke_count") or 0),
+          }
+    total = headline_total
 
     # k-anonymity guard: don't expose anything if too few patients
     if total < K_ANONYMITY_THRESHOLD:
@@ -637,6 +713,7 @@ def non_bangkok_overview():
 
     result = {
         "total_screened": total,
+        "total_visits": headline_visits,  # ตัวเลขครั้ง — same source as /overview.breakdown.non_bangkok
         "smoking_rate": smoking_rate,
         "no_exercise_rate": no_exercise_rate,
         "last_updated": str(last_visit) if last_visit else None,
