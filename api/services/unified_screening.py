@@ -1,16 +1,19 @@
 """Unified screening CTE — single source of truth for the public dashboard.
 
-Per fact/aggregation-base.md "Tier 1 Hero KPI" spec, each data source uses
-its own primary district field:
+Per fact/aggregation-base.md "Tier 1 Hero KPI" (revised 2026-04-27),
+all three sources use **registered home district** (เขตที่อยู่ตามทะเบียนบ้าน)
+as the primary aggregation field — NOT screening location:
 
-| Source  | District field            | Visits source         |
-|---------|---------------------------|-----------------------|
-| Portal  | vital.DISTRICTBKK         | vital.PID + VSTDATE   |
+| Source  | Home district field      | Visits source         |
+|---------|--------------------------|-----------------------|
+| Portal  | hv.HDISTRICT              | vital.PID + VSTDATE   |
 | App1    | hv.DISTRICT (home)         | vital.PID + VSTDATE   |
-| App2    | hv.DISTRICT (home, skip null) | HD = raw_homehealth count |
+| App2    | DISTRICT                  | HD = raw_homehealth   |
 
-This CTE UNIONs the three streams so endpoints can simply
-`SELECT ... FROM unified` and the per-source dispatch is invisible.
+In our DB schema all three map to the same column: `raw_homevisit.home_district`.
+A record is included only if `home_district BETWEEN 1001 AND 1050` (BKK only,
+non-BKK handled by /non-bangkok-overview). Records with NULL home_district are
+skipped — see fact/aggregation-base.md for the data-quality caveat.
 
 Columns:
 - patient_id           : FK to raw_patients.id
@@ -41,22 +44,23 @@ def build_unified_cte(sources: list[str] | None = None) -> str:
 
     if sources is None or 'portal' in sources:
         legs.append("""
-          -- Portal: vitalsigns + vital.district_code
+          -- Portal: vital.PID + VSTDATE for visits, home_district for location
           SELECT 'portal'::text AS source,
                  v.patient_id,
-                 v.district_code AS dc,
+                 hv.home_district::text AS dc,
                  v.visit_date::date AS day,
                  v.risk_dm, v.risk_hpt, v.risk_cvd, v.risk_bmi,
                  v.found_dyslipidemia, v.found_stroke
           FROM raw_vitalsigns v
+          JOIN raw_homevisit hv ON hv.patient_id = v.patient_id
           WHERE v.data_source = 'portal'
             AND v.cancel_status IS DISTINCT FROM 1
-            AND v.district_code BETWEEN '1001' AND '1050'
+            AND hv.home_district BETWEEN 1001 AND 1050
         """)
 
     if sources is None or 'app1' in sources:
         legs.append("""
-          -- App1: vitalsigns + homevisit.home_district
+          -- App1: vital.PID + VSTDATE for visits, home_district for location
           SELECT 'app1'::text AS source,
                  v.patient_id,
                  hv.home_district::text AS dc,
@@ -72,7 +76,7 @@ def build_unified_cte(sources: list[str] | None = None) -> str:
 
     if sources is None or 'app2' in sources:
         legs.append("""
-          -- App2: homehealth (HD) + home_district (skip null)
+          -- App2: HD count for visits, home_district for location
           SELECT 'app2'::text AS source,
                  hh.patient_id,
                  hv.home_district::text AS dc,

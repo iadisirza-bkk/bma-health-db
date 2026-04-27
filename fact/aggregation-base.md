@@ -1,20 +1,39 @@
-# Aggregation Base — Tier 1 KPI Spec (per-source dispatch)
+# Aggregation Base — Tier 1 KPI Spec (revised 2026-04-27)
 
-## Decision (2026-04-27 — supersedes 2026-04-22 single-base)
+## Decision
 
-All public-facing aggregates use a **per-source CASE** because each source
-populates a different "district" field. The unified CTE in
-`api/services/unified_screening.py` joins three sub-streams that each carry
-the most-meaningful district available for that source.
+All public-facing aggregates group by **เขตที่อยู่ตามทะเบียนบ้าน**
+(registered home district) regardless of source. Each source uses a
+different column name in its own CSV, but they all map to one DB column:
+`raw_homevisit.home_district`.
 
-| Source | District field | Visits source | DB column |
-|--------|---------------|---------------|-----------|
-| **Portal** | `vital.DISTRICTBKK` | `vital.PID + VSTDATE` | `raw_vitalsigns.district_code` |
-| **App1** | `hv.DISTRICT` (home) | `vital.PID + VSTDATE` | `raw_homevisit.home_district` |
-| **App2** | `hv.DISTRICT` (home, **skip null**) | `HD` count | `raw_homevisit.home_district` + `raw_homehealth` |
+| Source | Spec column | Visits source | DB column |
+|--------|------------|---------------|-----------|
+| **Portal** | `hv.HDISTRICT` (+ HPROVINCE, HSUBDISTRICT, HZIPCODE) | `vital.PID + VSTDATE` | `raw_homevisit.home_district` |
+| **App1**   | `hv.DISTRICT` (+ PROVINCE, SUBDISTRICT) | `vital.PID + VSTDATE` | `raw_homevisit.home_district` |
+| **App2**   | `DISTRICT` | `HD` count | `raw_homevisit.home_district` + `raw_homehealth` |
 
-App2 has 0 records with home_district populated, so it **contributes 0** to
-the public dashboard until upstream provides the home_district field.
+A record is included only when `home_district BETWEEN 1001 AND 1050`. Records
+with NULL home_district are skipped (data-quality gap, see below).
+
+## Data quality caveat
+
+Coverage of `home_district` per source (BKK records, snapshot 2026-04-27):
+
+| Source | Records w/ home_district BKK | Total source records | Coverage |
+|--------|------------------------------|----------------------|----------|
+| App1 | ~340K | 394K | ~86% |
+| Portal | ~11K | 480K | ~2% — **mostly NULL** |
+| App2 | 0 | 35K | 0% — **all NULL** |
+
+The dashboard therefore shows **~340K patients** out of the 781K who have
+*any* vitalsigns record. The remaining 440K were screened but their home
+district was never recorded (Portal walk-ins / App2 schema gap).
+
+This is documented as a known data-quality gap. The expected upstream fix
+is to backfill home_district from patient registration where possible, or
+require the field at intake. Until then, the public dashboard reflects
+only the population with confirmed home address.
 
 ## Why per-source instead of one base
 
