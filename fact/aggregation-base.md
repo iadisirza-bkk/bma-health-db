@@ -1,12 +1,32 @@
-# Aggregation Base — HOME district, not screening district
+# Aggregation Base — Tier 1 KPI Spec (per-source dispatch)
 
-## Decision (2026-04-22)
+## Decision (2026-04-27 — supersedes 2026-04-22 single-base)
 
-All public-facing aggregates ใน BMA Health platform — map choropleth,
-sidebar zone/district cards, OverviewBoard, StatisticsBoard, hover tooltip,
-and reports — group by **`raw_homevisit.home_district`** (where the patient
-lives), NOT by `raw_vitalsigns.district_code` (where the screening visit
-took place).
+All public-facing aggregates use a **per-source CASE** because each source
+populates a different "district" field. The unified CTE in
+`api/services/unified_screening.py` joins three sub-streams that each carry
+the most-meaningful district available for that source.
+
+| Source | District field | Visits source | DB column |
+|--------|---------------|---------------|-----------|
+| **Portal** | `vital.DISTRICTBKK` | `vital.PID + VSTDATE` | `raw_vitalsigns.district_code` |
+| **App1** | `hv.DISTRICT` (home) | `vital.PID + VSTDATE` | `raw_homevisit.home_district` |
+| **App2** | `hv.DISTRICT` (home, **skip null**) | `HD` count | `raw_homevisit.home_district` + `raw_homehealth` |
+
+App2 has 0 records with home_district populated, so it **contributes 0** to
+the public dashboard until upstream provides the home_district field.
+
+## Why per-source instead of one base
+
+The earlier (2026-04-22) attempt used `raw_homevisit.home_district` for ALL
+sources. Coverage by source:
+- Portal: 2.4% (11K of 480K records had home_district) → 97% of Portal lost
+- App1: 100% ✅
+- App2: 0% (no home_district at all) → all of App2 lost
+
+Total dropped from 781K → 341K. The Tier 1 KPI spec from the team clarified
+that each source records its district differently, and the dashboard must
+respect those differences. The unified CTE restores 732K patients.
 
 ## Why home_district
 

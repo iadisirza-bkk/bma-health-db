@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException
 
 from database import execute_query
 from security import K_ANONYMITY_THRESHOLD
+from services.unified_screening import UNIFIED_CTE
 
 router = APIRouter(tags=["Zones"])
 
@@ -17,28 +18,27 @@ router = APIRouter(tags=["Zones"])
 def list_zones():
     """All zones with screening totals and disease breakdown.
 
-    Aggregation base = HOME district from raw_homevisit (where the patient
-    lives), NOT screening district. See fact/aggregation-base.md for why.
-    Vitals/disease flags come from raw_vitalsigns via JOIN by patient_id.
+    Uses UNIFIED_CTE — per-source district mapping per the Tier 1 KPI spec
+    (fact/aggregation-base.md):
+      Portal → vital.DISTRICTBKK
+      App1   → hv.DISTRICT (home)
+      App2   → hv.DISTRICT (home, skip null) + visits from HD (homehealth)
     """
-    rows = execute_query("""
+    rows = execute_query(UNIFIED_CTE + """
         SELECT
           z.zone_code, z.name_th, z.name_en,
           COUNT(DISTINCT d.dcode) AS district_count,
-          COUNT(DISTINCT hv.patient_id) AS total_screened,
-          COUNT(hv.id) AS total_visits,
-          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_dm)            AS diabetes,
-          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_hpt)           AS hypertension,
-          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_cvd)           AS cardiovascular,
-          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.risk_bmi)           AS obesity,
-          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.found_dyslipidemia) AS dyslipidemia,
-          COUNT(DISTINCT hv.patient_id) FILTER (WHERE v.found_stroke)       AS stroke
+          COUNT(DISTINCT u.patient_id) AS total_screened,
+          COUNT(DISTINCT (u.patient_id, u.day)) AS total_visits,
+          COUNT(DISTINCT u.patient_id) FILTER (WHERE u.risk_dm)            AS diabetes,
+          COUNT(DISTINCT u.patient_id) FILTER (WHERE u.risk_hpt)           AS hypertension,
+          COUNT(DISTINCT u.patient_id) FILTER (WHERE u.risk_cvd)           AS cardiovascular,
+          COUNT(DISTINCT u.patient_id) FILTER (WHERE u.risk_bmi)           AS obesity,
+          COUNT(DISTINCT u.patient_id) FILTER (WHERE u.found_dyslipidemia) AS dyslipidemia,
+          COUNT(DISTINCT u.patient_id) FILTER (WHERE u.found_stroke)       AS stroke
         FROM ref_health_zones z
         LEFT JOIN ref_districts d ON d.zone_code = z.zone_code
-        LEFT JOIN raw_homevisit hv ON hv.home_district::text = d.dcode
-          AND hv.cancel_status IS DISTINCT FROM 1
-        LEFT JOIN raw_vitalsigns v ON v.patient_id = hv.patient_id
-          AND v.cancel_status IS DISTINCT FROM 1
+        LEFT JOIN unified u ON u.dc = d.dcode
         GROUP BY z.zone_code, z.name_th, z.name_en
         ORDER BY z.zone_code
     """)
