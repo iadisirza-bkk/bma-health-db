@@ -2604,14 +2604,6 @@ def _run_bundle_import(manifest: List[Dict], history_id: int):
         delete_label = _delete_for_sources(cur, sources_in_bundle)
         logger.info("Bundle import: %s", delete_label)
 
-        # Create import_batch row for audit trail
-        cur.execute("""
-            INSERT INTO private.import_batch
-              (source_code, filename, csv_file_type, status)
-            VALUES ('bundle', %s, 'bundle', 'running') RETURNING id
-        """, (f"bundle-{history_id}",))
-        batch_id = cur.fetchone()[0]
-
         # Estimate total work
         total_files = sum(len(v) for v in by_source.values())
         files_done = 0
@@ -2624,6 +2616,17 @@ def _run_bundle_import(manifest: List[Dict], history_id: int):
             e = 5 + int(span * (file_idx + 1))
             return s, e
 
+        def _new_batch(source_code: str, label: str) -> int:
+            """Create a per-source import_batch row inside the bundle.
+            Returns the batch_id which is then passed to ETL functions."""
+            cur.execute("""
+                INSERT INTO private.import_batch
+                  (source_code, filename, csv_file_type, status)
+                VALUES (%s, %s, %s, 'running')
+                RETURNING id
+            """, (source_code, f"bundle-{history_id}/{label}", label))
+            return cur.fetchone()[0]
+
         for source in SOURCE_IMPORT_ORDER:
             files = by_source.get(source, {})
             if not files:
@@ -2634,6 +2637,7 @@ def _run_bundle_import(manifest: List[Dict], history_id: int):
             if source == "app2":
                 m = files.get("app2")
                 if m:
+                    batch_id = _new_batch("app2", "app2")
                     s, _e = _pct_bounds(files_done)
                     _update_progress(history_id, f"{source}/app2", s)
                     df = _pd.read_csv(m["tmp_path"], dtype=str, low_memory=False,
@@ -2641,6 +2645,9 @@ def _run_bundle_import(manifest: List[Dict], history_id: int):
                     n_pat, n_vis = etlv3.import_app2(cur, df, batch_id)
                     total_imported += n_vis
                     steps_done.append(f"{m['filename']}(app2:{n_pat}p/{n_vis}v)")
+                    cur.execute("""UPDATE private.import_batch
+                        SET status='completed', rows_inserted=%s WHERE id=%s""",
+                        (n_vis, batch_id))
                     del df
                     files_done += 1
                 continue
@@ -2648,6 +2655,7 @@ def _run_bundle_import(manifest: List[Dict], history_id: int):
             # ─── Portal / App1: pt.csv first to populate patient table ──
             m_pt = files.get("pt")
             if m_pt:
+                batch_id = _new_batch(source, "pt")
                 s, _e = _pct_bounds(files_done)
                 _update_progress(history_id, f"{source}/pt", s)
                 df = _pd.read_csv(m_pt["tmp_path"], dtype=str, low_memory=False,
@@ -2655,6 +2663,9 @@ def _run_bundle_import(manifest: List[Dict], history_id: int):
                 pid_map_pt = etlv3.import_patients(cur, df, source, batch_id)
                 total_imported += len(pid_map_pt)
                 steps_done.append(f"{m_pt['filename']}({source}/pt:{len(pid_map_pt)})")
+                cur.execute("""UPDATE private.import_batch
+                    SET status='completed', rows_inserted=%s WHERE id=%s""",
+                    (len(pid_map_pt), batch_id))
                 del df
                 files_done += 1
 
@@ -2672,30 +2683,25 @@ def _run_bundle_import(manifest: List[Dict], history_id: int):
                 m = files.get(ft)
                 if not m:
                     continue
+                ft_batch_id = _new_batch(source, ft)
                 s, _e = _pct_bounds(files_done)
                 _update_progress(history_id, f"{source}/{ft}", s)
                 df = _pd.read_csv(m["tmp_path"], dtype=str, low_memory=False,
                                   keep_default_na=True)
 
                 if ft in ("labhealth", "labhealthext"):
-                    n = etlv3.import_lab(cur, df, source, pid_map, batch_id)
+                    n = etlv3.import_lab(cur, df, source, pid_map, ft_batch_id)
                 else:
                     n = etlv3.import_visits_and_measurements(
-                        cur, df, source, ft, pid_map, batch_id,
+                        cur, df, source, ft, pid_map, ft_batch_id,
                     )
                 total_imported += n
                 steps_done.append(f"{m['filename']}({source}/{ft}:{n})")
+                cur.execute("""UPDATE private.import_batch
+                    SET status='completed', rows_inserted=%s WHERE id=%s""",
+                    (n, ft_batch_id))
                 del df
                 files_done += 1
-
-        # Update import_batch row
-        cur.execute("""
-            UPDATE private.import_batch
-            SET status='completed', rows_inserted=%s, rows_parsed=%s,
-                duration_ms=%s, progress_pct=90
-            WHERE id=%s
-        """, (total_imported, total_imported,
-              int((time.time() - start) * 1000), batch_id))
 
         _update_progress(history_id, "commit", 92)
         conn.commit()
