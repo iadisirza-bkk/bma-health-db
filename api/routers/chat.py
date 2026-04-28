@@ -110,6 +110,12 @@ async def chat_stream_endpoint(
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
+            # Tell upstream proxies (nginx, Next.js dev rewrites) not to buffer
+            # OR re-compress the stream. `Content-Encoding: identity` is the
+            # standards-compliant way to signal "do not gzip me" — without it
+            # Next.js's dev proxy gzips chunks together and breaks SSE
+            # streaming so the browser only sees the full response at once.
             "X-Accel-Buffering": "no",
+            "Content-Encoding": "identity",
         },
     )

@@ -133,22 +133,46 @@ class OpenMultiAgent:
                 +-- Synthesizer Agent (final response)
     """
 
-    def __init__(self, adapter: LLMAdapter, registry: ToolRegistry,
-                 circuit_breaker: CircuitBreaker | None = None):
-        self.adapter = adapter
-        self.registry = registry
+    def __init__(
+        self,
+        analyst_adapter: LLMAdapter | None = None,
+        synthesizer_adapter: LLMAdapter | None = None,
+        registry: ToolRegistry | None = None,
+        circuit_breaker: CircuitBreaker | None = None,
+        # Legacy single-adapter form, kept so existing callers don't break.
+        adapter: LLMAdapter | None = None,
+    ):
+        if analyst_adapter is None and adapter is None:
+            raise ValueError("OpenMultiAgent requires analyst_adapter (or legacy `adapter`)")
+        self.analyst_adapter = analyst_adapter or adapter
+        self.synthesizer_adapter = synthesizer_adapter or self.analyst_adapter
+        # Backwards-compat alias: callers that read self.adapter still get the
+        # synthesizer adapter (the one used for the visible final response).
+        self.adapter = self.synthesizer_adapter
+        self.registry = registry  # type: ignore[assignment]
         self.cb = circuit_breaker or CircuitBreaker()
 
+    async def _adapters_healthy(self) -> bool:
+        """Both adapters must be reachable. When they share an instance, this
+        is a single ping; when split, it pings both so we fail fast if either
+        model isn't loaded in LMStudio."""
+        if self.analyst_adapter is self.synthesizer_adapter:
+            return await self.analyst_adapter.health_check()
+        return (
+            await self.analyst_adapter.health_check()
+            and await self.synthesizer_adapter.health_check()
+        )
+
     def create_team(self) -> Team:
-        """Create a team with analyst + synthesizer agents."""
+        """Create a team with analyst + synthesizer agents (each with its own adapter)."""
         analyst = Agent(
             config=AgentConfig(name="analyst", role="วิเคราะห์คำถาม", system_prompt=SYSTEM_PROMPT, icon="brain"),
-            adapter=self.adapter,
+            adapter=self.analyst_adapter,
             tools=self.registry,
         )
         synthesizer = Agent(
             config=AgentConfig(name="synthesizer", role="สรุปคำตอบ", system_prompt=SYNTH_PROMPT, icon="sparkle"),
-            adapter=self.adapter,
+            adapter=self.synthesizer_adapter,
         )
         return Team(agents={"analyst": analyst, "synthesizer": synthesizer})
 
@@ -158,7 +182,7 @@ class OpenMultiAgent:
         if not _is_on_topic(user_message):
             return {"content": _REFUSAL_RESPONSE, "visualizations": []}
 
-        if not self.cb.can_execute() or not await self.adapter.health_check():
+        if not self.cb.can_execute() or not await self._adapters_healthy():
             self.cb.record_failure()
             from agents.fallback import handle_fallback
             return await handle_fallback(None, user_message, context)
@@ -213,7 +237,7 @@ class OpenMultiAgent:
             return
 
         # Circuit breaker / health check
-        if not self.cb.can_execute() or not await self.adapter.health_check():
+        if not self.cb.can_execute() or not await self._adapters_healthy():
             self.cb.record_failure()
             from agents.fallback import handle_fallback
             result = await handle_fallback(None, user_message)
@@ -281,7 +305,7 @@ class OpenMultiAgent:
 
             try:
                 response = await asyncio.wait_for(
-                    self.adapter.chat(messages, tools=filtered_schemas),
+                    self.analyst_adapter.chat(messages, tools=filtered_schemas),
                     timeout=60,
                 )
             except asyncio.TimeoutError:
@@ -365,11 +389,19 @@ class OpenMultiAgent:
                 if result.visualizations:
                     all_viz.extend(result.visualizations)
                     yield format_sse({"type": "agent_start", "agent": "chart", "label": "กำลังสร้างกราฟ...", "icon": "chart"})
+                    # Emit each visualization as soon as it's ready so the
+                    # frontend can render the chart while the synthesizer is
+                    # still streaming text. (Previously these were batched at
+                    # the end of the stream — users saw them pop in only after
+                    # the entire response finished.)
+                    for v in result.visualizations:
+                        yield format_sse({"type": "visualization", "data": v})
                     yield format_sse({"type": "agent_done", "agent": "chart"})
 
                 if "Download URL:" in result.text:
                     url = result.text.split("Download URL:")[-1].strip()
                     all_artifacts.append({"url": url, "label": label})
+                    yield format_sse({"type": "artifact", "url": url, "label": label})
 
                 yield format_sse({"type": "agent_done", "agent": "data"})
 
@@ -412,10 +444,9 @@ class OpenMultiAgent:
 
             yield format_sse({"type": "agent_done", "agent": "synthesizer"})
 
-            for v in all_viz:
-                yield format_sse({"type": "visualization", "data": v})
-            for a in all_artifacts:
-                yield format_sse({"type": "artifact", "url": a["url"], "label": a["label"]})
+            # Visualizations + artifacts were already streamed inline as soon
+            # as each tool produced them (see Phase 2 above). No need to
+            # re-emit at the end — that just causes duplicates.
 
             yield format_sse({"type": "done"})
             self.cb.record_success()
@@ -447,6 +478,7 @@ class OpenMultiAgent:
     def get_status(self) -> dict:
         return {
             "circuit_breaker": self.cb.get_status(),
-            "model": self.adapter.config.model,
+            "model": self.synthesizer_adapter.config.model,
+            "model_analyst": self.analyst_adapter.config.model,
             "tools": len(self.registry.list_tools()),
         }

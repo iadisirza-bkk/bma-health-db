@@ -33,7 +33,13 @@ SECRET_KEY: str = os.getenv("SECRET_KEY", "change-me-in-production-use-random-se
 
 # --- LLM / AI Chat ---
 LMSTUDIO_URL: str = os.getenv("LMSTUDIO_URL", "http://localhost:5555")
+# LLM_MODEL is the legacy single-model setting; kept as the fallback for both
+# roles below. Set LLM_MODEL_ANALYST / LLM_MODEL_SYNTHESIZER to split.
 LLM_MODEL: str = os.getenv("LLM_MODEL", "google/gemma-4-26b-a4b")
+# Analyst = tool selection / routing. Heavier reasoning model is fine here.
+LLM_MODEL_ANALYST: str = os.getenv("LLM_MODEL_ANALYST", LLM_MODEL)
+# Synthesizer = final Thai response generation. Optimized for fluent output.
+LLM_MODEL_SYNTHESIZER: str = os.getenv("LLM_MODEL_SYNTHESIZER", LLM_MODEL)
 LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "2000"))
 LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "120"))

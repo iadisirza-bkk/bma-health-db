@@ -16,8 +16,13 @@ from agents.core.orchestrator import OpenMultiAgent
 def create_orchestrator() -> OpenMultiAgent:
     """Singleton factory: create orchestrator once, reuse across requests.
 
-    CircuitBreaker, ToolRegistry, and LMStudioAdapter are shared —
-    this is critical for circuit breaker state to persist across requests.
+    Two adapters are built — one for the analyst (tool selection) and one for
+    the synthesizer (final Thai prose). They use the same `LMSTUDIO_URL` but
+    can target different models via `LLM_MODEL_ANALYST` / `LLM_MODEL_SYNTHESIZER`.
+    Both default to `LLM_MODEL` so single-model setups stay unchanged.
+
+    CircuitBreaker, ToolRegistry, and the adapters are shared — this is
+    critical for circuit breaker state to persist across requests.
     """
     import config
     from agents.adapters.base import AdapterConfig
@@ -27,19 +32,27 @@ def create_orchestrator() -> OpenMultiAgent:
     from agents.strategies.openai_native import OpenAINativeStrategy
     from agents.core.circuit_breaker import CircuitBreaker
 
-    is_gemma = "gemma" in config.LLM_MODEL.lower()
-    strategy = GemmaToolCallStrategy() if is_gemma else OpenAINativeStrategy()
+    def _build_adapter(model: str) -> LMStudioAdapter:
+        is_gemma = "gemma" in model.lower()
+        strategy = GemmaToolCallStrategy() if is_gemma else OpenAINativeStrategy()
+        return LMStudioAdapter(
+            config=AdapterConfig(
+                base_url=config.LMSTUDIO_URL,
+                model=model,
+                temperature=config.LLM_TEMPERATURE,
+                max_tokens=config.LLM_MAX_TOKENS,
+                timeout=config.LLM_TIMEOUT,
+            ),
+            strategy=strategy,
+        )
 
-    adapter = LMStudioAdapter(
-        config=AdapterConfig(
-            base_url=config.LMSTUDIO_URL,
-            model=config.LLM_MODEL,
-            temperature=config.LLM_TEMPERATURE,
-            max_tokens=config.LLM_MAX_TOKENS,
-            timeout=config.LLM_TIMEOUT,
-        ),
-        strategy=strategy,
-    )
+    analyst_adapter = _build_adapter(config.LLM_MODEL_ANALYST)
+    # When both env vars resolve to the same model, reuse the adapter so health
+    # checks and HTTP clients aren't duplicated for nothing.
+    if config.LLM_MODEL_SYNTHESIZER == config.LLM_MODEL_ANALYST:
+        synthesizer_adapter = analyst_adapter
+    else:
+        synthesizer_adapter = _build_adapter(config.LLM_MODEL_SYNTHESIZER)
 
     registry = ToolRegistry.create_default()
     cb = CircuitBreaker(
@@ -47,4 +60,9 @@ def create_orchestrator() -> OpenMultiAgent:
         recovery_timeout=config.CIRCUIT_BREAKER_RECOVERY,
     )
 
-    return OpenMultiAgent(adapter=adapter, registry=registry, circuit_breaker=cb)
+    return OpenMultiAgent(
+        analyst_adapter=analyst_adapter,
+        synthesizer_adapter=synthesizer_adapter,
+        registry=registry,
+        circuit_breaker=cb,
+    )
