@@ -219,18 +219,67 @@ def disease_heatmap(disease_key: str):
 @router.get("/pm25/current")
 async def pm25_current():
     """Current PM2.5 readings from Bangkok stations.
+
+    Goes through `_get_pm25_cached()`, so when the BMA upstream is down we
+    transparently serve the last-known-good readings (24 h LKG window) with
+    `is_stale: true` + `stale_since` set. Clients can show a banner.
+
     ดึงค่า PM2.5 ปัจจุบันจากสถานีตรวจวัดใน กทม."""
-    try:
-        from external.arcgis_client import ArcGISClient
-        client = ArcGISClient()
-        data = await client.get_pm25()
-        return data
-    except Exception as e:
-        return {
-            "data_available": False,
-            "message": f"PM2.5 data temporarily unavailable: {str(e)}",
-            "fallback": "Use https://bmagis.bangkok.go.th/arcgis/rest/services/Hosted/air_quality_data_processed/FeatureServer/0/query?where=1%3D1&outFields=*&f=json directly",
-        }
+    return await _get_pm25_cached()
+
+
+@router.get("/pm25/health")
+async def pm25_health():
+    """Diagnostic — PM2.5 upstream status and LKG cache age.
+
+    Use this to tell whether `/pm25/*` endpoints are currently serving live
+    data or stale LKG. The BMA ArcGIS service occasionally goes down (its
+    backend `SEDMAP01.BANGKOK.GO.TH:9876` is the typical failure point), and
+    this endpoint surfaces that without disturbing the cached payload.
+    """
+    from datetime import datetime, timezone
+    from cache import cache_get
+
+    status = cache_get("pm25:upstream_status") or {}
+    lkg = cache_get("pm25:lkg")
+
+    lkg_age_seconds = None
+    if lkg and lkg.get("fetched_at"):
+        try:
+            fetched = datetime.fromisoformat(lkg["fetched_at"])
+            age = datetime.now(timezone.utc) - fetched
+            lkg_age_seconds = int(age.total_seconds())
+        except Exception:
+            pass
+
+    serving_mode = "live"
+    if status.get("ok") is False and lkg:
+        serving_mode = "stale_lkg"
+    elif status.get("ok") is False and not lkg:
+        serving_mode = "unavailable"
+    elif status.get("ok") is None:
+        serving_mode = "cold"  # no fetch attempt yet this Redis lifetime
+
+    return {
+        "serving_mode": serving_mode,
+        "upstream": {
+            "url": "https://bmagis.bangkok.go.th/arcgis/rest/services/Hosted/air_quality_data_processed/FeatureServer/0",
+            "ok": status.get("ok"),
+            "last_success": status.get("last_success"),
+            "last_attempt": status.get("last_attempt"),
+            "last_error": status.get("last_error"),
+        },
+        "lkg": {
+            "available": lkg is not None,
+            "fetched_at": lkg.get("fetched_at") if lkg else None,
+            "age_seconds": lkg_age_seconds,
+            "station_count": len(lkg.get("data", [])) if lkg else 0,
+        },
+        "cache_ttls": {
+            "hot_seconds": TTL_T1_EXTERNAL,
+            "lkg_seconds": LKG_TTL,
+        },
+    }
 
 
 @router.get("/boundaries/districts")
@@ -315,25 +364,86 @@ async def disease_environment_overlay(
 # aggregate by zone, and compute AQI from raw PM2.5.
 
 
-async def _get_pm25_cached() -> dict:
-    """Fetch PM2.5 from ArcGIS with T1 (5 min) cache + stampede protection.
+# Last-known-good cache: 24 h TTL — only refreshed when ArcGIS returns real
+# data, so we can keep serving stations during BMA outages (their upstream DB
+# `SEDMAP01:9876` goes down periodically).
+LKG_TTL = 86400
 
-    Uses acache_get_or_compute so that under concurrent traffic only ONE
-    worker hits ArcGIS when the cache expires. Other concurrent requests
-    wait briefly and read the freshly-cached value — protects the upstream
-    ArcGIS quota during traffic spikes.
+
+async def _get_pm25_cached() -> dict:
+    """Fetch PM2.5 from ArcGIS with T1 (5 min) cache + LKG fallback.
+
+    Strategy:
+      1. Hot cache (T1 = 5 min, key=`pm25:current_readings`) — cheap re-reads.
+      2. On miss: live fetch via ArcGIS.
+         • Success → update hot cache AND `pm25:lkg` (24 h).
+         • Failure → return `pm25:lkg` with `is_stale: true` + `stale_since`.
+      3. Stampede protection via Redis lock so only ONE worker hits ArcGIS.
+
+    Upstream status is tracked in `pm25:upstream_status` for /pm25/health.
     """
-    from cache import acache_get_or_compute
+    from datetime import datetime, timezone
+    from cache import acache_get_or_compute, cache_get, cache_set
 
     async def _fetch_pm25() -> dict:
+        attempt_ts = datetime.now(timezone.utc).isoformat()
         try:
             from external.arcgis_client import ArcGISClient
             client = ArcGISClient()
             data = await client.get_pm25()
+            # Only refresh LKG when we actually got readings — empty responses
+            # (data_available=False) shouldn't pollute the fallback.
+            if data.get("data_available"):
+                lkg_payload = {**data, "fetched_at": attempt_ts}
+                cache_set("pm25:lkg", lkg_payload, ttl=LKG_TTL)
+                cache_set("pm25:upstream_status", {
+                    "ok": True,
+                    "last_success": attempt_ts,
+                    "last_attempt": attempt_ts,
+                    "last_error": None,
+                }, ttl=LKG_TTL)
+            else:
+                # Upstream returned 200 but with no stations — treat as soft
+                # failure so /pm25/health surfaces it, and fall back to LKG
+                # if we have one (seen on long BMA outages where their
+                # backend DB returns empty results instead of erroring).
+                prev = cache_get("pm25:upstream_status") or {}
+                cache_set("pm25:upstream_status", {
+                    "ok": False,
+                    "last_success": prev.get("last_success"),
+                    "last_attempt": attempt_ts,
+                    "last_error": "empty_response",
+                }, ttl=LKG_TTL)
+                lkg = cache_get("pm25:lkg")
+                if lkg and lkg.get("data"):
+                    return {
+                        **lkg,
+                        "is_stale": True,
+                        "stale_since": lkg.get("fetched_at"),
+                        "upstream_error": "empty_response",
+                    }
             return data
         except Exception as e:
-            logger.warning("ArcGIS PM2.5 fetch failed: %s", e)
-            return {"data_available": False, "data": []}
+            err = f"{type(e).__name__}: {str(e)[:200]}"
+            logger.warning("ArcGIS PM2.5 fetch failed: %s", err)
+            prev = cache_get("pm25:upstream_status") or {}
+            cache_set("pm25:upstream_status", {
+                "ok": False,
+                "last_success": prev.get("last_success"),
+                "last_attempt": attempt_ts,
+                "last_error": err,
+            }, ttl=LKG_TTL)
+            # Serve LKG when available so downstream endpoints (zones,
+            # districts, current) keep showing the most recent known data.
+            lkg = cache_get("pm25:lkg")
+            if lkg and lkg.get("data"):
+                return {
+                    **lkg,
+                    "is_stale": True,
+                    "stale_since": lkg.get("fetched_at"),
+                    "upstream_error": err,
+                }
+            return {"data_available": False, "data": [], "upstream_error": err}
 
     return await acache_get_or_compute(
         "pm25:current_readings",
@@ -505,6 +615,9 @@ async def pm25_zones():
 
     resp = {
         "data_available": pm25_data.get("data_available", False),
+        "is_stale": pm25_data.get("is_stale", False),
+        "stale_since": pm25_data.get("stale_since"),
+        "upstream_error": pm25_data.get("upstream_error"),
         "total_zones": len(result),
         "standards": {"th": STANDARD_TH, "who": STANDARD_WHO},
         "data": result,
@@ -555,6 +668,9 @@ async def pm25_districts():
 
     resp = {
         "data_available": pm25_data.get("data_available", False),
+        "is_stale": pm25_data.get("is_stale", False),
+        "stale_since": pm25_data.get("stale_since"),
+        "upstream_error": pm25_data.get("upstream_error"),
         "total_districts": len(result),
         "standards": {"th": STANDARD_TH, "who": STANDARD_WHO},
         "data": result,
