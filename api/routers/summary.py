@@ -256,166 +256,132 @@ def overview(sources: Optional[str] = Query(None, description="Comma-separated s
 # Filtered query (k-anonymity enforced)
 # =========================================================================== #
 
+# Bucket boundaries used by summary_disease_age_sex. Used to map an arbitrary
+# age range from the frontend (e.g. Gen X = 46-61) onto the closest set of
+# overlapping buckets.
+_AGE_BUCKETS: list[tuple[str, int, int]] = [
+    ("18-29", 18, 29),
+    ("30-44", 30, 44),
+    ("45-59", 45, 59),
+    ("60-74", 60, 74),
+    ("75+",  75, 120),
+]
+
+_SEX_MAP = {"Male": "M", "Female": "F", "M": "M", "F": "F", "1": "M", "2": "F"}
+
+
 @router.get("/filtered")
 def filtered_summary(
     district: Optional[str] = Query(None),
-    sex: Optional[int] = Query(None),
-    age_group: Optional[str] = Query(None, description="Legacy Thai age-group string (e.g. 'สูงวัย')"),
+    sex: Optional[str] = Query(None, description="'Male'/'Female' or 'M'/'F'"),
+    age_group: Optional[str] = Query(None, description="Direct bucket ('18-29','30-44','45-59','60-74','75+')"),
     age_min: Optional[int] = Query(None, ge=0, le=120, description="Minimum age (inclusive)"),
     age_max: Optional[int] = Query(None, ge=0, le=120, description="Maximum age (inclusive)"),
     fiscal_year: Optional[int] = Query(None, ge=2550, le=2700,
-        description="Thai fiscal year (BE). FY 2569 = Oct 2025–Sep 2026."),
-    date_from: Optional[str] = Query(None, description="Custom range start (YYYY-MM-DD)"),
-    date_to: Optional[str] = Query(None, description="Custom range end (YYYY-MM-DD)"),
-    smoking: Optional[int] = Query(None),
-    exercise: Optional[int] = Query(None),
+        description="Thai fiscal year (BE). Currently no-op — pre-aggregated MV is FY-agnostic."),
+    date_from: Optional[str] = Query(None, description="Currently no-op."),
+    date_to: Optional[str] = Query(None, description="Currently no-op."),
+    smoking: Optional[str] = Query(None, description="Currently no-op — needs disease×lifestyle MV."),
+    exercise: Optional[str] = Query(None, description="Currently no-op."),
+    alcohol: Optional[str] = Query(None, description="Currently no-op."),
 ):
-    """Query risk factor summary with filters. k-anonymity enforced.
+    """Per-district disease summary, optionally filtered by sex and/or age range.
 
-    Filter paths:
-    - `age_group=<legacy-string>` alone → fast materialized-view path.
-    - `age_min/age_max`, `fiscal_year`, or `date_from/date_to` → raw-tables
-      path that computes age from raw_patients.birth_year and/or filters by
-      raw_vitalsigns.visit_date. Slower but flexible — per
-      fact/age-groups.md and fact/fiscal-years.md.
+    Backed by `summary_disease_age_sex` (district × sex × age_group), which
+    matches `mv_summary_districts` totals when summed across all sex/age.
+
+    Sex is mapped from the frontend's English label to the DB single-letter code
+    ('Male'→'M', 'Female'→'F'). Age range is mapped onto overlapping buckets;
+    e.g. age_min=46&age_max=61 → buckets '45-59' and '60-74'.
+
+    Lifestyle filters (smoking/alcohol/exercise) and time filters
+    (fiscal_year/date_from/date_to) are accepted for forward-compat but currently
+    do not affect the query — those need a disease×lifestyle MV that doesn't
+    exist yet.
     """
-    # Resolve fiscal_year → date range. Thai FY X = Oct 1 (X-544) → Sep 30 (X-543).
-    fy_date_from: Optional[str] = None
-    fy_date_to: Optional[str] = None
-    if fiscal_year is not None:
-        fy_start_year = fiscal_year - 544  # e.g. FY 2569 → 2025
-        fy_end_year = fiscal_year - 543    # e.g. FY 2569 → 2026
-        fy_date_from = f"{fy_start_year}-10-01"
-        fy_date_to = f"{fy_end_year}-09-30"
+    sex_norm = _SEX_MAP.get(sex) if sex else None
 
-    needs_raw = (
-        age_min is not None or age_max is not None
-        or fiscal_year is not None
-        or date_from is not None or date_to is not None
-    )
-
-    # ─── Raw-tables path: supports age range + time range filters ───────────
-    if needs_raw:
+    # Resolve age filter → list of bucket strings.
+    # age_explicit: user actively picked a range/bucket. If they did but no
+    # bucket overlaps (e.g. Gen Alpha 2-13 vs DB buckets that start at 18),
+    # we must return zero rows rather than fall through to "no filter".
+    age_explicit = age_min is not None or age_max is not None or bool(age_group)
+    if age_min is not None or age_max is not None:
         lo = age_min if age_min is not None else 0
         hi = age_max if age_max is not None else 120
         if lo > hi:
             lo, hi = hi, lo
-        conditions = [
-            "v.cancel_status IS DISTINCT FROM 1",
-        ]
-        params: list = []
-        # Age filter (optional — only when age_min/age_max provided)
-        if age_min is not None or age_max is not None:
-            conditions.append("p.birth_year IS NOT NULL")
-            conditions.append(
-                "(EXTRACT(YEAR FROM CURRENT_DATE)::int - p.birth_year) BETWEEN %s AND %s"
-            )
-            params.extend([lo, hi])
-        # Time filter — explicit date_from/date_to take precedence over fiscal_year
-        effective_from = date_from or fy_date_from
-        effective_to = date_to or fy_date_to
-        if effective_from:
-            conditions.append("v.visit_date >= %s")
-            params.append(effective_from)
-        if effective_to:
-            conditions.append("v.visit_date <= %s")
-            params.append(effective_to)
-        if district:
-            conditions.append("v.district_code = %s")
-            params.append(district)
-        if sex is not None:
-            conditions.append("p.sex = %s")
-            params.append(sex)
-        if smoking is not None:
-            conditions.append("v.smoking = %s")
-            params.append(smoking)
-        # Note: exercise lives in raw_homehealth; skipped in this path for perf.
-        where = "WHERE " + " AND ".join(conditions)
+        target_buckets = [b[0] for b in _AGE_BUCKETS if not (b[2] < lo or b[1] > hi)]
+    elif age_group:
+        target_buckets = [age_group]
+    else:
+        target_buckets = []
 
-        rows = execute_query(f"""
-            SELECT
-              v.district_code,
-              p.sex,
-              NULL::text AS age_group,
-              v.smoking,
-              NULL::int  AS exercise,
-              COUNT(DISTINCT v.patient_id)::int AS patient_count,
-              -- Disease counts for map choropleth + zone aggregation
-              COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_dm)              AS risk_dm_count,
-              COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_hpt)             AS risk_hpt_count,
-              COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_cvd)             AS risk_cvd_count,
-              COUNT(DISTINCT v.patient_id) FILTER (WHERE v.risk_bmi)             AS risk_bmi_count,
-              COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_obesity)        AS found_obesity_count,
-              COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_dyslipidemia)   AS found_dyslipidemia_count,
-              COUNT(DISTINCT v.patient_id) FILTER (WHERE v.found_stroke)         AS found_stroke_count,
-              -- Vitals averages
-              ROUND(AVG(v.sbp)::numeric, 1)          AS avg_sbp,
-              ROUND(AVG(v.dbp)::numeric, 1)          AS avg_dbp,
-              ROUND(AVG(v.weight_kg)::numeric, 1)    AS avg_weight_kg,
-              ROUND(AVG(v.waist_cm)::numeric, 1)     AS avg_waist_cm,
-              ROUND(AVG(CASE WHEN v.height_cm > 0
-                             THEN v.weight_kg / POWER(v.height_cm / 100.0, 2)
-                        END)::numeric, 1)            AS avg_bmi
-            FROM raw_vitalsigns v
-            JOIN raw_patients p ON p.id = v.patient_id
-            {where}
-            GROUP BY v.district_code, p.sex, v.smoking
-            ORDER BY v.district_code, p.sex
-        """, tuple(params))
+    # Always exclude rollup rows (sex='all') to prevent double-counting.
+    conditions = ["s.sex <> 'all'", "s.age_group <> 'all'"]
+    params: list = []
 
-        rows = enforce_k_anonymity(rows, count_field="patient_count")
-        return {"filters_applied": {
-            "district": district, "sex": sex,
-            "age_min": lo if (age_min is not None or age_max is not None) else None,
-            "age_max": hi if (age_min is not None or age_max is not None) else None,
-            "fiscal_year": fiscal_year,
-            "date_from": effective_from,
-            "date_to": effective_to,
-            "smoking": smoking, "exercise": exercise,
-        }, "k_anonymity_threshold": K_ANONYMITY_THRESHOLD, "data": rows}
-
-    # ─── Path 1: legacy categorical filter → uses materialized view ─────────
-    conditions = []
-    params = []
-
+    if sex_norm:
+        conditions.append("s.sex = %s")
+        params.append(sex_norm)
+    if target_buckets:
+        placeholders = ",".join(["%s"] * len(target_buckets))
+        conditions.append(f"s.age_group IN ({placeholders})")
+        params.extend(target_buckets)
+    elif age_explicit:
+        # User picked an age range that maps to no DB bucket → no rows match.
+        conditions.append("1=0")
     if district:
-        conditions.append("district_code = %s")
+        conditions.append("s.district_code = %s")
         params.append(district)
-    if sex is not None:
-        conditions.append("sex = %s")
-        params.append(sex)
-    if age_group:
-        conditions.append("age_group = %s")
-        params.append(age_group)
-    if smoking is not None:
-        conditions.append("smoking = %s")
-        params.append(smoking)
-    if exercise is not None:
-        conditions.append("exercise = %s")
-        params.append(exercise)
 
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    where = "WHERE " + " AND ".join(conditions)
 
+    # INNER JOIN with mv_summary_districts so we only return Bangkok's 50
+    # districts (summary_disease_age_sex contains other provinces too).
     rows = execute_query(f"""
         SELECT
-          district_code, sex, age_group, smoking, exercise,
-          SUM(patient_count)::int AS patient_count,
-          ROUND(AVG(avg_sbp)::numeric, 1) AS avg_sbp,
-          ROUND(AVG(avg_dbp)::numeric, 1) AS avg_dbp,
-          ROUND(AVG(avg_weight_kg)::numeric, 1) AS avg_weight_kg,
-          ROUND(AVG(avg_waist_cm)::numeric, 1) AS avg_waist_cm,
-          ROUND(AVG(avg_bmi)::numeric, 1) AS avg_bmi
-        FROM summary_district_risk_factors
+          s.district_code,
+          d.name_th                        AS district_name,
+          d.name_en                        AS district_name_en,
+          d.zone_code,
+          SUM(s.total_screened)::int       AS patient_count,
+          SUM(s.risk_dm)::int              AS risk_dm_count,
+          SUM(s.risk_hpt)::int             AS risk_hpt_count,
+          SUM(s.risk_cvd)::int             AS risk_cvd_count,
+          SUM(s.risk_bmi)::int             AS risk_bmi_count,
+          SUM(s.found_obesity)::int        AS found_obesity_count,
+          SUM(s.found_dyslipidemia)::int   AS found_dyslipidemia_count,
+          SUM(s.found_stroke)::int         AS found_stroke_count
+        FROM summary_disease_age_sex s
+        JOIN ref_districts d        ON d.dcode = s.district_code
+        JOIN mv_summary_districts m ON m.district_code = s.district_code
         {where}
-        GROUP BY district_code, sex, age_group, smoking, exercise
-        ORDER BY district_code, sex, age_group
-    """, tuple(params) or None)
+        GROUP BY s.district_code, d.name_th, d.name_en, d.zone_code
+        ORDER BY s.district_code
+    """, tuple(params))
 
     rows = enforce_k_anonymity(rows, count_field="patient_count")
-    return {"filters_applied": {
-        "district": district, "sex": sex, "age_group": age_group,
-        "smoking": smoking, "exercise": exercise,
-    }, "k_anonymity_threshold": K_ANONYMITY_THRESHOLD, "data": rows}
+
+    return {
+        "filters_applied": {
+            "district": district,
+            "sex": sex_norm,
+            "age_group": age_group,
+            "age_min": age_min,
+            "age_max": age_max,
+            "age_buckets_used": target_buckets,
+            "fiscal_year": fiscal_year,
+            "date_from": date_from,
+            "date_to": date_to,
+            "smoking": smoking,
+            "exercise": exercise,
+            "alcohol": alcohol,
+        },
+        "lifestyle_filters_active": False,
+        "k_anonymity_threshold": K_ANONYMITY_THRESHOLD,
+        "data": rows,
+    }
 
 
 # =========================================================================== #
