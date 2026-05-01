@@ -3287,31 +3287,114 @@ def cancel_upload(
     return {"history_id": req.history_id, "status": "cancelled"}
 
 
+# --------------------------------------------------------------------------- #
+# Step-label mapping — converts the raw progress_step strings written by the
+# pipeline into Thai labels + a stable `step` slug the frontend renders. The
+# pipeline writes labels like "ingest", "ingest — 4,250 / 200,000", "clean",
+# "validate", "export", "refresh hot MVs", "flush caches", "stage files",
+# "done". `_classify_step` normalises these into one of nine slugs.
+# --------------------------------------------------------------------------- #
+
+_STEP_SLUG_TO_TH = {
+    "upload":     "อัปโหลดไฟล์",
+    "ingest":     "นำเข้า CSV",
+    "clean":      "ทำความสะอาดข้อมูล",
+    "profile":    "วิเคราะห์ profile",
+    "validate":   "ตรวจสอบความถูกต้อง",
+    "export":     "บันทึกลงฐานข้อมูล",
+    "mv_refresh": "อัปเดต Materialized Views",
+    "done":       "เสร็จสมบูรณ์",
+    "failed":     "ล้มเหลว",
+}
+
+
+def _classify_step(progress_step: Optional[str], status: str) -> str:
+    """Normalise a free-form progress_step + status into a stable slug.
+
+    Returns one of: upload | ingest | clean | profile | validate | export
+                  | mv_refresh | done | failed
+    """
+    if status in ("error", "validation_failed", "cancelled"):
+        return "failed"
+    if status == "success":
+        return "done"
+    raw = (progress_step or "").lower()
+    # Mid-stage labels carry a delimiter ("ingest — 1,000 / 200,000").
+    head = raw.split("—", 1)[0].strip()
+    if head.startswith("done"):
+        return "done"
+    if head.startswith("ingest"):
+        return "ingest"
+    if head.startswith("clean"):
+        return "clean"
+    if head.startswith("profile"):
+        return "profile"
+    if head.startswith("validate"):
+        return "validate"
+    if head.startswith("export"):
+        return "export"
+    if "refresh" in head or "mv" in head:
+        return "mv_refresh"
+    if "flush" in head:
+        return "mv_refresh"
+    if "stage" in head or "queue" in head or status == "queued":
+        return "upload"
+    # Fallback: still uploading / no progress written yet.
+    return "upload"
+
+
 @upload_excel_router.get("/upload-excel/status/{history_id}")
 def upload_status(
     history_id: int,
     request: Request,
     authorization: Optional[str] = Header(None),
 ):
-    """Polling endpoint for the JSON upload-excel flow."""
+    """Polling endpoint for the JSON upload-excel flow.
+
+    Returns per-stage progress so the admin UI can render a real progress
+    bar and stepper for the long-running ETL (ingest → clean → validate →
+    export → MV refresh). Frontend polls this every ~1.5 s.
+    """
     from auth import require_admin_session_or_bearer
     require_admin_session_or_bearer(request, authorization)
     row = _fetch_history(history_id)
+
+    status = row.get("status") or "queued"
+    progress_step_raw = row.get("progress_step")
+    step_slug = _classify_step(progress_step_raw, status)
+    pct_raw = row.get("progress_pct") or 0
+    try:
+        pct = max(0, min(100, int(pct_raw)))
+    except (TypeError, ValueError):
+        pct = 0
+    if step_slug == "done":
+        pct = 100
+
+    started_at = row.get("started_at")
+    completed_at = row.get("completed_at")
+
     return {
-        "history_id": history_id,
-        "status":           row.get("status"),
-        "validate_status":  row.get("validate_status"),
-        "validate_report":  row.get("validate_report"),
-        "error":            row.get("error_message"),
-        "rows_inserted":    row.get("rows_imported"),
-        "view_status":      row.get("view_refresh_status"),
-        "timestamp":        (
-            row.get("completed_at") or row.get("started_at")
-        ).isoformat() if (row.get("completed_at") or row.get("started_at"))
-        else None,
+        "history_id":        history_id,
+        "status":            status,
+        "step":              step_slug,
+        "step_label_th":     _STEP_SLUG_TO_TH.get(step_slug, step_slug),
+        "progress_step_raw": progress_step_raw,
+        "pct":               pct,
+        "rows_processed":    int(row.get("rows_processed") or 0),
+        "rows_total":        int(row.get("rows_total") or 0),
+        "rows_inserted":     int(row.get("rows_imported") or 0),
+        "started_at":        started_at.isoformat() if started_at else None,
+        "finished_at":       completed_at.isoformat() if completed_at else None,
+        "error":             row.get("error_message"),
+        "validate_status":   row.get("validate_status"),
+        "validate_report":   row.get("validate_report"),
+        "view_status":       row.get("view_refresh_status"),
+        "filename":          row.get("filename"),
+        "timestamp":         (completed_at or started_at).isoformat()
+                             if (completed_at or started_at) else None,
         # Backward-compat keys for legacy frontends.
-        "districtsUpdated": [],
-        "errors": [row["error_message"]] if row.get("error_message") else [],
+        "districtsUpdated":  [],
+        "errors":            [row["error_message"]] if row.get("error_message") else [],
     }
 
 
