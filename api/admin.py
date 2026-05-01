@@ -6,7 +6,7 @@ All routes are mounted under /admin and require session authentication.
 """
 from __future__ import annotations
 
-from typing import Optional, List, Dict
+from typing import Any, Optional, List, Dict, Literal
 
 import hashlib
 import hmac
@@ -2709,7 +2709,8 @@ def _require_admin(authorization: Optional[str]) -> None:
 
 def _create_history_row(*, filename: str, kind: str,
                         size_bytes: int, sha256: str,
-                        uploaded_path: str) -> int:
+                        uploaded_path: str,
+                        load_mode: str = "replace") -> int:
     """Insert a new import_history row in 'queued' state and return its id."""
     conn = None
     try:
@@ -2720,12 +2721,12 @@ def _create_history_row(*, filename: str, kind: str,
                 """
                 INSERT INTO import_history
                   (filename, table_name, file_type, status, started_at,
-                   sha256, size_bytes, kind, uploaded_path)
-                VALUES (%s, %s, %s, 'queued', NOW(), %s, %s, %s, %s)
+                   sha256, size_bytes, kind, uploaded_path, load_mode)
+                VALUES (%s, %s, %s, 'queued', NOW(), %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (filename[:255], "ALL", kind, sha256, size_bytes,
-                 kind, uploaded_path),
+                 kind, uploaded_path, load_mode),
             )
             return cur.fetchone()[0]
     finally:
@@ -2754,6 +2755,7 @@ def _set_history_fields(history_id: int, **fields) -> None:
         "view_refresh_status", "view_refresh_error",
         "rows_imported", "rows_skipped", "error_message",
         "duration_seconds", "completed_at",
+        "load_mode", "detail",
     }
     safe = {k: v for k, v in fields.items() if k in allowed}
     if not safe:
@@ -2833,7 +2835,8 @@ def _safe_extract_zip(zip_path: str, dest_dir: str) -> List[str]:
     return extracted
 
 
-def _run_pipeline_upload(uploaded_path: str, kind: str, history_id: int) -> None:
+def _run_pipeline_upload(uploaded_path: str, kind: str, history_id: int,
+                         load_mode: str = "replace") -> None:
     """Background pipeline for the JSON upload-excel endpoint.
 
     Stages the upload into a BMI_100/-shaped tmpdir, then runs ingest →
@@ -2843,6 +2846,11 @@ def _run_pipeline_upload(uploaded_path: str, kind: str, history_id: int) -> None
         validate rc=2  → status='pending_confirm', tmpdir kept; operator
                          must call /api/admin/upload-excel/confirm
     On success/cancel/error the tmpdir + uploaded_path are cleaned up.
+
+    `load_mode` ∈ {'replace', 'append'} is forwarded to
+    `_resume_pipeline_export` so the rc=0 inline path (and the deferred
+    /confirm path, via `import_history.load_mode`) honour the operator's
+    chosen replace/append semantics.
     """
     import subprocess
     import tempfile
@@ -2956,14 +2964,41 @@ def _run_pipeline_upload(uploaded_path: str, kind: str, history_id: int) -> None
         if r.returncode == 2:
             # Warnings-only — pause for operator confirmation. Tmpdir stays
             # alive; the janitor wipes it after 2h if no confirm/cancel.
+            #
+            # In replace mode, prepend a destructiveness notice so the
+            # operator sees what's about to happen *before* clicking
+            # "ดำเนินการต่อ". We compute a row-count preview cheaply and
+            # fall back to a generic warning if the probe fails — the
+            # message must always render even when the DB probe errors.
+            warn_report = report_md or ""
+            if load_mode == "replace":
+                preview_total = _replace_mode_preview_row_count()
+                if preview_total is None:
+                    notice = (
+                        "## ⚠️ โหมด REPLACE\n\n"
+                        "ระบบจะลบข้อมูลทั้งหมดใน `bma_med.*` ก่อนโหลดใหม่ "
+                        "(จำนวนแถวปัจจุบัน: ตรวจสอบไม่ได้). "
+                        "ข้อมูลปัจจุบันจะถูกลบและไม่สามารถกู้คืนได้.\n\n"
+                        "---\n\n"
+                    )
+                else:
+                    notice = (
+                        f"## ⚠️ โหมด REPLACE\n\n"
+                        f"ระบบจะลบข้อมูลทั้งหมด **{preview_total:,} rows** "
+                        f"ก่อนโหลดใหม่. "
+                        f"ข้อมูลปัจจุบันใน bma_med.* ทั้งหมดจะถูกลบ "
+                        f"ไม่สามารถกู้คืนได้.\n\n"
+                        "---\n\n"
+                    )
+                warn_report = notice + warn_report
             _set_history_fields(
                 history_id,
                 status="pending_confirm",
                 validate_status="warning",
-                validate_report=report_md,
+                validate_report=warn_report,
             )
             paused_for_confirm = True
-            _audit(history_id, "pending_confirm")
+            _audit(history_id, "pending_confirm", load_mode=load_mode)
             return
         if r.returncode != 0:
             _set_history_error(history_id,
@@ -2976,7 +3011,10 @@ def _run_pipeline_upload(uploaded_path: str, kind: str, history_id: int) -> None
         # rc == 0 — clean run; export inline.
         _set_history_fields(history_id, validate_status="pass",
                             validate_report=report_md)
-        _resume_pipeline_export(tmpdir, kind, history_id, env_raw_root=raw_root)
+        _resume_pipeline_export(
+            tmpdir, kind, history_id,
+            env_raw_root=raw_root, load_mode=load_mode,
+        )
 
     except Exception as exc:
         _set_history_error(history_id, "pipeline failed",
@@ -3075,12 +3113,156 @@ def _post_export_sanity_check(history_id: int, conn: object) -> Optional[str]:
     return msg
 
 
+# Schema-level metadata tables that must NEVER be truncated by load_mode=replace.
+# These hold codebooks, source registry, and audit history that survive a
+# data refresh — wiping them would force a re-bootstrap from schema_init.sql.
+_BMA_MED_PROTECTED_TABLES = frozenset({
+    "audit_log",
+    "codebook",
+    "source",
+    "table_origin",
+    "variable",
+})
+
+
+def _replace_mode_preview_row_count() -> Optional[int]:
+    """Best-effort total row count across bma_med data tables.
+
+    Used to render a destructiveness warning ("ระบบจะลบข้อมูลทั้งหมด N rows
+    ก่อนโหลดใหม่") in the pending_confirm validate report. Returns None on
+    any DB error so the surrounding caller can fall back to a generic
+    warning instead of failing the validation gate.
+    """
+    conn = None
+    try:
+        conn = psycopg2.connect(DATABASE_URL_WRITER)
+        conn.autocommit = True
+        tables = _discover_bma_med_data_tables(conn)
+        total = 0
+        for t in tables:
+            with conn.cursor() as cur:
+                try:
+                    cur.execute(f"SELECT COUNT(*) FROM {t}")
+                    row = cur.fetchone()
+                    total += int(row[0]) if row else 0
+                except Exception:
+                    # Table-level COUNT failure is non-fatal — skip and move
+                    # on. Roll back so the next COUNT runs cleanly.
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+        return total
+    except Exception:
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _discover_bma_med_data_tables(conn: Any) -> List[str]:
+    """Discover bma_med data tables eligible for TRUNCATE under load_mode=replace.
+
+    Excludes the protected metadata set (audit_log, codebook, source,
+    table_origin, variable). Returns fully-qualified `bma_med.<name>` strings
+    in stable alphabetical order so logs/assertions are deterministic.
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT tablename
+              FROM pg_tables
+             WHERE schemaname = 'bma_med'
+               AND tablename NOT IN %s
+             ORDER BY tablename
+            """,
+            (tuple(_BMA_MED_PROTECTED_TABLES),),
+        )
+        rows = cur.fetchall() or []
+    finally:
+        cur.close()
+    return [f"bma_med.{r[0]}" for r in rows]
+
+
+def _truncate_bma_med_tables(
+    conn: Any,
+    history_id: int,
+    *,
+    log_prefix: str = "load_mode=replace",
+) -> Dict[str, int]:
+    """Capture row counts then TRUNCATE every bma_med data table CASCADE.
+
+    Runs inside the caller's open transaction (autocommit must be False).
+    The caller is responsible for COMMIT / ROLLBACK around the entire
+    truncate-then-export sequence. Returns the pre-truncate counts so the
+    caller can store them in `import_history.detail.pre_truncate_counts`.
+
+    Permission failure guard: if the runtime role lacks TRUNCATE on bma_med,
+    psycopg2 raises InsufficientPrivilege. We re-raise so the caller can
+    flip status='error' with a setup-style message naming the missing
+    GRANT — never silently swallow.
+    """
+    tables = _discover_bma_med_data_tables(conn)
+    counts: Dict[str, int] = {}
+    for t in tables:
+        try:
+            cur = conn.cursor()
+            try:
+                cur.execute(f"SELECT COUNT(*) FROM {t}")
+                row = cur.fetchone()
+                counts[t] = int(row[0]) if row else 0
+            finally:
+                cur.close()
+        except Exception as exc:
+            # COUNT failure aborts the transaction — re-raise so the caller
+            # can roll back. We avoid the `_table_row_counts` rollback path
+            # because that would also undo any prior work in this same txn.
+            raise RuntimeError(
+                f"pre-truncate COUNT(*) on {t} failed: {_sanitize_error(exc)}"
+            ) from exc
+
+    total_rows = sum(counts.values())
+    logger.info(
+        "%s: would truncate %d tables, totaling %d rows (history=%s)",
+        log_prefix, len(tables), total_rows, history_id,
+    )
+
+    # TRUNCATE in a single statement so CASCADE handles FK ordering for us.
+    # Empty list shouldn't be possible (bma_med always has data tables once
+    # schema_init has run), but be defensive.
+    if tables:
+        cur = conn.cursor()
+        try:
+            cur.execute(f"TRUNCATE TABLE {', '.join(tables)} CASCADE")
+        finally:
+            cur.close()
+        logger.info(
+            "%s: TRUNCATE issued on %d tables (history=%s)",
+            log_prefix, len(tables), history_id,
+        )
+
+    return counts
+
+
 def _resume_pipeline_export(tmpdir: str, kind: str, history_id: int,
-                            *, env_raw_root: Optional[str] = None) -> None:
+                            *, env_raw_root: Optional[str] = None,
+                            load_mode: str = "replace") -> None:
     """Run export → MV refresh → flush caches → mark success.
 
     Used both by the inline rc=0 path and by the /confirm endpoint when the
     operator approves a 'pending_confirm' upload.
+
+    Load-mode handling
+    ------------------
+    * `load_mode='replace'` (default): open a transaction, TRUNCATE every
+      bma_med data table CASCADE, run export.py inside the same transaction.
+      On export failure → ROLLBACK (data preserved). On success → COMMIT.
+    * `load_mode='append'`: skip the truncate, run export.py against the
+      existing data set (UPSERT / merge semantics from export.py).
 
     Silent-failure guard
     --------------------
@@ -3097,8 +3279,19 @@ def _resume_pipeline_export(tmpdir: str, kind: str, history_id: int,
     while running the check is also caught and recorded with a sanitised
     message — never silently swallowed.
     """
+    import json as _json
     import subprocess
     from pathlib import Path as _Path
+
+    # Normalise load_mode — defensive against legacy callers passing None or
+    # an unexpected string. Anything other than 'append' falls back to the
+    # default 'replace' so the user's stated expectation is honoured.
+    if load_mode not in ("replace", "append"):
+        logger.warning(
+            "unknown load_mode=%r — defaulting to 'replace' (history=%s)",
+            load_mode, history_id,
+        )
+        load_mode = "replace"
 
     start = time.time()
     raw_root = env_raw_root
@@ -3111,7 +3304,82 @@ def _resume_pipeline_export(tmpdir: str, kind: str, history_id: int,
     view_status = "skipped"
     view_err: Optional[str] = None
     rows_inserted = 0
+
+    # Transaction handle for load_mode=replace. Held open across the export
+    # subprocess so a fatal error during export rolls the TRUNCATE back.
+    # Typed as Any because psycopg2 has no stubs in this codebase
+    # (mypy.ini sets ignore_missing_imports for psycopg2).
+    truncate_conn: Any = None
+    pre_truncate_counts: Dict[str, int] = {}
+
     try:
+        # ─── load_mode=replace: TRUNCATE bma_med.* CASCADE in a txn ────
+        # Runs BEFORE export so the export subprocess sees an empty target
+        # set. The transaction is held open; export.py runs inside the same
+        # logical "replace operation" and we COMMIT on success or ROLLBACK
+        # on any failure.
+        if load_mode == "replace":
+            _update_progress(history_id, "truncate", 65)
+            try:
+                truncate_conn = psycopg2.connect(DATABASE_URL_WRITER)
+                truncate_conn.autocommit = False
+                pre_truncate_counts = _truncate_bma_med_tables(
+                    truncate_conn, history_id,
+                    log_prefix="load_mode=replace",
+                )
+                # Persist the pre-truncate counts + mode for audit visibility.
+                detail_payload = {
+                    "load_mode": "replace",
+                    "pre_truncate_counts": pre_truncate_counts,
+                }
+                _set_history_fields(
+                    history_id,
+                    load_mode="replace",
+                    detail=_json.dumps(detail_payload),
+                )
+                _audit(history_id, "truncate",
+                       table_count=len(pre_truncate_counts),
+                       total_rows=sum(pre_truncate_counts.values()))
+            except psycopg2.errors.InsufficientPrivilege as exc:
+                # Surface a setup-style message naming the missing GRANT so
+                # the operator can fix it. Distinct from generic export
+                # errors so monitoring can alert separately.
+                if truncate_conn is not None:
+                    try:
+                        truncate_conn.rollback()
+                    except Exception:
+                        pass
+                msg = (
+                    "TRUNCATE failed: runtime DB user lacks privilege on "
+                    "bma_med.*. Grant TRUNCATE (e.g. GRANT bma_med_loader "
+                    f"TO etl_user). Underlying error: {_sanitize_error(exc)}"
+                )
+                _set_history_error(history_id, "TRUNCATE permission denied",
+                                   detail=msg)
+                _audit(history_id, "error",
+                       reason="truncate_permission_denied",
+                       message=_sanitize_error(exc))
+                return
+            except Exception as exc:
+                if truncate_conn is not None:
+                    try:
+                        truncate_conn.rollback()
+                    except Exception:
+                        pass
+                _set_history_error(history_id, "TRUNCATE failed",
+                                   detail=_sanitize_error(exc))
+                _audit(history_id, "error", reason="truncate_failed",
+                       message=_sanitize_error(exc))
+                return
+        else:
+            # append mode — record it so the audit trail is unambiguous.
+            _set_history_fields(
+                history_id,
+                load_mode="append",
+                detail=_json.dumps({"load_mode": "append"}),
+            )
+            _audit(history_id, "append_mode")
+
         # ─── 4/4 export ────────────────────────────────────────────────
         _update_progress(history_id, "export", 75)
         r = subprocess.run(
@@ -3121,11 +3389,34 @@ def _resume_pipeline_export(tmpdir: str, kind: str, history_id: int,
             timeout=PIPELINE_TIMEOUT_EXPORT,
         )
         if r.returncode != 0:
+            # Roll back the open TRUNCATE transaction so the prior data set
+            # is preserved on a failed replace. (No-op for append mode.)
+            if truncate_conn is not None:
+                try:
+                    truncate_conn.rollback()
+                except Exception:
+                    pass
             _set_history_error(history_id, "export failed",
                                detail=(r.stderr or r.stdout or "")[-4000:])
             _audit(history_id, "error", reason="export_failed",
                    rc=r.returncode)
             return
+
+        # Export subprocess returned rc=0 — commit the TRUNCATE so it's
+        # durable. In append mode this is a no-op (truncate_conn is None).
+        if truncate_conn is not None:
+            try:
+                truncate_conn.commit()
+            except Exception as exc:
+                # Commit shouldn't fail in practice but be defensive.
+                _set_history_error(
+                    history_id, "TRUNCATE commit failed",
+                    detail=_sanitize_error(exc),
+                )
+                _audit(history_id, "error",
+                       reason="truncate_commit_failed",
+                       message=_sanitize_error(exc))
+                return
 
         # Best-effort row count from export stdout — never load-bearing.
         try:
@@ -3205,12 +3496,27 @@ def _resume_pipeline_export(tmpdir: str, kind: str, history_id: int,
         _audit(history_id, "success",
                rows_inserted=rows_inserted, view_status=view_status)
     except Exception as exc:
+        # Roll back the truncate transaction if it's still open so the prior
+        # data set is preserved on any unhandled error after truncate.
+        if truncate_conn is not None:
+            try:
+                truncate_conn.rollback()
+            except Exception:
+                pass
         _set_history_error(history_id, "export pipeline failed",
                            detail=_sanitize_error(exc))
         _audit(history_id, "error", reason="export_exception",
                message=_sanitize_error(exc))
         logger.exception("upload-excel export failed (history=%s)", history_id)
     finally:
+        # Always close the truncate transaction connection — by this point
+        # the txn has been committed or rolled back along the success/fail
+        # paths above; we just need to release the connection.
+        if truncate_conn is not None:
+            try:
+                truncate_conn.close()
+            except Exception:
+                pass
         # Done with the staged dir whether success or fail.
         shutil.rmtree(tmpdir, ignore_errors=True)
         _set_history_fields(history_id, tmpdir_path=None)
@@ -3232,9 +3538,17 @@ async def upload_screening(
     background: BackgroundTasks,
     request: Request,
     file: UploadFile = File(...),
+    load_mode: Literal["replace", "append"] = Form("replace"),
     authorization: Optional[str] = Header(None),
 ):
     """Accept an .xlsx OR .zip upload, stream to disk, kick off the pipeline.
+
+    `load_mode` controls how the new data set replaces or merges with what's
+    already in `bma_med.*`:
+      * 'replace' (default): TRUNCATE every bma_med data table before
+        export. Matches the operator's "ล้างกระดาน เริ่มใหม่" expectation.
+      * 'append': run the existing UPSERT/merge path so incremental loads
+        (e.g. monthly snapshots) build on top of prior data.
 
     Backward-compat: returns the legacy keys `districtsUpdated` and `errors`
     so older frontends keep working.
@@ -3314,6 +3628,7 @@ async def upload_screening(
         history_id = _create_history_row(
             filename=fname, kind=kind, size_bytes=total,
             sha256=sha_hex, uploaded_path=tmp.name,
+            load_mode=load_mode,
         )
     except Exception as exc:
         try:
@@ -3327,8 +3642,10 @@ async def upload_screening(
         )
 
     _audit(history_id, "queue", filename=fname, kind=kind,
-           size_bytes=total, sha256=sha_hex)
-    background.add_task(_run_pipeline_upload, tmp.name, kind, history_id)
+           size_bytes=total, sha256=sha_hex, load_mode=load_mode)
+    background.add_task(
+        _run_pipeline_upload, tmp.name, kind, history_id, load_mode,
+    )
 
     return {
         "history_id": history_id,
@@ -3379,9 +3696,19 @@ def confirm_upload(
             detail="staged tmpdir missing — re-upload required",
         )
 
+    # Resume with the load_mode the operator chose at upload time so the
+    # confirm path matches the original intent. Default to 'replace' for
+    # legacy rows that pre-date the load_mode column.
+    resume_load_mode = row.get("load_mode") or "replace"
+    if resume_load_mode not in ("replace", "append"):
+        resume_load_mode = "replace"
+
     _set_history_fields(req.history_id, status="running")
-    _audit(req.history_id, "confirm")
-    background.add_task(_resume_pipeline_export, tmpdir, kind, req.history_id)
+    _audit(req.history_id, "confirm", load_mode=resume_load_mode)
+    background.add_task(
+        _resume_pipeline_export, tmpdir, kind, req.history_id,
+        load_mode=resume_load_mode,
+    )
     return {
         "history_id": req.history_id,
         "status": "confirmed",
@@ -3518,6 +3845,7 @@ def upload_status(
         "validate_report":   row.get("validate_report"),
         "view_status":       row.get("view_refresh_status"),
         "filename":          row.get("filename"),
+        "load_mode":         row.get("load_mode"),
         "timestamp":         (completed_at or started_at).isoformat()
                              if (completed_at or started_at) else None,
         # Backward-compat keys for legacy frontends.

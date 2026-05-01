@@ -281,6 +281,7 @@ def test_export_insufficient_privilege_marks_history_as_error(
         kind="xlsx",
         history_id=99,
         env_raw_root="/tmp/does-not-exist",
+        load_mode="append",
     )
 
     # Status must be 'error' — never 'success'.
@@ -335,6 +336,7 @@ def test_export_silent_zero_rows_marks_history_as_error(
         kind="xlsx",
         history_id=99,
         env_raw_root="/tmp/does-not-exist",
+        load_mode="append",
     )
 
     assert store.row["status"] == "error", store.row
@@ -378,6 +380,7 @@ def test_export_legitimate_success_still_flips_to_success(
         kind="xlsx",
         history_id=99,
         env_raw_root="/tmp/does-not-exist",
+        load_mode="append",
     )
 
     assert store.row["status"] == "success", store.row
