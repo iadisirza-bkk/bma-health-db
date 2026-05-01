@@ -184,9 +184,13 @@ def _fetch_districts() -> list:
     match the production /api/v2/summary/overview endpoint, otherwise the
     agent reports only the alphabetically-last source ("portal").
     """
+    # NOTE: zone_code lives on ref_districts (rd), NOT on summary_district_disease (d).
+    # Reading `d.zone_code` here was a stale schema reference from the pre-S1 era
+    # when zone_code was denormalised onto the summary table — caused chat tool
+    # to throw "column d.zone_code does not exist" on every health_data query.
     return execute_query("""
         SELECT d.district_code,
-               MAX(d.zone_code) AS zone_code,
+               MAX(rd.zone_code) AS zone_code,
                SUM(d.total_screened) AS total_screened,
                SUM(d.risk_dm_count) AS risk_dm_count,
                SUM(d.risk_hpt_count) AS risk_hpt_count,
