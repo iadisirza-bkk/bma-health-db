@@ -57,7 +57,17 @@ def suppress_scalar_if_small(value: Optional[int]) -> Optional[int]:
 # only) so public exposure is by design.
 _PUBLIC_PATHS = frozenset({"/health", "/docs", "/redoc", "/openapi.json", "/metrics"})
 # Path prefixes exempt from API key
-_PUBLIC_PREFIXES = ("/api/auth/",)
+#
+# /api/admin/upload-excel* is exempt because:
+#   1. Next.js Edge middleware (which injects X-API-Key in dev) has a 4MB
+#      body cap and 30s timeout — large uploads (>4MB) get truncated by
+#      the middleware buffer, leading to "Empty upload" 400s. Bypassing
+#      middleware on this path requires the FastAPI side to also accept
+#      requests without X-API-Key.
+#   2. The route is independently auth-protected by `require_admin_
+#      session_or_bearer` (JWT cookie OR BMA_ADMIN_TOKEN bearer), so
+#      removing X-API-Key here doesn't widen the security surface.
+_PUBLIC_PREFIXES = ("/api/auth/", "/api/admin/upload-excel")
 
 
 class APIKeyMiddleware(BaseHTTPMiddleware):
