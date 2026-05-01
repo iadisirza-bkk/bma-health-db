@@ -69,39 +69,49 @@ except FileNotFoundError:
     SYSTEM_PROMPT = "You are a health data analyst for Bangkok. Respond in Thai. Use tools to query data."
 
 # ---------------------------------------------------------------------------
-# Topic guardrail — reject off-topic before calling LLM
+# Topic guardrail — reject only OBVIOUSLY-off-topic messages before LLM call
+#
+# Previously this was an inclusive keyword allowlist (`_ON_TOPIC_KEYWORDS`)
+# that returned False for anything that didn't mention an explicit health
+# term. That misclassified legitimate BMA-health queries (e.g. "ภาพรวม"
+# alone) as off-topic and the orchestrator returned a hard-coded refusal
+# without ever calling the LLM. Worse, the system prompt also literally
+# instructed Gemma to copy the same refusal text, so on the rare occasion
+# the keyword filter let a query through, Gemma still refused — emitting
+# the prompt's example phrase verbatim.
+#
+# New approach: keep a SMALL deny-list of clearly-unrelated patterns
+# (recipes, crypto prices, weather, code-writing) and let the LLM-with-
+# tools decide for everything else. The LLM is instructed (via the
+# rewritten skill prompt) to answer in-scope questions by calling tools,
+# and refuse only obviously-off-topic ones.
 # ---------------------------------------------------------------------------
 
-_ON_TOPIC_KEYWORDS = {
-    # Thai health terms
-    "สุขภาพ", "คัดกรอง", "เบาหวาน", "ความดัน", "อ้วน", "ไขมัน", "หัวใจ", "หลอดเลือด",
-    "ไต", "โลหิตจาง", "ทางเดินหายใจ", "โรค", "เสี่ยง", "ป่วย", "ตรวจ", "แลป", "ผลเลือด",
-    "BMI", "น้ำหนัก", "ส่วนสูง", "เอว", "ความดันโลหิต", "น้ำตาล", "คอเลสเตอรอล",
-    "เขต", "โซน", "กทม", "กรุงเทพ", "เขตสุขภาพ", "ศูนย์บริการสาธารณสุข",
-    "สถิติ", "เปรียบเทียบ", "แนวโน้ม", "กราฟ", "กลุ่มอายุ", "เพศ", "อาชีพ",
-    "รายงาน", "PDF", "สไลด์", "ภาพรวม", "วิเคราะห์", "สรุป", "ข้อมูล",
-    "PM2.5", "ฝุ่น", "มลพิษ", "อากาศ", "NCD",
-    "สูบบุหรี่", "เหล้า", "แอลกอฮอล์", "ออกกำลังกาย", "พฤติกรรม",
-    "ซึมเศร้า", "สุขภาพจิต", "PHQ", "ความเครียด",
-    "รพ.", "โรงพยาบาล", "1555", "คำแนะนำ",
-    # New insight-tool terms (province / facility / cascade / profile)
-    "ตจว", "ต่างจังหวัด", "นอกกทม", "นอก กทม", "จังหวัด", "ภูมิภาค", "ภาค",
-    "คลินิก", "ร้านยา", "facility", "สถานพยาบาล", "หน่วยบริการ",
-    "cascade", "เส้นทาง", "ขั้นตอน", "ผ่าน",
-    "โปรไฟล์", "profile", "ลักษณะ", "อันดับ", "สูงสุด", "ต่ำสุด", "ranking",
-    # Time/context terms (allow follow-up corrections)
-    "ปี", "ปีนี้", "ปีที่แล้ว", "เดือน", "ไตรมาส", "2024", "2025", "2026",
-    # English health terms
-    "health", "screening", "diabetes", "hypertension", "obesity", "disease",
-    "risk", "district", "zone", "bangkok", "report", "chart", "compare",
-    "prevalence", "lab", "cholesterol", "bmi", "blood", "year", "trend",
-    "province", "region", "monthly", "quarter", "phq", "phq-9", "stress",
-}
+# Substrings that, when found case-insensitively in the user message,
+# trigger a hard refusal without consulting the LLM. Keep this list
+# narrow on purpose: a false-negative here just means the LLM gets to
+# reject (which it can do per the skill prompt); a false-positive means
+# we wrongly refuse a legitimate health question, which is the bug we
+# are fixing.
+_HARD_OFF_TOPIC = (
+    # Cooking / recipes
+    "วิธีทำพาสต้า", "วิธีทำอาหาร", "สูตรอาหาร", "สูตรขนม", "วิธีทำขนม",
+    "recipe", "how to cook",
+    # Finance / crypto
+    "ราคาบิทคอยน์", "ราคา bitcoin", "ราคาหุ้น", "ราคาทอง",
+    "stock price", "crypto price", "bitcoin price",
+    "mortgage", "ลอตเตอรี่", "หวย",
+    # Weather
+    "พยากรณ์อากาศ", "weather forecast", "ฝนตกไหม",
+    # Code / generic dev help
+    "เขียนโค้ด python", "เขียนโปรแกรม", "write code", "write a python",
+    # Entertainment
+    "แต่งเพลง", "แต่งกลอน", "เล่าเรื่อง", "joke", "เรื่องตลก",
+)
 
 _REFUSAL_RESPONSE = (
-    "ขออภัยค่ะ ฉันตอบได้เฉพาะเรื่องข้อมูล**โครงการคัดกรองสุขภาพกรุงเทพมหานคร**เท่านั้น "
-    "เช่น สถิติโรค สุขภาพรายเขต/โซน กลุ่มเสี่ยง ผลแลป แนวโน้ม หรือขอรายงาน\n\n"
-    "หากมีคำถามเกี่ยวกับสุขภาพส่วนบุคคล โปรดโทรสายด่วนสุขภาพ **1555**"
+    "ขออภัยค่ะ ฉันตอบได้เฉพาะข้อมูลโครงการคัดกรองสุขภาพ กทม. "
+    "หากต้องการคำแนะนำสุขภาพส่วนบุคคล โทรสายด่วน **1555**"
 )
 
 
@@ -112,14 +122,21 @@ SYNTH_PROMPT = (
     "2. ถ้าข้อมูลบอก 333,841 ต้องเขียน 333,841 ไม่ใช่ 333,900\n"
     "3. ถ้าข้อมูลไม่มีตัวเลขนั้น ห้ามใส่ ให้ข้ามไป\n"
     "4. ห้ามคำนวณจำนวนคนจาก % เด็ดขาด\n"
-    "5. ห้ามเพิ่มข้อมูลที่ไม่ได้มาจาก API ถ้าข้อมูลให้มาไม่พอ ให้บอกว่ามีข้อมูลแค่นี้"
+    "5. ห้ามเพิ่มข้อมูลที่ไม่ได้มาจาก API ถ้าข้อมูลให้มาไม่พอ ให้บอกว่ามีข้อมูลแค่นี้\n"
+    "6. ห้ามแต่ง 'เป้าหมาย' หรือเลขใดที่ tool ไม่ได้ส่งมา — ถ้าไม่มีให้ใส่ '—'"
 )
 
 
-def _is_on_topic(message: str) -> bool:
-    """Quick keyword check — returns True if message likely relates to BMA health screening."""
+def _is_obviously_off_topic(message: str) -> bool:
+    """Permissive guardrail: True only when the query is clearly NOT about BMA health screening.
+
+    Returns True only when the message contains a phrase from the small
+    `_HARD_OFF_TOPIC` deny-list (recipes, finance, weather, generic code,
+    entertainment). Anything ambiguous is assumed in-scope; the LLM (with
+    the tool-first skill prompt) decides whether to call a tool or refuse.
+    """
     lower = message.lower()
-    return any(kw.lower() in lower for kw in _ON_TOPIC_KEYWORDS)
+    return any(phrase in lower for phrase in _HARD_OFF_TOPIC)
 
 
 class OpenMultiAgent:
@@ -178,8 +195,10 @@ class OpenMultiAgent:
 
     async def process(self, user_message: str, context: dict | None = None) -> dict:
         """Non-streaming: returns {content, visualizations}."""
-        # Guardrail: reject off-topic
-        if not _is_on_topic(user_message):
+        # Hard guardrail: refuse only OBVIOUSLY-off-topic messages.
+        # In-scope and ambiguous messages reach the LLM, which (per the
+        # skill prompt) decides whether to call a tool or refuse.
+        if _is_obviously_off_topic(user_message):
             return {"content": _REFUSAL_RESPONSE, "visualizations": []}
 
         if not self.cb.can_execute() or not await self._adapters_healthy():
@@ -208,15 +227,16 @@ class OpenMultiAgent:
                     synth_resp = await self.adapter.chat(synth_msgs)
                     text = synth_resp.content
 
-            # --- Gap #4 fix: add sample size warning for small datasets ---
-            if text.strip():
-                from agents.tools.helpers import get_total_screened, load_data
-                try:
-                    total = get_total_screened(load_data())
-                    if total < 1000:
-                        text += f"\n\n> **หมายเหตุ**: ข้อมูลจากกลุ่มตัวอย่าง {total:,} คน (เป้าหมาย 1.6 ล้านคน) สัดส่วนอาจเปลี่ยนแปลงเมื่อมีข้อมูลเพิ่ม"
-                except Exception:
-                    pass
+            # NOTE: a previous "Gap #4 fix" appended a hard-coded
+            # "เป้าหมาย 1.6 ล้านคน" suffix here whenever the local sample
+            # size was below 1000. That string was the source of the
+            # dashboard widget showing "เป้าหมาย 1.6 ล้าน" — the LLM
+            # never said it, the orchestrator pasted it on every reply.
+            # The target number is not part of the screening dataset and
+            # tools never return it; if the operator wants to expose a
+            # programmatic target, add an explicit tool that returns the
+            # real value (e.g. ``query_api endpoint=headline_kpi``) and
+            # let the synthesiser cite that.
 
             self.cb.record_success()
             return {"content": text, "visualizations": viz}
@@ -230,8 +250,10 @@ class OpenMultiAgent:
                              conv_history: list[dict] | None = None) -> AsyncGenerator[str, None]:
         """Streaming: yields SSE events with agent status animation."""
 
-        # Guardrail: reject off-topic
-        if not _is_on_topic(user_message):
+        # Hard guardrail: refuse only OBVIOUSLY-off-topic messages.
+        # In-scope and ambiguous messages reach the LLM, which (per the
+        # skill prompt) decides whether to call a tool or refuse.
+        if _is_obviously_off_topic(user_message):
             yield format_sse({"type": "content", "text": _REFUSAL_RESPONSE})
             yield format_sse({"type": "done"})
             return
@@ -419,19 +441,20 @@ class OpenMultiAgent:
                 return
             tool_context = "\n".join(useful_results)
 
-            # --- Gap #4 fix: inject sample size context ---
-            sample_note = ""
-            try:
-                from agents.tools.helpers import get_total_screened, load_data
-                total = get_total_screened(load_data())
-                if total < 1000:
-                    sample_note = f"\nหมายเหตุ: ข้อมูลจากกลุ่มตัวอย่าง {total:,} คน (เป้า 1.6 ล้าน) ให้ระบุในคำตอบด้วย"
-            except Exception:
-                pass
+            # NOTE: a previous "Gap #4 fix" injected a "เป้า 1.6 ล้าน"
+            # hint into the synthesiser prompt whenever the local sample
+            # size was below 1000. That nudge was the upstream cause of
+            # Gemma echoing "เป้าหมาย 1.6 ล้าน" verbatim — the model was
+            # never told a real target; we were just suggesting one. The
+            # target number is not part of the screening dataset, so it
+            # has been removed. To surface a real target, register a
+            # tool (e.g. ``query_api endpoint=headline_kpi``) that
+            # returns the value and let the synthesiser cite the tool's
+            # output.
 
             synth_messages = [
                 {"role": "system", "content": SYNTH_PROMPT},
-                {"role": "user", "content": f"ข้อมูลจาก API (ห้ามใช้ตัวเลขอื่นนอกจากนี้):\n{tool_context}{sample_note}\n\nสรุปข้อมูลนี้ตอบคำถาม: {user_message}"},
+                {"role": "user", "content": f"ข้อมูลจาก API (ห้ามใช้ตัวเลขอื่นนอกจากนี้):\n{tool_context}\n\nสรุปข้อมูลนี้ตอบคำถาม: {user_message}"},
             ]
 
             try:
