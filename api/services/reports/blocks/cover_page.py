@@ -53,6 +53,7 @@ class CoverPageBlock(ContentBlock):
         else:
             title = ctx.descriptor.title_th
         # Same fallback rule on subtitle.
+        subtitle: Optional[str]
         if ctx.lang == "en" and params.subtitle_en:
             subtitle = params.subtitle_en
         else:

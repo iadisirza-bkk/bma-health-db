@@ -28,7 +28,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 from agents.adapters.base import AdapterConfig, LLMAdapter

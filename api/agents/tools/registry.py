@@ -17,9 +17,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 from agents.tools.base import BaseTool, ToolResult
 from agents.tools.spec import ToolSpec, import_tool_class
@@ -47,14 +47,14 @@ class ToolRegistry:
     def list_tools(self) -> list[BaseTool]:
         return list(self._tools.values())
 
-    def to_openai_schemas(self) -> list[dict]:
+    def to_openai_schemas(self) -> list[dict[str, Any]]:
         return [t.to_openai_schema() for t in self._tools.values()]
 
-    def to_filtered_schemas(self, tool_names: list[str]) -> list[dict]:
+    def to_filtered_schemas(self, tool_names: list[str]) -> list[dict[str, Any]]:
         """Return schemas for only the specified tools."""
         return [t.to_openai_schema() for t in self._tools.values() if t.name in tool_names]
 
-    def execute_sync(self, name: str, args: dict) -> ToolResult:
+    def execute_sync(self, name: str, args: dict[str, Any]) -> ToolResult:
         """Execute a tool synchronously."""
         tool = self._tools.get(name)
         if not tool:
@@ -66,7 +66,7 @@ class ToolRegistry:
             logger.exception("Tool '%s' failed: %s", name, e)
             return ToolResult(text=f"เครื่องมือ {name} เกิดข้อผิดพลาด กรุณาลองใหม่")
 
-    async def execute(self, name: str, args: dict) -> ToolResult:
+    async def execute(self, name: str, args: dict[str, Any]) -> ToolResult:
         """Execute a tool from async context (wraps sync in thread)."""
         return await asyncio.to_thread(self.execute_sync, name, args)
 

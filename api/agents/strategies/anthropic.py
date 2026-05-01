@@ -17,6 +17,7 @@ Why have a strategy at all then? Two reasons:
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from agents.strategies.base import ToolCallStrategy
 
@@ -31,7 +32,7 @@ class AnthropicToolUseStrategy(ToolCallStrategy):
     a raw provider response.
     """
 
-    def inject_tools(self, messages: list[dict], tools: list[dict]) -> tuple[list[dict], dict]:
+    def inject_tools(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Tools are passed through untouched.
 
         AnthropicAdapter consumes the OpenAI-style `tools` list directly via the
@@ -43,7 +44,7 @@ class AnthropicToolUseStrategy(ToolCallStrategy):
         """
         return messages, {}
 
-    def parse_tool_calls(self, response: dict) -> list[dict]:
+    def parse_tool_calls(self, response: dict[str, Any]) -> list[dict[str, Any]]:
         """Extract tool calls from an already-normalized response.
 
         The adapter has already mapped Anthropic `tool_use` blocks to the
@@ -57,7 +58,7 @@ class AnthropicToolUseStrategy(ToolCallStrategy):
             return choices[0].get("message", {}).get("tool_calls", []) or []
 
         # Raw Anthropic response shape:
-        out: list[dict] = []
+        out: list[dict[str, Any]] = []
         for block in response.get("content", []) or []:
             if isinstance(block, dict) and block.get("type") == "tool_use":
                 import json as _json

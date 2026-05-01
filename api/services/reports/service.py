@@ -50,6 +50,27 @@ from services.reports.spec import (
     SectionSpec,
 )
 
+# Observability — metrics module exposes no-op stubs when prometheus_client
+# is missing, so this import is safe in any environment.
+try:
+    from observability.metrics import (
+        report_cache_hit,
+        report_render_duration,
+        report_render_total,
+        track_duration,
+    )
+except Exception:  # pragma: no cover - defensive
+    report_cache_hit = report_render_duration = report_render_total = None  # type: ignore[assignment]
+
+    from contextlib import contextmanager
+    from typing import Iterator as _Iterator
+
+    @contextmanager
+    def track_duration(
+        histogram: Any, labels: Any = None
+    ) -> "_Iterator[None]":
+        yield
+
 logger = logging.getLogger("api.services.reports.service")
 
 
@@ -180,6 +201,38 @@ class ReportService:
         want to thrash the shared cache directory. When supplied, the
         cache short-circuit is bypassed and no .hash sidecar is written.
         """
+        # Wrap the full render in a duration histogram + status counter.
+        # Cache short-circuits also count as "ok" — they're a successful
+        # outcome from the caller's POV.
+        with track_duration(report_render_duration, {"report_id": report_id, "fmt": fmt}):
+            try:
+                produced = await self._render_inner(
+                    report_id, fmt, lang, params=params, out_path=out_path
+                )
+            except Exception:
+                if report_render_total is not None:
+                    report_render_total.labels(
+                        report_id=report_id, fmt=fmt, lang=lang, status="error"
+                    ).inc()
+                raise
+            if report_render_total is not None:
+                report_render_total.labels(
+                    report_id=report_id, fmt=fmt, lang=lang, status="ok"
+                ).inc()
+            return produced
+
+    async def _render_inner(
+        self,
+        report_id: str,
+        fmt: str,
+        lang: str = "th",
+        *,
+        params: Optional[Mapping[str, Any]] = None,
+        out_path: Optional[Path] = None,
+    ) -> Path:
+        """Original render pipeline. Split out so the public ``render``
+        wrapper can attach metrics without indenting the entire body.
+        """
         desc = self._descriptors.get(report_id)
         desc = _resolve_descriptor(desc, params)
         self._validate_request(desc, fmt, lang)
@@ -199,6 +252,7 @@ class ReportService:
         explicit_out_path = out_path is not None
         if not explicit_out_path:
             out_path = self._cache_path(report_id, fmt, lang)
+        assert out_path is not None  # narrowed by branch above
 
         # ------------------------------------------------------------
         # Cache check — short-circuit if we have a fresh artefact whose
@@ -217,6 +271,13 @@ class ReportService:
                 "Report cache hit: %s/%s/%s -> %s",
                 report_id, fmt, lang, out_path,
             )
+            if report_cache_hit is not None:
+                try:
+                    report_cache_hit.labels(
+                        report_id=report_id, fmt=fmt, lang=lang
+                    ).inc()
+                except Exception:
+                    logger.debug("report_cache_hit inc failed", exc_info=True)
             return out_path
 
         # ------------------------------------------------------------
@@ -407,9 +468,9 @@ class ReportService:
         # collect() is async on the ABC; tolerate sync overrides too so
         # legacy / test blocks that haven't been migrated still work.
         try:
-            collect_result = block.collect(ctx, params_model)
+            collect_result: Any = block.collect(ctx, params_model)
             if hasattr(collect_result, "__await__"):
-                data = await collect_result  # type: ignore[misc]
+                data = await collect_result
             else:
                 data = collect_result  # sync override
         except Exception as exc:

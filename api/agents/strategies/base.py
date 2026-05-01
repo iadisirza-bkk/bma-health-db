@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 
 class ToolCallStrategy(ABC):
     """Handles model-specific tool injection, parsing, and artifact stripping."""
 
     @abstractmethod
-    def inject_tools(self, messages: list[dict], tools: list[dict]) -> tuple[list[dict], dict]:
+    def inject_tools(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Inject tools into the request.
         Returns (modified_messages, extra_request_params).
         Gemma: tools go in system prompt, extra_params={}
@@ -17,7 +18,7 @@ class ToolCallStrategy(ABC):
         ...
 
     @abstractmethod
-    def parse_tool_calls(self, response: dict) -> list[dict]:
+    def parse_tool_calls(self, response: dict[str, Any]) -> list[dict[str, Any]]:
         """Extract tool calls from response. Returns OpenAI-normalized format."""
         ...
 

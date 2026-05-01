@@ -6,7 +6,7 @@ Returns download URLs that the frontend/other routers can serve.
 from __future__ import annotations
 
 import logging
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -37,7 +37,7 @@ class GenerateReportTool(BaseTool):
         "required": ["report_type"],
     }
 
-    def execute(self, args: dict) -> ToolResult:
+    def execute(self, args: dict[str, Any]) -> ToolResult:
         args = self.Parameters(**args).model_dump(exclude_none=True)
         report_type = args.get("report_type", "comprehensive")
         disease = normalize_disease(args.get("disease"))

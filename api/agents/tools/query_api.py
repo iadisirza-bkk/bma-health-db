@@ -63,13 +63,14 @@ ENDPOINT_CATALOG = {
 }
 
 
-def _query(sql: str, params: tuple = None) -> list[dict]:
+def _query(sql: str, params: Optional[tuple[Any, ...]] = None) -> list[dict[str, Any]]:
     """Execute SQL and return results."""
     from database import execute_query
-    return execute_query(sql, params)
+    from typing import cast as _cast
+    return _cast("list[dict[str, Any]]", execute_query(sql, params))
 
 
-def _scalar(sql: str, params: tuple = None):
+def _scalar(sql: str, params: Optional[tuple[Any, ...]] = None) -> Any:
     """Execute SQL and return single value."""
     from database import execute_scalar
     return execute_scalar(sql, params)
@@ -79,7 +80,7 @@ def _scalar(sql: str, params: tuple = None):
 # Query implementations — one function per endpoint group
 # ---------------------------------------------------------------------------
 
-def _overview() -> dict:
+def _overview() -> dict[str, Any]:
     rows = _query("""
         SELECT d.zone_code, COUNT(DISTINCT d.district_code) AS districts,
                SUM(d.total_screened) AS total_screened,
@@ -104,7 +105,7 @@ _DISEASE_TH = {
 }
 
 
-def _headline_kpi() -> dict:
+def _headline_kpi() -> dict[str, Any]:
     total = int(_scalar("SELECT SUM(total_screened) FROM summary_district_disease") or 0)
     diseases = _query("""
         SELECT 'diabetes' AS disease, SUM(risk_dm_count) AS at_risk FROM summary_district_disease
@@ -129,7 +130,7 @@ def _headline_kpi() -> dict:
     }
 
 
-def _yoy_comparison() -> dict:
+def _yoy_comparison() -> dict[str, Any]:
     """Quarterly screening trend from mv_visit_resolved (v3 schema)."""
     from security import K_ANONYMITY_THRESHOLD
     rows = _query("""
@@ -167,7 +168,7 @@ def _yoy_comparison() -> dict:
     return {"summary": "\n".join(lines)}
 
 
-def _moph_targets() -> dict:
+def _moph_targets() -> dict[str, Any]:
     total = _scalar("SELECT SUM(total_screened) FROM summary_district_disease") or 0
     risk_dm = _scalar("SELECT SUM(risk_dm_count) FROM summary_district_disease") or 0
     risk_hpt = _scalar("SELECT SUM(risk_hpt_count) FROM summary_district_disease") or 0
@@ -181,7 +182,7 @@ def _moph_targets() -> dict:
     ]}
 
 
-def _ncd_cascade() -> dict:
+def _ncd_cascade() -> dict[str, Any]:
     total = int(_scalar("SELECT SUM(total_screened) FROM summary_district_disease") or 0)
     at_risk = int(_scalar(
         "SELECT SUM(risk_dm_count + risk_hpt_count + risk_cvd_count) "
@@ -202,7 +203,7 @@ def _ncd_cascade() -> dict:
     ]}
 
 
-def _screening_coverage() -> dict:
+def _screening_coverage() -> dict[str, Any]:
     """Coverage % per district = total_screened / population.
 
     Aggregates across data_source so each district appears once.
@@ -222,7 +223,7 @@ def _screening_coverage() -> dict:
     return {"districts": rows}
 
 
-def _lab_summary() -> dict:
+def _lab_summary() -> dict[str, Any]:
     """Lab averages per BKK district (filtered to ref_districts)."""
     rows = _query("""
         SELECT l.district_code,
@@ -244,7 +245,7 @@ def _lab_summary() -> dict:
     return {"districts": rows}
 
 
-def _lab_city_average() -> dict:
+def _lab_city_average() -> dict[str, Any]:
     """City-wide BKK lab averages, weighted by patient count.
 
     Filters to ref_districts (50 BKK districts) so the result reflects "กทม."
@@ -286,7 +287,7 @@ def _lab_city_average() -> dict:
     }
 
 
-def _bmi_distribution() -> dict:
+def _bmi_distribution() -> dict[str, Any]:
     """City-wide BMI bucket distribution from summary_bmi_waist MV.
 
     Filters to BKK districts (^10\\d\\d codes) and sex='all' to avoid double-
@@ -330,7 +331,7 @@ def _bmi_distribution() -> dict:
     }
 
 
-def _cost_per_screening() -> dict:
+def _cost_per_screening() -> dict[str, Any]:
     total = _scalar("SELECT SUM(total_screened) FROM summary_district_disease") or 0
     cost_per_person = 350  # NHSO reference 2567
     return {
@@ -342,7 +343,7 @@ def _cost_per_screening() -> dict:
     }
 
 
-def _budget_allocation() -> dict:
+def _budget_allocation() -> dict[str, Any]:
     """Population-weighted budget allocation per district.
 
     Aggregates across data_source so each district appears once.
@@ -361,7 +362,7 @@ def _budget_allocation() -> dict:
     return {"model": "population_weighted_60pct_target", "cost_per_person_thb": 350, "districts": rows}
 
 
-def _screening_tests() -> dict:
+def _screening_tests() -> dict[str, Any]:
     """EKG / chest x-ray / vision / DR screening rates.
 
     summary_screening_tests was never built under v3. raw_vitalsigns has the
@@ -375,7 +376,7 @@ def _screening_tests() -> dict:
     }
 
 
-def _chronic_history() -> dict:
+def _chronic_history() -> dict[str, Any]:
     """Self-reported chronic disease + treatment + vaccination + exercise.
 
     Source table summary_chronic_history was never built; raw_homehealth is
@@ -389,7 +390,7 @@ def _chronic_history() -> dict:
     }
 
 
-def _family_history() -> dict:
+def _family_history() -> dict[str, Any]:
     """Family disease history (parent DM/HPT/stroke/heart/kidney).
 
     Source table summary_family_history was never built; raw_homehealth is
@@ -400,7 +401,7 @@ def _family_history() -> dict:
     }
 
 
-def _comorbidity_matrix() -> dict:
+def _comorbidity_matrix() -> dict[str, Any]:
     """Person-level disease co-occurrence from summary_comorbidity MV.
 
     Filters to the 50 BKK districts. Returns city-wide totals plus a
@@ -449,7 +450,7 @@ def _comorbidity_matrix() -> dict:
     }
 
 
-def _repeat_screening() -> dict:
+def _repeat_screening() -> dict[str, Any]:
     """Repeat-visit distribution from mv_visit_resolved (v3)."""
     from security import K_ANONYMITY_THRESHOLD
     rows = _query("""
@@ -467,7 +468,7 @@ def _repeat_screening() -> dict:
     return {"visit_distribution": rows}
 
 
-def _screening_locations() -> dict:
+def _screening_locations() -> dict[str, Any]:
     rows = _query("""
         SELECT code, name_th, name_en, facility_type, zone_code, district_code,
                latitude, longitude
@@ -478,7 +479,7 @@ def _screening_locations() -> dict:
     return {"facilities": rows, "total": len(rows)}
 
 
-def _zone_comparison() -> dict:
+def _zone_comparison() -> dict[str, Any]:
     rows = _query("""
         SELECT d.zone_code,
                SUM(d.total_screened) AS total_screened,
@@ -493,7 +494,7 @@ def _zone_comparison() -> dict:
     return {"zones": rows}
 
 
-def _executive_alert() -> dict:
+def _executive_alert() -> dict[str, Any]:
     """Identify districts with unusually high disease rates.
 
     Aggregates across data_source (one row per district) so each district
@@ -526,7 +527,7 @@ def _executive_alert() -> dict:
     return {"alerts": rows, "total_alerts": len(rows)}
 
 
-def _disease_lab_crosstab() -> dict:
+def _disease_lab_crosstab() -> dict[str, Any]:
     """Lab abnormality counts stratified by disease.
 
     summary_lab_disease_cross stores long-format rows
@@ -569,7 +570,7 @@ def _disease_lab_crosstab() -> dict:
 
 
 # Dispatch table
-_DISPATCH = {
+_DISPATCH: dict[str, Any] = {
     "overview": _overview,
     "headline_kpi": _headline_kpi,
     "yoy_comparison": _yoy_comparison,
@@ -656,7 +657,7 @@ class QueryAPITool(BaseTool):
         "required": ["endpoint"],
     }
 
-    def execute(self, args: dict) -> ToolResult:
+    def execute(self, args: dict[str, Any]) -> ToolResult:
         args = self.Parameters(**args).model_dump(exclude_none=True)
         endpoint = args.get("endpoint", "overview")
         zone_code = args.get("zone_code")

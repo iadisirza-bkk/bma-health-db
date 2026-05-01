@@ -4,7 +4,7 @@ SYNC — queries DB directly via load_district_data().
 """
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -20,7 +20,7 @@ class QueryHealthDataParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
     group_by: Literal["district", "zone", "age_group", "sex", "disease", "smoking", "alcohol", "exercise"]
     disease: Optional[Literal["diabetes", "hypertension", "obesity", "dyslipidemia", "cardiovascular", "stroke", "ckd", "anemia", "respiratory"]] = None
-    filters: Optional[dict] = None
+    filters: Optional[dict[str, Any]] = None
     chart_type: Optional[Literal["bar", "horizontal_bar", "donut", "pie", "line", "gauge", "radar", "scatter", "heatmap", "funnel", "table", "none"]] = None
     highlight: Optional[str] = None
     y_label: Optional[str] = None
@@ -49,7 +49,7 @@ class QueryHealthDataTool(BaseTool):
         "required": ["group_by"],
     }
 
-    def execute(self, args: dict) -> ToolResult:
+    def execute(self, args: dict[str, Any]) -> ToolResult:
         args = self.Parameters(**args).model_dump(exclude_none=True)
         data = load_data()
         group_by = args.get("group_by", "disease")
@@ -66,7 +66,8 @@ class QueryHealthDataTool(BaseTool):
         # Apply location filters
         if filters.get("district"):
             name = filters["district"].replace("เขต", "").strip()
-            best_match, best_score = None, 0
+            best_match: Optional[dict[str, Any]] = None
+            best_score: float = 0.0
             for d in data.values():
                 d_name = d["name_th"].replace("เขต", "").strip()
                 d_en = d.get("name_en", "").lower()
@@ -83,7 +84,8 @@ class QueryHealthDataTool(BaseTool):
 
         if filters.get("zone"):
             zcode = str(filters["zone"])
-            zone_total, zone_sums = 0, {}
+            zone_total: int = 0
+            zone_sums: dict[str, float] = {}
             for dcode, d in data.items():
                 if DCODE_TO_ZONE.get(dcode, "") == zcode:
                     for dk, dv in d["diseases"].items():
@@ -115,7 +117,8 @@ class QueryHealthDataTool(BaseTool):
         modified_rates = {dk: apply_modifier(base_rates[dk], combined_mod[dk]) for dk in ALL_DISEASES if dk in base_rates}
 
         # Group by dimension
-        chart_data, text_lines = [], []
+        chart_data: list[dict[str, Any]] = []
+        text_lines: list[str] = []
 
         if group_by == "disease":
             if disease:
@@ -170,7 +173,7 @@ class QueryHealthDataTool(BaseTool):
                 if za["total"] > 0:
                     rate = apply_modifier(round(za["sum"] / za["total"], 1), combined_mod.get(disease, 1.0))
                     chart_data.append({"name": za["name"], "value": rate})
-            chart_data.sort(key=lambda x: x["value"], reverse=True)
+            chart_data.sort(key=lambda x: cast(float, x["value"]), reverse=True)
             text_lines.append(f"{dn} รายโซน:")
             for d in chart_data:
                 text_lines.append(f"- {d['name']}: {d['value']}%")

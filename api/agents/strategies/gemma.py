@@ -7,13 +7,14 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Any, cast
 
 from agents.strategies.base import ToolCallStrategy
 
 
 class GemmaToolCallStrategy(ToolCallStrategy):
 
-    def inject_tools(self, messages: list[dict], tools: list[dict]) -> tuple[list[dict], dict]:
+    def inject_tools(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Embed tools in system prompt using Gemma native <|tool> format."""
         tool_defs = "\n".join(
             f'<|tool>\n{json.dumps(t["function"], ensure_ascii=False)}\n<tool|>'
@@ -28,16 +29,16 @@ class GemmaToolCallStrategy(ToolCallStrategy):
         # No extra params — Gemma doesn't use OpenAI tools parameter
         return patched, {}
 
-    def parse_tool_calls(self, response: dict) -> list[dict]:
+    def parse_tool_calls(self, response: dict[str, Any]) -> list[dict[str, Any]]:
         """Parse Gemma native <|tool_call>call:func{args}<tool_call|> from content."""
         content = response.get("choices", [{}])[0].get("message", {}).get("content", "") or ""
 
         # Check if LMStudio already parsed tool_calls (OpenAI format)
         existing = response.get("choices", [{}])[0].get("message", {}).get("tool_calls")
         if existing:
-            return existing
+            return cast("list[dict[str, Any]]", existing)
 
-        calls = []
+        calls: list[dict[str, Any]] = []
         # Find tool calls — use greedy match for nested braces
         for match in re.finditer(r'<\|?tool_call>call:(\w+)\{', content):
             fn_name = match.group(1)
@@ -56,7 +57,7 @@ class GemmaToolCallStrategy(ToolCallStrategy):
             raw_args = content[start:end]  # includes outer { }
 
             # Strategy 1: Parse as JSON directly (works for simple and complex args)
-            args = {}
+            args: dict[str, Any] = {}
             # Clean Gemma quotes: <|"|>text<|"|> -> "text"
             cleaned = re.sub(r'<\|"\|>(.*?)<\|"\|>', r'"\1"', raw_args)
             # Fix unquoted keys: key: -> "key":

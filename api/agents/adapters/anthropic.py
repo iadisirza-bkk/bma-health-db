@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # registration / typing) — the actual constructor will raise a clear ImportError
 # the first time someone tries to instantiate it without the SDK installed.
 try:  # pragma: no cover - exercised by import-only tests
-    import anthropic as _anthropic  # type: ignore[import-not-found]
+    import anthropic as _anthropic
     _SDK_AVAILABLE = True
     _SDK_IMPORT_ERROR: Exception | None = None
 except ImportError as _exc:  # pragma: no cover
@@ -51,7 +51,7 @@ _STOP_REASON_MAP = {
 }
 
 
-def _translate_messages(messages: list[dict]) -> tuple[str | None, list[dict]]:
+def _translate_messages(messages: list[dict[str, Any]]) -> tuple[str | None, list[dict[str, Any]]]:
     """Split OpenAI-style messages into (system_prompt, anthropic_messages).
 
     Anthropic's Messages API takes `system` as a top-level parameter, not a
@@ -62,7 +62,7 @@ def _translate_messages(messages: list[dict]) -> tuple[str | None, list[dict]]:
     which is the shape Anthropic expects for tool responses.
     """
     sys_chunks: list[str] = []
-    out: list[dict] = []
+    out: list[dict[str, Any]] = []
     for m in messages:
         role = m.get("role")
         if role == "system":
@@ -86,7 +86,7 @@ def _translate_messages(messages: list[dict]) -> tuple[str | None, list[dict]]:
             # to Claude on the next turn.
             tool_calls = m.get("tool_calls") or []
             if tool_calls:
-                blocks: list[dict] = []
+                blocks: list[dict[str, Any]] = []
                 text = m.get("content") or ""
                 if text:
                     blocks.append({"type": "text", "text": text})
@@ -114,7 +114,7 @@ def _translate_messages(messages: list[dict]) -> tuple[str | None, list[dict]]:
     return system, out
 
 
-def _translate_tools(tools: list[dict] | None) -> list[dict] | None:
+def _translate_tools(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
     """Convert OpenAI-style tool defs to Anthropic's tool schema.
 
     Input shape (orchestrator/OpenAI):
@@ -125,7 +125,7 @@ def _translate_tools(tools: list[dict] | None) -> list[dict] | None:
     """
     if not tools:
         return None
-    out: list[dict] = []
+    out: list[dict[str, Any]] = []
     for t in tools:
         fn = t.get("function") or t  # accept already-flat shape too
         out.append({
@@ -193,7 +193,7 @@ class AnthropicAdapter(LLMAdapter):
 
     # -- chat -------------------------------------------------------------------
 
-    async def chat(self, messages: list[dict], tools: list[dict] | None = None) -> LLMResponse:
+    async def chat(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> LLMResponse:
         system, anth_msgs = _translate_messages(messages)
         anth_tools = _translate_tools(tools)
 
@@ -224,7 +224,7 @@ class AnthropicAdapter(LLMAdapter):
 
         # Translate response.content blocks into our normalized shape.
         text_parts: list[str] = []
-        tool_calls: list[dict] = []
+        tool_calls: list[dict[str, Any]] = []
         # `content` is a list of blocks: TextBlock / ToolUseBlock / etc.
         for block in getattr(resp, "content", []) or []:
             btype = getattr(block, "type", None) or (block.get("type") if isinstance(block, dict) else None)
@@ -252,7 +252,7 @@ class AnthropicAdapter(LLMAdapter):
         finish_reason = _STOP_REASON_MAP.get(stop_reason, "stop")
 
         # Build a JSON-serialisable raw payload (model_dump if Pydantic-like).
-        raw: dict
+        raw: dict[str, Any]
         if hasattr(resp, "model_dump"):
             try:
                 raw = resp.model_dump()
@@ -272,7 +272,7 @@ class AnthropicAdapter(LLMAdapter):
 
     # -- stream -----------------------------------------------------------------
 
-    async def stream(self, messages: list[dict]) -> AsyncGenerator[str, None]:
+    async def stream(self, messages: list[dict[str, Any]]) -> AsyncGenerator[str, None]:
         """Yield text deltas for the synthesizer path (no tools)."""
         system, anth_msgs = _translate_messages(messages)
         kwargs: dict[str, Any] = {
@@ -304,7 +304,7 @@ class AnthropicAdapter(LLMAdapter):
 # every adapter eagerly. If the helper isn't there yet (S3.1 not landed) we
 # silently skip — the adapter is still importable on its own.
 try:  # pragma: no cover - registration glue
-    from agents.providers import _register_adapter  # type: ignore[import-not-found]
+    from agents.providers import _register_adapter  # type: ignore[attr-defined]
     _register_adapter("anthropic", AnthropicAdapter)
-except ImportError:
+except (ImportError, AttributeError):
     pass

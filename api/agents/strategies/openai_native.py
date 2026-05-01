@@ -5,19 +5,21 @@ Uses standard OpenAI `tools` parameter and `tool_calls` response field.
 from __future__ import annotations
 
 import re
+from typing import Any, cast
 
 from agents.strategies.base import ToolCallStrategy
 
 
 class OpenAINativeStrategy(ToolCallStrategy):
 
-    def inject_tools(self, messages: list[dict], tools: list[dict]) -> tuple[list[dict], dict]:
+    def inject_tools(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Pass tools via OpenAI tools parameter."""
         return messages, {"tools": tools, "tool_choice": "auto"}
 
-    def parse_tool_calls(self, response: dict) -> list[dict]:
+    def parse_tool_calls(self, response: dict[str, Any]) -> list[dict[str, Any]]:
         """Extract tool_calls from standard OpenAI response."""
-        return response.get("choices", [{}])[0].get("message", {}).get("tool_calls", [])
+        calls = response.get("choices", [{}])[0].get("message", {}).get("tool_calls", [])
+        return cast("list[dict[str, Any]]", calls)
 
     def strip_artifacts(self, content: str) -> str:
         """Remove think tags and hallucinated tool calls."""

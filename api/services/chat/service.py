@@ -39,6 +39,55 @@ import logging
 from typing import Any, AsyncGenerator, Optional, Protocol
 from uuid import UUID
 
+# Observability — metrics module exposes no-op stubs when prometheus_client
+# is missing, so this import is safe in any environment.
+try:
+    from observability.metrics import (
+        chat_message_total,
+        chat_stream_duration,
+        chat_tool_call_total,
+        track_duration,
+    )
+except Exception:  # pragma: no cover - defensive
+    chat_message_total = chat_stream_duration = chat_tool_call_total = None  # type: ignore[assignment]
+
+    from contextlib import contextmanager
+    from typing import Iterator as _Iterator
+
+    @contextmanager
+    def track_duration(
+        histogram: Any, labels: Any = None
+    ) -> "_Iterator[None]":
+        yield
+
+
+def _record_message_metric(role: str) -> None:
+    """Best-effort increment of the chat_message counter.
+
+    Called from every persistence site so the metric tracks "messages we
+    actually wrote to the DB", not "messages the user *tried* to send".
+    """
+    counter: Any = chat_message_total
+    if counter is None:
+        return
+    try:
+        counter.labels(role=role).inc()
+    except Exception:
+        # Never let metric recording break a real persistence path.
+        logger.debug("chat_message_total inc failed", exc_info=True)
+
+
+def _record_tool_call_metric(tool_name: str, status: str = "ok") -> None:
+    """Best-effort increment of the tool-call counter."""
+    counter: Any = chat_tool_call_total
+    if counter is None:
+        return
+    try:
+        counter.labels(tool_name=tool_name or "unknown", status=status).inc()
+    except Exception:
+        logger.debug("chat_tool_call_total inc failed", exc_info=True)
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -74,13 +123,13 @@ class _OrchestratorProtocol(Protocol):
     async def process(
         self,
         user_message: str,
-        context: dict | None = None,
-    ) -> dict: ...
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
 
     def process_stream(
         self,
         user_message: str,
-        conv_history: list[dict] | None = None,
+        conv_history: list[dict[str, Any]] | None = None,
     ) -> AsyncGenerator[str, None]: ...
 
 
@@ -198,6 +247,7 @@ class ChatService:
         # 1. Persist user message first — even if the LLM call fails, we
         # want the question on record.
         await self.repo.append_message(thread_id, "user", user_message)
+        _record_message_metric("user")
 
         # 2. Reconstruct history; the orchestrator handles trimming.
         history = await self._build_conv_history(thread_id)
@@ -215,6 +265,7 @@ class ChatService:
             logger.exception("orchestrator.process failed for thread %s", thread_id)
             err_msg = f"chat processing failed: {exc}"
             await self.repo.append_message(thread_id, "assistant", err_msg)
+            _record_message_metric("assistant")
             return {
                 "thread_id": str(thread_id),
                 "content": err_msg,
@@ -237,6 +288,7 @@ class ChatService:
                 content,
                 tool_calls=tool_calls_payload,
             )
+            _record_message_metric("assistant")
         except Exception:  # noqa: BLE001
             logger.exception("failed to persist assistant message for thread %s", thread_id)
 
@@ -264,6 +316,7 @@ class ChatService:
         """
         # 1. Persist user message + announce thread_id to the client.
         await self.repo.append_message(thread_id, "user", user_message)
+        _record_message_metric("user")
         yield format_sse_event("thread_id", {"thread_id": str(thread_id)})
 
         # 2. Reconstruct history (drop the just-inserted user message —
@@ -277,38 +330,45 @@ class ChatService:
         tool_calls_seen: list[dict[str, Any]] = []
         tool_results_seen: list[dict[str, Any]] = []
 
-        try:
-            async for raw in self.orchestrator.process_stream(
-                user_message,
-                conv_history=history,
-            ):
-                # The orchestrator emits legacy single-line SSE: `data: {...}\n\n`.
-                # We parse, translate, and re-emit.
-                translated = _translate_legacy_sse(
-                    raw,
-                    token_buffer=token_buffer,
-                    tool_calls_seen=tool_calls_seen,
-                    tool_results_seen=tool_results_seen,
+        # Time the whole stream lifecycle (first byte through done).
+        # No labels — stream cardinality should stay low.
+        with track_duration(chat_stream_duration):
+            try:
+                async for raw in self.orchestrator.process_stream(
+                    user_message,
+                    conv_history=history,
+                ):
+                    # The orchestrator emits legacy single-line SSE: `data: {...}\n\n`.
+                    # We parse, translate, and re-emit.
+                    translated = _translate_legacy_sse(
+                        raw,
+                        token_buffer=token_buffer,
+                        tool_calls_seen=tool_calls_seen,
+                        tool_results_seen=tool_results_seen,
+                    )
+                    for event_name, payload in translated:
+                        if event_name == "tool_call":
+                            _record_tool_call_metric(
+                                payload.get("name", "unknown"), status="ok"
+                            )
+                        yield format_sse_event(event_name, payload)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("orchestrator.process_stream failed for thread %s", thread_id)
+                yield format_sse_event(
+                    "error",
+                    {"code": "orchestrator_failure", "message": str(exc)[:300]},
                 )
-                for event_name, payload in translated:
-                    yield format_sse_event(event_name, payload)
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("orchestrator.process_stream failed for thread %s", thread_id)
-            yield format_sse_event(
-                "error",
-                {"code": "orchestrator_failure", "message": str(exc)[:300]},
+
+            # 3. Persist what we emitted.
+            await self._persist_stream_artifacts(
+                thread_id=thread_id,
+                token_buffer=token_buffer,
+                tool_calls=tool_calls_seen,
+                tool_results=tool_results_seen,
             )
 
-        # 3. Persist what we emitted.
-        await self._persist_stream_artifacts(
-            thread_id=thread_id,
-            token_buffer=token_buffer,
-            tool_calls=tool_calls_seen,
-            tool_results=tool_results_seen,
-        )
-
-        # 4. Final `done` event so the client knows to close.
-        yield format_sse_event("done", {})
+            # 4. Final `done` event so the client knows to close.
+            yield format_sse_event("done", {})
 
     async def _persist_stream_artifacts(
         self,
@@ -328,6 +388,7 @@ class ChatService:
                     joined,
                     tool_calls=tool_calls or None,
                 )
+                _record_message_metric("assistant")
             for tr in tool_results:
                 await self.repo.append_message(
                     thread_id,
@@ -335,6 +396,7 @@ class ChatService:
                     json.dumps(tr, ensure_ascii=False),
                     tool_name=tr.get("name"),
                 )
+                _record_message_metric("tool")
         except Exception:  # noqa: BLE001
             # Persistence failure must not break a stream that already
             # delivered tokens to the client — log and move on.

@@ -268,6 +268,10 @@ lint: ## Run linter (ruff)
 format: ## Auto-format code (ruff)
 	cd $(API_DIR) && $(PYTHON) -m ruff format .
 
+.PHONY: mypy
+mypy: ## Run mypy --strict on the S2/S3/S4 OOP refactor surface
+	$(PYTHON) -m mypy --config-file mypy.ini
+
 # ---------------------------------------------------------------------------
 # ETL & Data Import
 # ---------------------------------------------------------------------------

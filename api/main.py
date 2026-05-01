@@ -14,17 +14,30 @@ import os
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
+from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
+
+# Initialise structured logging BEFORE any other module-level logging is set
+# up, so existing loggers (auth, database, etc.) get the structured handlers
+# rather than stdlib's basicConfig fallback. configure_logging() is idempotent
+# and degrades to stdlib if structlog is missing.
+from observability import (
+    bind_request_context,
+    configure_logging,
+    prometheus_router,
+)
+
+configure_logging()
 
 from database import execute_scalar, close_pool
 from security import APIKeyMiddleware, RateLimitMiddleware, add_cors
 from errors import BMAException, bma_exception_handler, unhandled_exception_handler
 from cache import cache_stats
 from admin import router as admin_router, upload_excel_router, start_upload_janitor
-from auth import router as auth_router
+from auth import router as auth_router, SESSION_COOKIE_NAME
 from config import validate_production_config
 
 # Routers
@@ -124,7 +137,9 @@ class AuditMiddleware(BaseHTTPMiddleware):
         duration = time.time() - start
 
         path = request.url.path
-        if path in ("/health", "/docs", "/redoc", "/openapi.json"):
+        if path in ("/health", "/docs", "/redoc", "/openapi.json", "/metrics"):
+            # /metrics is scraped every 15s by Prometheus — would drown the
+            # audit log in noise without telling us anything about real users.
             return response
         if path.startswith("/admin") or path.startswith("/static"):
             return response
@@ -139,6 +154,45 @@ class AuditMiddleware(BaseHTTPMiddleware):
             "method=%s path=%s status=%d duration=%.3fs ip=%s",
             request.method, path, response.status_code, duration, client_ip,
         )
+        return response
+
+
+def _user_from_session(request: Request) -> str | None:
+    """Best-effort: pull the session principal out of the cookie.
+
+    Used for log enrichment only — failure is silent (we never want a
+    misformed cookie to break a request just because the structured-logging
+    layer wanted a user_id field). Decoding is delegated to the auth module
+    so any future signing-key rotation only has to change one place.
+    """
+    token = request.cookies.get(SESSION_COOKIE_NAME)
+    if not token:
+        return None
+    try:
+        from auth import _verify_jwt  # local import to avoid cycle at module load
+        claims = _verify_jwt(token)
+    except Exception:
+        return None
+    if not claims:
+        return None
+    sub = claims.get("sub")
+    return str(sub) if sub else None
+
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Attach a request_id (and best-effort user_id) to every log line.
+
+    Honours an inbound ``X-Request-Id`` header so distributed callers can
+    propagate a trace id end-to-end. Falls back to a fresh UUID-12 when
+    absent. Echoes the id back in the response so clients see the same
+    value the server logged with — invaluable for support tickets.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        req_id = request.headers.get("X-Request-Id") or uuid4().hex[:12]
+        bind_request_context(req_id, _user_from_session(request))
+        response = await call_next(request)
+        response.headers["X-Request-Id"] = req_id
         return response
 
 
@@ -208,11 +262,15 @@ app = FastAPI(
     openapi_tags=_OPENAPI_TAGS,
 )
 
-# Middleware order: CORS -> Rate Limit -> API Key -> Audit
+# Middleware order (outermost first): RequestId -> CORS -> Rate Limit -> API Key -> Audit.
+# Starlette wraps in reverse-add order, so add_middleware(RequestIdMiddleware)
+# LAST puts it OUTERMOST — every other middleware sees a populated request_id
+# context var.
 add_cors(app)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(APIKeyMiddleware)
 app.add_middleware(AuditMiddleware)
+app.add_middleware(RequestIdMiddleware)
 
 # Global error handlers
 app.add_exception_handler(BMAException, bma_exception_handler)
@@ -249,6 +307,9 @@ app.include_router(gis_router)
 # --- New routers (one-stop backend) ---
 for _r in _new_routers:
     app.include_router(_r)
+
+# Prometheus metrics — public (no auth), see security._PUBLIC_PATHS.
+app.include_router(prometheus_router)
 
 # Static files
 _static_dir = os.path.join(os.path.dirname(__file__), "static")

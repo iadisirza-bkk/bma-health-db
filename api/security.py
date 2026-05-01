@@ -51,8 +51,11 @@ def suppress_scalar_if_small(value: Optional[int]) -> Optional[int]:
 # API key middleware
 # --------------------------------------------------------------------------- #
 
-# Paths that do NOT require an API key
-_PUBLIC_PATHS = frozenset({"/health", "/docs", "/redoc", "/openapi.json"})
+# Paths that do NOT require an API key.
+# /metrics is the Prometheus exposition endpoint — scrapers don't carry the
+# X-API-Key header. The metric surface contains no PII (counts/latencies
+# only) so public exposure is by design.
+_PUBLIC_PATHS = frozenset({"/health", "/docs", "/redoc", "/openapi.json", "/metrics"})
 # Path prefixes exempt from API key
 _PUBLIC_PREFIXES = ("/api/auth/",)
 

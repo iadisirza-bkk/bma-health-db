@@ -78,7 +78,7 @@ def _format_value(raw: Any, kind: KPIFormat) -> str:
     if kind == "ratio":
         return f"{num:.2f}"
     # Defensive default — should never hit because of Literal typing.
-    return str(raw)  # pragma: no cover
+    return str(raw)  # type: ignore[unreachable]  # pragma: no cover
 
 
 def _html_escape(text: str) -> str:

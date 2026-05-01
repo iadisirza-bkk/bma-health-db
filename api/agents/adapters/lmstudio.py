@@ -9,7 +9,7 @@ import json
 import logging
 import os
 import time
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
 import httpx
 
@@ -66,8 +66,10 @@ def _invalidate_health_cache() -> None:
 
 
 class LMStudioAdapter(LLMAdapter):
-    def __init__(self, config: AdapterConfig, strategy: ToolCallStrategy):
-        super().__init__(config)
+    strategy: ToolCallStrategy  # Narrow from Optional in base
+
+    def __init__(self, config: AdapterConfig, strategy: ToolCallStrategy) -> None:
+        super().__init__(config, strategy)
         self.strategy = strategy
 
     async def health_check(self) -> bool:
@@ -85,7 +87,7 @@ class LMStudioAdapter(LLMAdapter):
             _health_cache = (False, time.time())
             return False
 
-    async def chat(self, messages: list[dict], tools: list[dict] | None = None) -> LLMResponse:
+    async def chat(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> LLMResponse:
         client = _get_client(self.config.timeout)
 
         if tools:
@@ -121,7 +123,7 @@ class LMStudioAdapter(LLMAdapter):
             finish_reason=data["choices"][0].get("finish_reason", "stop"),
         )
 
-    async def stream(self, messages: list[dict]) -> AsyncGenerator[str, None]:
+    async def stream(self, messages: list[dict[str, Any]]) -> AsyncGenerator[str, None]:
         client = _get_client(self.config.timeout)
 
         try:

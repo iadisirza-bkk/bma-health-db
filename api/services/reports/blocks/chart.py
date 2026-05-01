@@ -150,9 +150,9 @@ class ChartBlock(ContentBlock):
         an SVG-only output to keep the report self-contained.
         """
         try:
-            from pyecharts.charts import Bar, Line  # type: ignore[import-not-found]
-            from pyecharts.commons.utils import JsCode  # type: ignore[import-not-found]
-            from pyecharts.options import InitOpts  # type: ignore[import-not-found]
+            from pyecharts.charts import Bar, Line
+            from pyecharts.commons.utils import JsCode
+            from pyecharts.options import InitOpts
         except ImportError:
             return None
         kind = data.get("kind")
@@ -178,8 +178,8 @@ class ChartBlock(ContentBlock):
             start = html.find("<svg")
             end = html.find("</svg>", start)
             if start != -1 and end != -1:
-                return html[start : end + len("</svg>")]
-            return html  # caller still gets *something* embeddable
+                return str(html[start : end + len("</svg>")])
+            return str(html)  # caller still gets *something* embeddable
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("pyecharts render failed, falling back: %s", exc)
             return None

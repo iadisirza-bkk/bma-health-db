@@ -26,6 +26,27 @@ from .spec import (
     ChartSpec,
 )
 
+# Observability — metrics module exposes no-op stubs when prometheus_client
+# is missing, so this import is safe in any environment.
+try:
+    from observability.metrics import (
+        chart_kanon_dropped,
+        chart_render_duration,
+        chart_render_total,
+        track_duration,
+    )
+except Exception:  # pragma: no cover - defensive
+    chart_kanon_dropped = chart_render_duration = chart_render_total = None  # type: ignore[assignment]
+
+    from contextlib import contextmanager
+    from typing import Iterator as _Iterator
+
+    @contextmanager
+    def track_duration(
+        histogram: Any, labels: Any = None
+    ) -> "_Iterator[None]":
+        yield
+
 logger = logging.getLogger("api.services.charts.service")
 
 # ---------------------------------------------------------------------------
@@ -77,13 +98,17 @@ class _Repository(Protocol):
     The real ``MVRepository`` lives at
     ``bma_health_db/repositories/mv_repository.py`` (per ADR-01 §5);
     this Protocol lets us DI a mock without importing it directly.
+
+    Returns ``list[Any]`` because the concrete repo returns Pydantic row
+    models (which expose ``.model_dump()``) but a test stub may return
+    plain dicts — both are normalized by the service.
     """
 
     async def run_query(
         self,
         query_id: str,
-        params: Dict[str, Any],
-    ) -> List[Dict[str, Any]]: ...  # pragma: no cover
+        params: Optional[Dict[str, Any]] = None,
+    ) -> List[Any]: ...  # pragma: no cover
 
 
 class ChartService:
@@ -113,6 +138,33 @@ class ChartService:
             6. build ChartMeta
             7. assert_no_individual_fields(rows) — DEFENSE IN DEPTH
             8. return ChartResponse
+        """
+        # Wrap the whole render in a duration histogram + status counter.
+        # The try/except path keeps existing behaviour: failures still raise;
+        # we just record them before re-raising. spec_id labelling is safe —
+        # spec_ids come from a small registry on disk (bounded cardinality).
+        with track_duration(chart_render_duration, {"spec_id": spec_id}):
+            try:
+                response = await self._render_inner(spec_id, filters)
+            except Exception:
+                if chart_render_total is not None:
+                    chart_render_total.labels(spec_id=spec_id, status="error").inc()
+                raise
+            if chart_render_total is not None:
+                chart_render_total.labels(spec_id=spec_id, status="ok").inc()
+            if chart_kanon_dropped is not None and response.meta.k_anon_dropped:
+                chart_kanon_dropped.labels(spec_id=spec_id).inc(
+                    response.meta.k_anon_dropped
+                )
+            return response
+
+    async def _render_inner(
+        self,
+        spec_id: str,
+        filters: Dict[str, Any],
+    ) -> ChartResponse:
+        """Original render pipeline. Split out so the public ``render``
+        wrapper can attach metrics without indenting the entire body.
         """
         spec: ChartSpec = self._registry.get(spec_id)
 

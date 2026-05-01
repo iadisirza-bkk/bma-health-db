@@ -27,12 +27,13 @@ from agents.tools.base import BaseTool, ToolResult
 logger = logging.getLogger(__name__)
 
 
-def _query(sql: str, params: tuple = None) -> list[dict]:
+def _query(sql: str, params: Optional[tuple[Any, ...]] = None) -> list[dict[str, Any]]:
     from database import execute_query
-    return execute_query(sql, params)
+    from typing import cast as _cast
+    return _cast("list[dict[str, Any]]", execute_query(sql, params))
 
 
-def _scalar(sql: str, params: tuple = None):
+def _scalar(sql: str, params: Optional[tuple[Any, ...]] = None) -> Any:
     from database import execute_scalar
     return execute_scalar(sql, params)
 
@@ -84,8 +85,8 @@ PROVINCE_BY_CODE: dict[str, tuple[str, str]] = {
 }
 
 
-def _viz(chart_type: str, title: str, data: list[dict], xKey: str = "name",
-         yKey: str = "value", color: str = "#00744B", yLabel: str = "") -> dict:
+def _viz(chart_type: str, title: str, data: list[dict[str, Any]], xKey: str = "name",
+         yKey: str = "value", color: str = "#00744B", yLabel: str = "") -> dict[str, Any]:
     """Legacy viz format (used by existing frontend chart renderer)."""
     return {
         "type": chart_type,
@@ -98,8 +99,8 @@ def _viz(chart_type: str, title: str, data: list[dict], xKey: str = "name",
     }
 
 
-def _chart_spec(chart_type: str, title: str, x: list, series: list[dict],
-                x_label: str = "", y_label: str = "") -> dict:
+def _chart_spec(chart_type: str, title: str, x: list[Any], series: list[dict[str, Any]],
+                x_label: str = "", y_label: str = "") -> dict[str, Any]:
     """Echarts-friendly spec for the frontend to render directly.
 
     series: [{ name: "...", data: [...], type: "line"|"bar"|... }]
@@ -174,7 +175,7 @@ class TimeTrendTool(BaseTool):
         },
     }
 
-    def execute(self, args: dict) -> ToolResult:
+    def execute(self, args: dict[str, Any]) -> ToolResult:
         args = self.Parameters(**args).model_dump(exclude_none=True)
         from security import K_ANONYMITY_THRESHOLD
 
@@ -287,7 +288,7 @@ class ProvinceBreakdownTool(BaseTool):
         },
     }
 
-    def execute(self, args: dict) -> ToolResult:
+    def execute(self, args: dict[str, Any]) -> ToolResult:
         args = self.Parameters(**args).model_dump(exclude_none=True)
         from security import K_ANONYMITY_THRESHOLD
         top_n = int(args.get("top_n", 10))
@@ -394,7 +395,7 @@ class FacilityLookupTool(BaseTool):
         },
     }
 
-    def execute(self, args: dict) -> ToolResult:
+    def execute(self, args: dict[str, Any]) -> ToolResult:
         args = self.Parameters(**args).model_dump(exclude_none=True)
         zone_code = args.get("zone_code")
         district_code = args.get("district_code")
@@ -441,7 +442,7 @@ class FacilityLookupTool(BaseTool):
             tuple(params),
         )
         # Sample list (with district name)
-        sample: list[dict] = []
+        sample: list[dict[str, Any]] = []
         if list_count > 0:
             sample = _query(
                 f"""SELECT f.code, f.name_th, f.facility_type,
@@ -480,7 +481,7 @@ class FacilityLookupTool(BaseTool):
                 lines.append(f"- {s['name_th']} ({s['facility_type'] or '-'}){d}")
 
         chart_data = [{"name": r["facility_type"] or "ไม่ระบุ", "value": int(r["n"])} for r in by_type]
-        viz: list[dict] = []
+        viz: list[dict[str, Any]] = []
         if chart_data:
             viz = [_viz("horizontal_bar", f"สถานพยาบาลใน{scope_str} ({total:,} แห่ง)",
                         chart_data, yLabel="จำนวน", color="#00744B")]
@@ -557,7 +558,7 @@ class RiskProfileTool(BaseTool):
         },
     }
 
-    def execute(self, args: dict) -> ToolResult:
+    def execute(self, args: dict[str, Any]) -> ToolResult:
         args = self.Parameters(**args).model_dump(exclude_none=True)
         dim = args.get("dimension", "all")
         lifestyle_var = args.get("lifestyle_var", "exercise")
@@ -567,7 +568,7 @@ class RiskProfileTool(BaseTool):
         # Build a CTE that resolves districts in scope
         if district_code:
             scope_sql = "AND district_code = %s"
-            scope_params: tuple = (district_code,)
+            scope_params: tuple[Any, ...] = (district_code,)
             scope_label = f"เขต รหัส {district_code}"
         elif zone_code:
             zone_code = str(zone_code).zfill(2)
@@ -581,7 +582,7 @@ class RiskProfileTool(BaseTool):
             scope_params = tuple()
             scope_label = "ทั้ง กทม."
 
-        out = {"sex": [], "age": [], "lifestyle": []}
+        out: dict[str, list[Any]] = {"sex": [], "age": [], "lifestyle": []}
         text_lines: list[str] = [f"## โปรไฟล์ผู้คัดกรอง ({scope_label})"]
 
         if dim in ("sex", "all"):
@@ -650,7 +651,7 @@ class RiskProfileTool(BaseTool):
             primary = out["lifestyle"]
             primary_label = _LIFESTYLE_VAR_TH.get(lifestyle_var, lifestyle_var)
 
-        viz: list[dict] = []
+        viz: list[dict[str, Any]] = []
         chart_spec = None
         if primary:
             viz = [_viz("donut" if len(primary) <= 6 else "bar",
@@ -716,7 +717,7 @@ class DistrictCompareTool(BaseTool):
         },
     }
 
-    def execute(self, args: dict) -> ToolResult:
+    def execute(self, args: dict[str, Any]) -> ToolResult:
         args = self.Parameters(**args).model_dump(exclude_none=True)
         metric = args.get("metric", "diabetes")
         if metric not in _METRIC_MAP:
@@ -760,7 +761,7 @@ class DistrictCompareTool(BaseTool):
             unit = "%"
 
         is_pct = unit == "%"
-        fmt = (lambda v: f"{round(float(v), 1)}{unit}") if is_pct else (lambda v: f"{int(v):,} {unit}")
+        fmt: Any = (lambda v: f"{round(float(v), 1)}{unit}") if is_pct else (lambda v: f"{int(v):,} {unit}")
 
         lines = [f"## เปรียบเทียบเขต — {label}"]
         lines.append(f"**ค่าเฉลี่ยทั้ง กทม.: {fmt(city_avg)}**")
@@ -824,7 +825,7 @@ class MentalHealthCompareTool(BaseTool):
         },
     }
 
-    def execute(self, args: dict) -> ToolResult:
+    def execute(self, args: dict[str, Any]) -> ToolResult:
         args = self.Parameters(**args).model_dump(exclude_none=True)
         zone_code = args.get("zone_code")
         metric = args.get("metric", "all")
@@ -847,7 +848,7 @@ class MentalHealthCompareTool(BaseTool):
         lines.append(f"- เสี่ยงซึมเศร้า: {c.get('pct_dep') or 0}%")
         lines.append(f"- ความเครียดสูง: {c.get('pct_stress') or 0}%")
 
-        zone_data: dict = {}
+        zone_data: dict[str, Any] = {}
         chart_x: list[str] = []
         chart_series_phq = []
         chart_series_stress = []
@@ -951,7 +952,7 @@ class NCDCascadeTool(BaseTool):
         "required": ["disease"],
     }
 
-    def execute(self, args: dict) -> ToolResult:
+    def execute(self, args: dict[str, Any]) -> ToolResult:
         args = self.Parameters(**args).model_dump(exclude_none=True)
         disease = args.get("disease", "diabetes")
         if disease not in _NCD_CASCADE_FIELDS:
@@ -966,7 +967,7 @@ class NCDCascadeTool(BaseTool):
                     SELECT dcode FROM public.ref_districts WHERE zone_code = %s
                 )
             """
-            params: tuple = (zone_code,)
+            params: tuple[Any, ...] = (zone_code,)
             scope_label = f"เขตสุขภาพ {int(zone_code)}"
         else:
             scope_sql = ""

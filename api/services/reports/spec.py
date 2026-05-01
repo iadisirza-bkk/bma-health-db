@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING, Union
+from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING, Union, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -63,7 +63,7 @@ class CacheSpec(BaseModel):
     enabled: bool = True
     ttl_seconds: Optional[int] = None
     invalidate_on: List[CacheInvalidator] = Field(
-        default_factory=lambda: ["data_hash"]
+        default_factory=lambda: cast("list[CacheInvalidator]", ["data_hash"])
     )
 
 
@@ -105,7 +105,7 @@ class ReportDescriptor(BaseModel):
     title_en: Optional[str] = None
     formats: List[ReportFormat]
     languages: List[str] = Field(default_factory=lambda: ["th"])
-    audience: List[ReportAudience] = Field(default_factory=lambda: ["public"])
+    audience: List[ReportAudience] = Field(default_factory=lambda: cast("list[ReportAudience]", ["public"]))
     sections: List[SectionSpec]
     style: StyleSpec = Field(default_factory=StyleSpec)
     cache: CacheSpec = Field(default_factory=CacheSpec)

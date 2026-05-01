@@ -6,8 +6,40 @@ since the target project does not have the factors router.
 """
 from __future__ import annotations
 
-from data.facts import HEALTH_ZONES, DCODE_TO_ZONE
+from typing import Any
+
+from data.facts import HEALTH_ZONES, DCODE_TO_ZONE  # noqa: F401  (re-exported)
 from services.data_adapter import load_district_data
+
+__all__ = [
+    "HEALTH_ZONES",
+    "DCODE_TO_ZONE",
+    "DISEASE_NAMES_TH",
+    "DISEASE_NAMES_EN",
+    "DISEASE_NAMES",
+    "DISEASE_ALIASES",
+    "ALL_DISEASES",
+    "AGE_GROUPS",
+    "AGE_MODIFIERS",
+    "SEX_MODIFIERS",
+    "SMOKING_CATEGORIES",
+    "SMOKING_MODIFIERS",
+    "ALCOHOL_CATEGORIES",
+    "ALCOHOL_MODIFIERS",
+    "EXERCISE_CATEGORIES",
+    "EXERCISE_MODIFIERS",
+    "FACTOR_CATEGORIES",
+    "FACTOR_MODIFIERS",
+    "FILTER_ALIASES",
+    "MODIFIER_CAP_PCT",
+    "normalize_disease",
+    "resolve_filter",
+    "load_data",
+    "get_base_rates",
+    "get_total_screened",
+    "apply_modifier",
+    "apply_modifier_with_meta",
+]
 
 
 # ---------------------------------------------------------------
@@ -188,10 +220,10 @@ def resolve_filter(factor: str, value: str) -> str | None:
 # ---------------------------------------------------------------
 # Data loading + aggregation helpers
 # ---------------------------------------------------------------
-_data_cache: dict | None = None
+_data_cache: dict[str, Any] | None = None
 
 
-def load_data() -> dict:
+def load_data() -> dict[str, Any]:
     """Load district health data from DB via data_adapter (cached)."""
     global _data_cache
     if _data_cache is not None:
@@ -203,7 +235,7 @@ def load_data() -> dict:
     return {}
 
 
-def get_base_rates(data: dict) -> dict[str, float]:
+def get_base_rates(data: dict[str, Any]) -> dict[str, float]:
     """City-wide weighted average rates per disease."""
     totals: dict[str, float] = {}
     screened: dict[str, int] = {}
@@ -215,7 +247,7 @@ def get_base_rates(data: dict) -> dict[str, float]:
     return {dk: round(totals[dk] / screened[dk], 1) for dk in totals if screened[dk] > 0}
 
 
-def get_total_screened(data: dict) -> int:
+def get_total_screened(data: dict[str, Any]) -> int:
     return sum(d["total_screened"] for d in data.values())
 
 
@@ -231,7 +263,7 @@ def apply_modifier(base: float, modifier: float) -> float:
     return apply_modifier_with_meta(base, modifier)[0]
 
 
-def apply_modifier_with_meta(base: float, modifier: float) -> tuple[float, dict]:
+def apply_modifier_with_meta(base: float, modifier: float) -> tuple[float, dict[str, Any]]:
     """Same as apply_modifier but also returns a metadata dict.
 
     Metadata fields:

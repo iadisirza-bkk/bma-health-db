@@ -4,7 +4,7 @@ SYNC.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -51,7 +51,7 @@ class AskClarificationTool(BaseTool):
         "required": ["questions"],
     }
 
-    def execute(self, args: dict) -> ToolResult:
+    def execute(self, args: dict[str, Any]) -> ToolResult:
         args = self.Parameters(**args).model_dump(exclude_none=True)
         questions = args.get("questions", [])
         return ToolResult(

@@ -18,7 +18,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 from services.reports.blocks import BlockRegistry, block_registry
 from services.reports.spec import ReportDescriptor

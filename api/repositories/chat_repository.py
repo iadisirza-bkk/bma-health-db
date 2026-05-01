@@ -18,7 +18,7 @@ import json
 import logging
 from contextlib import contextmanager
 from decimal import Decimal
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Iterator, Optional, Tuple, cast
 from uuid import UUID
 
 import psycopg2.extras
@@ -55,7 +55,7 @@ class ChatRepository(Repository):
     # ------------------------------------------------------------------ #
 
     @contextmanager
-    def _cursor(self):
+    def _cursor(self) -> Iterator[Tuple[Any, Any]]:
         """Yield a (conn, RealDictCursor) pair from the writer pool.
 
         Commits on clean exit; rolls back on exception.
@@ -116,7 +116,7 @@ class ChatRepository(Repository):
         if not row:
             # Should not happen — RETURNING on a successful INSERT always yields.
             raise RuntimeError("create_thread: no thread_id returned")
-        return row["thread_id"]
+        return cast(UUID, row["thread_id"])
 
     async def get_thread(self, thread_id: UUID) -> Optional[ThreadRow]:
         """Return the thread row, or None if missing."""

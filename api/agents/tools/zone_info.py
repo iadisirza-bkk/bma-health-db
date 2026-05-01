@@ -4,7 +4,7 @@ SYNC — uses data.facts directly.
 """
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -32,7 +32,7 @@ class QueryZoneInfoTool(BaseTool):
         },
     }
 
-    def execute(self, args: dict) -> ToolResult:
+    def execute(self, args: dict[str, Any]) -> ToolResult:
         args = self.Parameters(**args).model_dump(exclude_none=True)
         qt = args.get("query_type", "all_zones")
 

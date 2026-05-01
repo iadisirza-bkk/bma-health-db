@@ -16,7 +16,7 @@ import subprocess
 import tempfile
 from datetime import date
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -123,7 +123,7 @@ class GenerateAdaptiveReportTool(BaseTool):
         "required": ["title", "topic"],
     }
 
-    def execute(self, args: dict) -> ToolResult:
+    def execute(self, args: dict[str, Any]) -> ToolResult:
         args = self.Parameters(**args).model_dump(exclude_none=True)
         title = args.get("title", "รายงานวิเคราะห์สุขภาพ")
         topic = args.get("topic", "")
@@ -284,7 +284,8 @@ class GenerateAdaptiveReportTool(BaseTool):
                 tex_path = Path(tmpdir) / "report.tex"
                 tex_path.write_text(tex, encoding="utf-8")
 
-                tectonic = shutil.which("tectonic") or getattr(config, "TECTONIC_PATH", "/opt/homebrew/bin/tectonic")
+                tectonic_path = shutil.which("tectonic") or getattr(config, "TECTONIC_PATH", "/opt/homebrew/bin/tectonic")
+                tectonic: str = str(tectonic_path) if tectonic_path else "/opt/homebrew/bin/tectonic"
                 result = subprocess.run(
                     [tectonic, "-X", "compile", str(tex_path)],
                     capture_output=True, cwd=tmpdir,

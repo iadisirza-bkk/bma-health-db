@@ -22,7 +22,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 from pydantic import BaseModel, ConfigDict
 
 from services.reports.spec import RenderContext

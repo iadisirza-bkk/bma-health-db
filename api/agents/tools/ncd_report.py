@@ -11,7 +11,7 @@ Reads from `public.mv_ncd_diagnostic_report` (≥ migration 113).
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Optional, cast
 
 from pydantic import BaseModel, ConfigDict
 
@@ -20,17 +20,17 @@ from agents.tools.base import BaseTool, ToolResult
 logger = logging.getLogger(__name__)
 
 
-def _query(sql: str, params: tuple = None) -> list[dict]:
+def _query(sql: str, params: Optional[tuple[Any, ...]] = None) -> list[dict[str, Any]]:
     from database import execute_query
-    return execute_query(sql, params)
+    return cast("list[dict[str, Any]]", execute_query(sql, params))
 
 
-def _scalar(sql: str, params: tuple = None):
+def _scalar(sql: str, params: Optional[tuple[Any, ...]] = None) -> Any:
     from database import execute_scalar
     return execute_scalar(sql, params)
 
 
-def get_ncd_diagnostic_report() -> dict:
+def get_ncd_diagnostic_report() -> dict[str, Any]:
     """Return all 11 NCD rows + city-wide screened denominator."""
     rows = _query("""
         SELECT disease_key, disease_name_th, lab_threshold,
@@ -61,7 +61,7 @@ def get_ncd_diagnostic_report() -> dict:
         "-" * 75,
     ]
     for r in rows:
-        def f(v): return f"{v:,}" if v is not None else "—"
+        def f(v: Any) -> str: return f"{v:,}" if v is not None else "—"
         lines.append(
             f"{r['disease_name_th']:<26}"
             f"{f(r['at_risk']):>10}"
@@ -98,9 +98,9 @@ class NcdDiagnosticReportTool(BaseTool):
         "หรือถามว่าคัดกรองเจอโรคใหม่กี่คน"
     )
     Parameters = NcdDiagnosticReportParams
-    parameters_schema: dict = {"type": "object", "properties": {}, "required": []}
+    parameters_schema: dict[str, Any] = {"type": "object", "properties": {}, "required": []}
 
-    def execute(self, args: dict) -> ToolResult:
+    def execute(self, args: dict[str, Any]) -> ToolResult:
         args = self.Parameters(**args).model_dump(exclude_none=True)
         try:
             payload = get_ncd_diagnostic_report()

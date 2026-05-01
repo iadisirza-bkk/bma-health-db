@@ -7,7 +7,7 @@ from __future__ import annotations
 import math
 import random
 from collections import Counter
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -149,7 +149,7 @@ def _f_cdf(x: float, d1: int, d2: int) -> float:
     return _reg_beta(d1 / 2.0, d2 / 2.0, z)
 
 
-def one_way_anova(groups: list[list[float]]) -> dict:
+def one_way_anova(groups: list[list[float]]) -> dict[str, Any]:
     k = len(groups)
     if k < 2:
         return {"f_statistic": 0.0, "p_value": 1.0, "df_between": 0, "df_within": 0, "eta_squared": 0.0}
@@ -178,7 +178,7 @@ def one_way_anova(groups: list[list[float]]) -> dict:
             "df_between": df_between, "df_within": df_within, "eta_squared": round(eta_sq, 4)}
 
 
-def mann_kendall_test(data_series: list[float]) -> dict:
+def mann_kendall_test(data_series: list[float]) -> dict[str, Any]:
     n = len(data_series)
     if n < 4:
         return {"direction": "insufficient_data", "tau": 0, "p_value": 1.0, "slope": 0, "confidence": "N/A"}
@@ -253,11 +253,11 @@ class QueryStatisticalTestTool(BaseTool):
         "required": ["test"],
     }
 
-    def execute(self, args: dict) -> ToolResult:
+    def execute(self, args: dict[str, Any]) -> ToolResult:
         args = self.Parameters(**args).model_dump(exclude_none=True)
         data = load_data()
         test = args.get("test", "chi_square")
-        disease = normalize_disease(args.get("disease", "diabetes"))
+        disease: str = normalize_disease(args.get("disease", "diabetes")) or "diabetes"
         factor = args.get("factor", "sex")
         exposed = args.get("exposed_value")
 
@@ -295,7 +295,7 @@ class QueryStatisticalTestTool(BaseTool):
 
         return ToolResult(text="ไม่รองรับ test type")
 
-    def _chi_square(self, rows, disease_name, factor) -> ToolResult:
+    def _chi_square(self, rows: list[dict[str, Any]], disease_name: str, factor: str) -> ToolResult:
         """Pearson chi-square goodness-of-fit on a single-factor 2-way table.
 
         Improvements over the previous implementation:
@@ -365,7 +365,7 @@ class QueryStatisticalTestTool(BaseTool):
         viz = [{"type": "bar", "title": f"Chi-Square: {disease_name} x {factor}", "data": chart_data, "xKey": "name", "yKey": "value", "color": "#3b82f6"}]
         return ToolResult(text=text, visualizations=viz)
 
-    def _odds_ratio(self, rows, disease_name, factor, exposed) -> ToolResult:
+    def _odds_ratio(self, rows: list[dict[str, Any]], disease_name: str, factor: str, exposed: str) -> ToolResult:
         resolved = resolve_filter(factor, exposed)
         exp_row = next((r for r in rows if r["category"] == resolved), None)
         if not exp_row:
@@ -380,7 +380,7 @@ class QueryStatisticalTestTool(BaseTool):
         text = f"## OR: {exposed} -> {disease_name}\n- OR={or_val:.2f} (95%CI: {ci_lo}-{ci_hi})\n"
         return ToolResult(text=text)
 
-    def _anova(self, rows, disease_name, factor) -> ToolResult:
+    def _anova(self, rows: list[dict[str, Any]], disease_name: str, factor: str) -> ToolResult:
         groups = [[r["rate"]] * max(1, r["n"] // 1000) for r in rows]
         result = one_way_anova(groups)
         text = f"## ANOVA: {disease_name} x {factor}\n- F={result.get('f_statistic',0):.2f}, p={result.get('p_value',1):.4f}, eta2={result.get('eta_squared',0):.3f}\n"
@@ -388,9 +388,9 @@ class QueryStatisticalTestTool(BaseTool):
         viz = [{"type": "bar", "title": f"ANOVA: {disease_name} x {factor}", "data": chart_data, "xKey": "name", "yKey": "value", "color": "#8b5cf6"}]
         return ToolResult(text=text, visualizations=viz)
 
-    def _logistic(self, rows, disease_name, factor) -> ToolResult:
+    def _logistic(self, rows: list[dict[str, Any]], disease_name: str, factor: str) -> ToolResult:
         ref = rows[0]
-        forest_data = []
+        forest_data: list[dict[str, Any]] = []
         text = (
             f"## Logistic Regression: {factor} -> {disease_name}\n"
             f"Note: OR from cross-tabulation, p-value is approximate\n\n"
@@ -410,11 +410,13 @@ class QueryStatisticalTestTool(BaseTool):
         viz = [{"type": "forest_plot", "title": f"Forest Plot: {factor} -> {disease_name}", "data": forest_data, "xKey": "name", "yKey": "value"}]
         return ToolResult(text=text, visualizations=viz)
 
-    def _correlation(self, data, disease, disease2_raw, base_rates) -> ToolResult:
-        disease2 = normalize_disease(disease2_raw) or "hypertension"
+    def _correlation(self, data: dict[str, Any], disease: str, disease2_raw: Optional[str], base_rates: dict[str, float]) -> ToolResult:
+        disease2: str = normalize_disease(disease2_raw) or "hypertension"
         d2name = DISEASE_NAMES.get(disease2, disease2)
         dname = DISEASE_NAMES.get(disease, disease)
-        vals1, vals2, districts = [], [], list(data.values())
+        vals1: list[float] = []
+        vals2: list[float] = []
+        districts = list(data.values())
         for d in districts:
             d1 = d["diseases"].get(disease, d["diseases"].get(next((k for k,v in DISEASE_ALIASES.items() if v == disease), ""), {}))
             d2 = d["diseases"].get(disease2, d["diseases"].get(next((k for k,v in DISEASE_ALIASES.items() if v == disease2), ""), {}))
@@ -434,7 +436,7 @@ class QueryStatisticalTestTool(BaseTool):
         viz = [{"type": "scatter", "title": f"{dname} vs {d2name}", "data": scatter, "xKey": "x", "yKey": "value"}]
         return ToolResult(text=text, visualizations=viz)
 
-    def _mann_kendall(self, disease, disease_name, base_rates) -> ToolResult:
+    def _mann_kendall(self, disease: str, disease_name: str, base_rates: dict[str, float]) -> ToolResult:
         base = base_rates.get(disease, 30)
         random.seed(hash(disease))
         # WARNING: This uses SIMULATED monthly data (not real time-series)
@@ -450,10 +452,10 @@ class QueryStatisticalTestTool(BaseTool):
         viz = [{"type": "line", "title": f"Trend {disease_name} (simulated)", "data": [{"name": months[i], "value": monthly[i]} for i in range(12)], "xKey": "name", "yKey": "value", "color": "#00744B"}]
         return ToolResult(text=text, visualizations=viz)
 
-    def _comorbidity(self, data) -> ToolResult:
+    def _comorbidity(self, data: dict[str, Any]) -> ToolResult:
         diseases = ALL_DISEASES
         names = [DISEASE_NAMES.get(dk, dk) for dk in diseases]
-        matrix = []
+        matrix: list[dict[str, Any]] = []
         for i, d1 in enumerate(diseases):
             v1 = [dist["diseases"].get(d1, {}).get("pct_at_risk", 0) if isinstance(dist["diseases"].get(d1), dict) else 0 for dist in data.values()]
             for j, d2 in enumerate(diseases):

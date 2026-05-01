@@ -65,13 +65,13 @@ _LIMIT = 10000
 _QUERY_REGISTRY: dict[str, Callable[..., Awaitable[list[BaseModel]]]] = {}
 
 
-def _register(query_id: str) -> Callable:
+def _register(query_id: str) -> Callable[..., Any]:
     """Decorator: bind a method to a `query_id` in the module-level registry.
 
     Raises ValueError if the same `query_id` is registered twice — that's
     always a bug.
     """
-    def _decorator(fn: Callable) -> Callable:
+    def _decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
         if query_id in _QUERY_REGISTRY:
             raise ValueError(
                 f"query_id {query_id!r} already registered to "

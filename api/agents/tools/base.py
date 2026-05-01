@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from pydantic import BaseModel
 
@@ -11,8 +11,8 @@ from pydantic import BaseModel
 @dataclass
 class ToolResult:
     text: str
-    visualizations: list[dict] = field(default_factory=list)
-    metadata: dict | None = None  # clarification data, artifact URLs, etc.
+    visualizations: list[dict[str, Any]] = field(default_factory=list)
+    metadata: dict[str, Any] | None = None  # clarification data, artifact URLs, etc.
 
 
 class BaseTool(ABC):
@@ -28,15 +28,15 @@ class BaseTool(ABC):
 
     name: str
     description: str
-    parameters_schema: dict
+    parameters_schema: dict[str, Any]
     Parameters: ClassVar[type[BaseModel] | None] = None
 
     @abstractmethod
-    def execute(self, args: dict) -> ToolResult:
+    def execute(self, args: dict[str, Any]) -> ToolResult:
         """Execute the tool with given arguments. SYNC."""
         ...
 
-    def to_openai_schema(self) -> dict:
+    def to_openai_schema(self) -> dict[str, Any]:
         """Return OpenAI function-calling tool definition.
 
         Resolution order (mirrors registry precedence):
@@ -61,7 +61,7 @@ class BaseTool(ABC):
             },
         }
 
-    def validate_args(self, args: dict) -> BaseModel | dict:
+    def validate_args(self, args: dict[str, Any]) -> BaseModel | dict[str, Any]:
         """Validate raw tool-call args against `Parameters` if defined.
 
         Returns the parsed Pydantic model when `Parameters` is set, else the
