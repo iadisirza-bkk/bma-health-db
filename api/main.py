@@ -92,6 +92,11 @@ try:
     _new_routers.append(charts_router)
 except ImportError:
     pass
+try:
+    from routers.chat_v2 import router as chat_v2_router
+    _new_routers.append(chat_v2_router)
+except ImportError:
+    pass
 
 # --------------------------------------------------------------------------- #
 # Audit logging

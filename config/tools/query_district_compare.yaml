@@ -1,0 +1,26 @@
+name: query_district_compare
+description_th: 'Compare districts: top N, bottom N, and city average for a disease/metric. Use for ''เปรียบเทียบเขต'', ''สูงสุด
+  vs ต่ำสุด'', ''อันดับ'', ''percentile''.'
+class_path: agents.tools.insights:DistrictCompareTool
+enabled: true
+audience:
+- public
+- clinician
+parameters:
+  type: object
+  properties:
+    metric:
+      type: string
+      enum:
+      - diabetes
+      - hypertension
+      - cardiovascular
+      - obesity
+      - screened
+      description: 'Disease/metric to compare. Default: diabetes.'
+    top_n:
+      type: integer
+      description: 'Top N. Default: 5.'
+    bottom_n:
+      type: integer
+      description: 'Bottom N. Default: 5.'

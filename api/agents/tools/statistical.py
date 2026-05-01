@@ -7,6 +7,9 @@ from __future__ import annotations
 import math
 import random
 from collections import Counter
+from typing import Literal, Optional
+
+from pydantic import BaseModel, ConfigDict
 
 from agents.tools.base import BaseTool, ToolResult
 from agents.tools.helpers import (
@@ -225,9 +228,19 @@ def mann_kendall_test(data_series: list[float]) -> dict:
 # ---------------------------------------------------------------------------
 
 
+class QueryStatisticalTestParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    test: Literal["chi_square", "odds_ratio", "anova", "logistic_regression", "correlation", "mann_kendall", "comorbidity"]
+    disease: Optional[str] = None
+    factor: Optional[Literal["sex", "age_group", "smoking", "alcohol", "exercise", "zone"]] = None
+    exposed_value: Optional[str] = None
+    disease2: Optional[str] = None
+
+
 class QueryStatisticalTestTool(BaseTool):
     name = "query_statistical_test"
     description = "Run statistical test: chi_square, odds_ratio, anova, logistic_regression, correlation, mann_kendall, comorbidity"
+    Parameters = QueryStatisticalTestParams
     parameters_schema = {
         "type": "object",
         "properties": {
@@ -241,6 +254,7 @@ class QueryStatisticalTestTool(BaseTool):
     }
 
     def execute(self, args: dict) -> ToolResult:
+        args = self.Parameters(**args).model_dump(exclude_none=True)
         data = load_data()
         test = args.get("test", "chi_square")
         disease = normalize_disease(args.get("disease", "diabetes"))

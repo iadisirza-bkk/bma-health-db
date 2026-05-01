@@ -1,0 +1,22 @@
+name: query_mental_health
+description_th: PHQ-9, depression risk, stress comparison. Optionally compare a zone vs city. Use for 'PHQ-9', 'ซึมเศร้า',
+  'สุขภาพจิต', 'เครียด'.
+class_path: agents.tools.insights:MentalHealthCompareTool
+enabled: true
+audience:
+- public
+- clinician
+parameters:
+  type: object
+  properties:
+    zone_code:
+      type: string
+      description: Optional zone code 01-08 to drill down.
+    metric:
+      type: string
+      enum:
+      - phq9_moderate
+      - depression_risk
+      - high_stress
+      - all
+      description: 'Which mental-health metric to highlight. Default: all.'

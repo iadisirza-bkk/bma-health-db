@@ -13,6 +13,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict
+
 from agents.tools.base import BaseTool, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -81,6 +83,10 @@ def get_ncd_diagnostic_report() -> dict:
     }
 
 
+class NcdDiagnosticReportParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
 class NcdDiagnosticReportTool(BaseTool):
     """Doctor-facing 11-disease × 4-metric report."""
 
@@ -91,9 +97,11 @@ class NcdDiagnosticReportTool(BaseTool):
         "— เรียกเมื่อแพทย์ขอภาพรวมการคัดกรองโรคไม่ติดต่อ "
         "หรือถามว่าคัดกรองเจอโรคใหม่กี่คน"
     )
+    Parameters = NcdDiagnosticReportParams
     parameters_schema: dict = {"type": "object", "properties": {}, "required": []}
 
     def execute(self, args: dict) -> ToolResult:
+        args = self.Parameters(**args).model_dump(exclude_none=True)
         try:
             payload = get_ncd_diagnostic_report()
             return ToolResult(text=payload.get("summary", ""), metadata=payload)

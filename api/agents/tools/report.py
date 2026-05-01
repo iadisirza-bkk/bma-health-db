@@ -6,6 +6,9 @@ Returns download URLs that the frontend/other routers can serve.
 from __future__ import annotations
 
 import logging
+from typing import Literal, Optional
+
+from pydantic import BaseModel, ConfigDict
 
 from agents.tools.base import BaseTool, ToolResult
 from agents.tools.helpers import DISEASE_NAMES, normalize_disease
@@ -13,9 +16,17 @@ from agents.tools.helpers import DISEASE_NAMES, normalize_disease
 logger = logging.getLogger(__name__)
 
 
+class GenerateReportParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    report_type: Literal["comprehensive", "executive", "disease_focus"]
+    disease: Optional[str] = None
+    lang: Optional[Literal["th", "en"]] = None
+
+
 class GenerateReportTool(BaseTool):
     name = "generate_report"
     description = "Generate PDF report/slides: comprehensive, executive, or disease_focus (6-slide deck)"
+    Parameters = GenerateReportParams
     parameters_schema = {
         "type": "object",
         "properties": {
@@ -27,6 +38,7 @@ class GenerateReportTool(BaseTool):
     }
 
     def execute(self, args: dict) -> ToolResult:
+        args = self.Parameters(**args).model_dump(exclude_none=True)
         report_type = args.get("report_type", "comprehensive")
         disease = normalize_disease(args.get("disease"))
         lang = args.get("lang", "th")

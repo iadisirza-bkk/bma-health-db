@@ -16,8 +16,10 @@ import subprocess
 import tempfile
 from datetime import date
 from pathlib import Path
+from typing import Literal, Optional
 
 import httpx
+from pydantic import BaseModel, ConfigDict, Field
 
 from agents.tools.base import BaseTool, ToolResult
 from agents.tools.helpers import (
@@ -92,9 +94,22 @@ def _generate_fallback_content(prompt: str) -> str:
     return "\n".join(lines)
 
 
+class GenerateAdaptiveReportParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    title: str = Field(..., description="Report title in Thai")
+    topic: str = Field(..., description="What to analyze — disease, zone, factor, comparison, etc.")
+    disease: Optional[str] = None
+    zone: Optional[str] = None
+    district: Optional[str] = None
+    format: Optional[Literal["slides", "document"]] = Field(
+        default=None, description="slides=Beamer 4-6 pages, document=Article 1-2 pages"
+    )
+
+
 class GenerateAdaptiveReportTool(BaseTool):
     name = "generate_adaptive_report"
     description = "Generate CUSTOM PDF with AI-written content tailored to user request"
+    Parameters = GenerateAdaptiveReportParams
     parameters_schema = {
         "type": "object",
         "properties": {
@@ -109,6 +124,7 @@ class GenerateAdaptiveReportTool(BaseTool):
     }
 
     def execute(self, args: dict) -> ToolResult:
+        args = self.Parameters(**args).model_dump(exclude_none=True)
         title = args.get("title", "รายงานวิเคราะห์สุขภาพ")
         topic = args.get("topic", "")
         disease = normalize_disease(args.get("disease"))

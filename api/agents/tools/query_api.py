@@ -10,7 +10,9 @@ for the most important endpoint groups, matching what each router does.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from agents.tools.base import BaseTool, ToolResult
 
@@ -605,6 +607,21 @@ _DISPATCH = {
 # Tool class
 # ---------------------------------------------------------------------------
 
+# Build the Literal type from the catalog dynamically; falls back to str if empty.
+_EndpointLiteral = Literal[tuple(ENDPOINT_CATALOG.keys())]  # type: ignore[valid-type]
+
+
+class QueryAPIParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    endpoint: _EndpointLiteral = Field(  # type: ignore[valid-type]
+        ...,
+        description="Which data endpoint to query. Options:\n"
+        + "\n".join(f"- {k}: {v}" for k, v in ENDPOINT_CATALOG.items()),
+    )
+    zone_code: Optional[str] = Field(default=None, description="Optional: filter by zone (1-8)")
+    district_code: Optional[str] = Field(default=None, description="Optional: filter by district (4-digit code)")
+
+
 class QueryAPITool(BaseTool):
     name = "query_api"
     description = (
@@ -616,6 +633,7 @@ class QueryAPITool(BaseTool):
         "lab values, cost, budget, KPI targets, NCD cascade, screening tests (EKG/X-ray), "
         "treatment adherence, vaccination, or comorbidity COUNTS."
     )
+    Parameters = QueryAPIParams
     parameters_schema = {
         "type": "object",
         "properties": {
@@ -639,6 +657,7 @@ class QueryAPITool(BaseTool):
     }
 
     def execute(self, args: dict) -> ToolResult:
+        args = self.Parameters(**args).model_dump(exclude_none=True)
         endpoint = args.get("endpoint", "overview")
         zone_code = args.get("zone_code")
         district_code = args.get("district_code")

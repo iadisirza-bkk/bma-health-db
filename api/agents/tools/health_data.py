@@ -4,12 +4,27 @@ SYNC — queries DB directly via load_district_data().
 """
 from __future__ import annotations
 
+from typing import Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
 from agents.tools.base import BaseTool, ToolResult
 from agents.tools.helpers import (
     load_data, normalize_disease, get_base_rates, get_total_screened, apply_modifier,
     resolve_filter, DISEASE_NAMES, DISEASE_ALIASES, ALL_DISEASES,
     FACTOR_CATEGORIES, FACTOR_MODIFIERS, DCODE_TO_ZONE, HEALTH_ZONES,
 )
+
+
+class QueryHealthDataParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    group_by: Literal["district", "zone", "age_group", "sex", "disease", "smoking", "alcohol", "exercise"]
+    disease: Optional[Literal["diabetes", "hypertension", "obesity", "dyslipidemia", "cardiovascular", "stroke", "ckd", "anemia", "respiratory"]] = None
+    filters: Optional[dict] = None
+    chart_type: Optional[Literal["bar", "horizontal_bar", "donut", "pie", "line", "gauge", "radar", "scatter", "heatmap", "funnel", "table", "none"]] = None
+    highlight: Optional[str] = None
+    y_label: Optional[str] = None
+    top_n: Optional[int] = None
 
 
 class QueryHealthDataTool(BaseTool):
@@ -19,6 +34,7 @@ class QueryHealthDataTool(BaseTool):
         "Use filters to NARROW to a specific subgroup. "
         "IMPORTANT: If user asks about a SPECIFIC age/sex/behavior, put it in filters, NOT group_by."
     )
+    Parameters = QueryHealthDataParams
     parameters_schema = {
         "type": "object",
         "properties": {
@@ -34,6 +50,7 @@ class QueryHealthDataTool(BaseTool):
     }
 
     def execute(self, args: dict) -> ToolResult:
+        args = self.Parameters(**args).model_dump(exclude_none=True)
         data = load_data()
         group_by = args.get("group_by", "disease")
         disease = normalize_disease(args.get("disease"))

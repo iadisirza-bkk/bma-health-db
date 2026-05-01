@@ -1,0 +1,25 @@
+name: generate_report
+description_th: 'Generate PDF report/slides: comprehensive, executive, or disease_focus (6-slide deck)'
+class_path: agents.tools.report:GenerateReportTool
+enabled: true
+audience:
+- public
+- clinician
+parameters:
+  type: object
+  properties:
+    report_type:
+      type: string
+      enum:
+      - comprehensive
+      - executive
+      - disease_focus
+    disease:
+      type: string
+    lang:
+      type: string
+      enum:
+      - th
+      - en
+  required:
+  - report_type

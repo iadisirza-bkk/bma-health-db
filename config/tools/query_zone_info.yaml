@@ -1,0 +1,22 @@
+name: query_zone_info
+description_th: 'Look up Bangkok health zone info: districts, facilitator hospital, zone for a district.'
+class_path: agents.tools.zone_info:QueryZoneInfoTool
+enabled: true
+audience:
+- public
+- clinician
+parameters:
+  type: object
+  properties:
+    zone:
+      type: string
+      description: Zone number 1-8
+    district:
+      type: string
+      description: District name (Thai)
+    query_type:
+      type: string
+      enum:
+      - zone_details
+      - district_zone
+      - all_zones

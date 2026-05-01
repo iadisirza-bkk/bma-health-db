@@ -1,0 +1,59 @@
+name: query_health_data
+description_th: 'Query Bangkok health screening data. Use group_by to COMPARE across a dimension. Use filters to NARROW to
+  a specific subgroup. IMPORTANT: If user asks about a SPECIFIC age/sex/behavior, put it in filters, NOT group_by.'
+class_path: agents.tools.health_data:QueryHealthDataTool
+enabled: true
+audience:
+- public
+- clinician
+parameters:
+  type: object
+  properties:
+    group_by:
+      type: string
+      enum:
+      - district
+      - zone
+      - age_group
+      - sex
+      - disease
+      - smoking
+      - alcohol
+      - exercise
+    disease:
+      type: string
+      enum:
+      - diabetes
+      - hypertension
+      - obesity
+      - dyslipidemia
+      - cardiovascular
+      - stroke
+      - ckd
+      - anemia
+      - respiratory
+    filters:
+      type: object
+    chart_type:
+      type: string
+      enum:
+      - bar
+      - horizontal_bar
+      - donut
+      - pie
+      - line
+      - gauge
+      - radar
+      - scatter
+      - heatmap
+      - funnel
+      - table
+      - none
+    highlight:
+      type: string
+    y_label:
+      type: string
+    top_n:
+      type: integer
+  required:
+  - group_by

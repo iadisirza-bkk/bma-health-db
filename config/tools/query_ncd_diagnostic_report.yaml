@@ -1,0 +1,12 @@
+name: query_ncd_diagnostic_report
+description_th: รายงานคัดกรอง NCD แบบ 4 มิติ × 11 โรค (คนเสี่ยง / คนป่วย / ใหม่จากการตรวจ / ใหม่จากผลแลป) — เรียกเมื่อแพทย์ขอภาพรวมการคัดกรองโรคไม่ติดต่อ
+  หรือถามว่าคัดกรองเจอโรคใหม่กี่คน
+class_path: agents.tools.ncd_report:NcdDiagnosticReportTool
+enabled: true
+audience:
+- public
+- clinician
+parameters:
+  type: object
+  properties: {}
+  required: []

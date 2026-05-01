@@ -1,0 +1,31 @@
+name: generate_adaptive_report
+description_th: Generate CUSTOM PDF with AI-written content tailored to user request
+class_path: agents.tools.adaptive_report:GenerateAdaptiveReportTool
+enabled: true
+audience:
+- public
+- clinician
+parameters:
+  type: object
+  properties:
+    title:
+      type: string
+      description: Report title in Thai
+    topic:
+      type: string
+      description: What to analyze — disease, zone, factor, comparison, etc.
+    disease:
+      type: string
+    zone:
+      type: string
+    district:
+      type: string
+    format:
+      type: string
+      enum:
+      - slides
+      - document
+      description: slides=Beamer 4-6 pages, document=Article 1-2 pages
+  required:
+  - title
+  - topic

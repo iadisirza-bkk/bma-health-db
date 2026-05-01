@@ -4,13 +4,25 @@ SYNC — uses data.facts directly.
 """
 from __future__ import annotations
 
+from typing import Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
 from agents.tools.base import BaseTool, ToolResult
 from data.facts import HEALTH_ZONES, DCODE_TO_ZONE
+
+
+class QueryZoneInfoParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    zone: Optional[str] = Field(default=None, description="Zone number 1-8")
+    district: Optional[str] = Field(default=None, description="District name (Thai)")
+    query_type: Optional[Literal["zone_details", "district_zone", "all_zones"]] = None
 
 
 class QueryZoneInfoTool(BaseTool):
     name = "query_zone_info"
     description = "Look up Bangkok health zone info: districts, facilitator hospital, zone for a district."
+    Parameters = QueryZoneInfoParams
     parameters_schema = {
         "type": "object",
         "properties": {
@@ -21,6 +33,7 @@ class QueryZoneInfoTool(BaseTool):
     }
 
     def execute(self, args: dict) -> ToolResult:
+        args = self.Parameters(**args).model_dump(exclude_none=True)
         qt = args.get("query_type", "all_zones")
 
         if qt == "zone_details":

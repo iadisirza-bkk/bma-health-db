@@ -1,0 +1,37 @@
+name: query_statistical_test
+description_th: 'Run statistical test: chi_square, odds_ratio, anova, logistic_regression, correlation, mann_kendall, comorbidity'
+class_path: agents.tools.statistical:QueryStatisticalTestTool
+enabled: true
+audience:
+- public
+- clinician
+parameters:
+  type: object
+  properties:
+    test:
+      type: string
+      enum:
+      - chi_square
+      - odds_ratio
+      - anova
+      - logistic_regression
+      - correlation
+      - mann_kendall
+      - comorbidity
+    disease:
+      type: string
+    factor:
+      type: string
+      enum:
+      - sex
+      - age_group
+      - smoking
+      - alcohol
+      - exercise
+      - zone
+    exposed_value:
+      type: string
+    disease2:
+      type: string
+  required:
+  - test

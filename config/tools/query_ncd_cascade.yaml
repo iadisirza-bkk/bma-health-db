@@ -1,0 +1,24 @@
+name: query_ncd_cascade
+description_th: 'NCD care cascade: screened → at risk → diagnosed for one disease. Use for ''cascade'', ''เส้นทางการตรวจ'',
+  ''พบเสี่ยง → วินิจฉัย → รักษา''.'
+class_path: agents.tools.insights:NCDCascadeTool
+enabled: true
+audience:
+- public
+- clinician
+parameters:
+  type: object
+  properties:
+    disease:
+      type: string
+      enum:
+      - diabetes
+      - hypertension
+      - cardiovascular
+      - obesity
+      description: Which NCD to trace.
+    zone_code:
+      type: string
+      description: Optional zone scope 01-08.
+  required:
+  - disease

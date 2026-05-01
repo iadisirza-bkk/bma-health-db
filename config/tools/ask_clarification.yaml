@@ -1,0 +1,30 @@
+name: ask_clarification
+description_th: Ask user clarifying questions BEFORE analysis. Use when request is ambiguous or complex.
+class_path: agents.tools.clarification:AskClarificationTool
+enabled: true
+audience:
+- public
+- clinician
+parameters:
+  type: object
+  properties:
+    questions:
+      type: array
+      items:
+        type: object
+        properties:
+          id:
+            type: string
+          question:
+            type: string
+          options:
+            type: array
+            items:
+              type: object
+              properties:
+                label:
+                  type: string
+                value:
+                  type: string
+  required:
+  - questions

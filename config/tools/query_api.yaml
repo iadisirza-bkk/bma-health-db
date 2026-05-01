@@ -1,0 +1,101 @@
+name: query_api
+description_th: 'Query specialized health data endpoints. Use this for: KPIs, NCD cascade, lab results, BMI/waist distribution,
+  cost/budget analysis, screening test rates, chronic disease history, family history, comorbidity counts, facility performance,
+  year-over-year comparison, MOPH targets, and screening locations. IMPORTANT: Use this instead of query_health_data when
+  the user asks about lab values, cost, budget, KPI targets, NCD cascade, screening tests (EKG/X-ray), treatment adherence,
+  vaccination, or comorbidity COUNTS.'
+class_path: agents.tools.query_api:QueryAPITool
+enabled: true
+audience:
+- public
+- clinician
+parameters:
+  type: object
+  properties:
+    endpoint:
+      type: string
+      enum:
+      - headline_kpi
+      - yoy_comparison
+      - executive_alert
+      - moph_targets
+      - screening_yield
+      - zone_comparison
+      - ncd_cascade
+      - screening_coverage
+      - repeat_screening
+      - lab_summary
+      - lab_city_average
+      - disease_lab_crosstab
+      - bmi_distribution
+      - exercise_frequency
+      - cost_per_screening
+      - budget_allocation
+      - facility_performance
+      - facility_yield_rank
+      - screening_tests
+      - chronic_history
+      - family_history
+      - screening_locations
+      - district_summary
+      - comorbidity_matrix
+      - overview
+      description: 'Which data endpoint to query. Options:
+
+        - headline_kpi: Governor headline KPIs (total screened, top disease, coverage %)
+
+        - yoy_comparison: Year-over-year disease trend comparison
+
+        - executive_alert: Active health alerts and warnings
+
+        - moph_targets: Compare against Ministry of Public Health NCD targets
+
+        - screening_yield: Risk detection rate (yield %) per district
+
+        - zone_comparison: Cross-zone KPI comparison
+
+        - ncd_cascade: NCD care cascade: screened → at risk → diagnosed → treatment
+
+        - screening_coverage: Screening coverage rate per district vs target
+
+        - repeat_screening: Repeat screening / follow-up visit rates
+
+        - lab_summary: Average lab values by district (FBS, cholesterol, hemoglobin, etc.)
+
+        - lab_city_average: City-wide average lab values
+
+        - disease_lab_crosstab: Cross-tab: lab values (FBS, SBP, cholesterol) by disease status (DM+/DM-, HPT+/HPT-)
+
+        - bmi_distribution: BMI category distribution (underweight/normal/overweight/obese)
+
+        - exercise_frequency: Exercise frequency distribution
+
+        - cost_per_screening: Cost analysis (THB per person screened)
+
+        - budget_allocation: Budget allocation model by district
+
+        - facility_performance: Screening counts per facility
+
+        - facility_yield_rank: Facilities ranked by screening yield
+
+        - screening_tests: EKG, chest X-ray, vision, DR screening rates
+
+        - chronic_history: Known chronic conditions, treatment adherence, vaccination
+
+        - family_history: Family disease history (DM, HPT, stroke, etc.)
+
+        - screening_locations: Health center locations with coordinates
+
+        - district_summary: Simplified district health summary (Thai)
+
+        - comorbidity_matrix: Disease co-occurrence counts (DM+HPT, metabolic syndrome, etc.)
+
+        - overview: Top-level screening overview with zone and disease breakdown'
+    zone_code:
+      type: string
+      description: 'Optional: filter by zone (1-8)'
+    district_code:
+      type: string
+      description: 'Optional: filter by district (4-digit code)'
+  required:
+  - endpoint

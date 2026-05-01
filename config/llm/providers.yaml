@@ -1,0 +1,32 @@
+# LLM provider registry — see ADR-02 §2.
+#
+# `${VAR}` placeholders are interpolated at boot from the process
+# environment. Missing env var = boot fails loud (we won't silently
+# fall back to ::1 or anything wrong-but-quiet).
+#
+# Switching analyst / synthesizer to a different provider is a one-line
+# change to the `defaults:` block — no Python edits, no orchestrator
+# changes. New providers are added by listing them here and shipping a
+# matching `<Provider>Adapter` class.
+
+providers:
+  - name: lmstudio
+    adapter: lmstudio
+    base_url: ${LMSTUDIO_URL}
+    timeout: 120
+
+  # Anthropic / Claude — opt in by uncommenting and exporting ANTHROPIC_API_KEY.
+  # Requires `pip install anthropic`. Self-registration in
+  # api/agents/adapters/anthropic.py wires the adapter into ProviderRegistry.
+  # - name: claude
+  #   adapter: anthropic
+  #   api_key_env: ANTHROPIC_API_KEY
+  #   timeout: 60
+
+defaults:
+  analyst:
+    provider: lmstudio
+    model: ${LLM_MODEL_ANALYST}
+  synthesizer:
+    provider: lmstudio
+    model: ${LLM_MODEL_SYNTHESIZER}

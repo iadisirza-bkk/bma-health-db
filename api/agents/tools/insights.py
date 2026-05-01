@@ -18,7 +18,9 @@ NOTE on schema access:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from agents.tools.base import BaseTool, ToolResult
 
@@ -126,12 +128,28 @@ _DISEASE_TREND_FIELDS = {
 }
 
 
+_TimeTrendDiseaseLiteral = Literal[tuple(_DISEASE_TREND_FIELDS.keys())]  # type: ignore[valid-type]
+
+
+class TimeTrendParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    disease: Optional[_TimeTrendDiseaseLiteral] = Field(  # type: ignore[valid-type]
+        default=None, description="Disease key. Omit to show total screened only."
+    )
+    period: Optional[Literal["month", "quarter"]] = Field(
+        default=None, description="Aggregation granularity. Default: month."
+    )
+    from_date: Optional[str] = Field(default=None, description="Start date (YYYY-MM-DD). Default: 2024-01-01.")
+    to_date: Optional[str] = Field(default=None, description="End date (YYYY-MM-DD). Default: today.")
+
+
 class TimeTrendTool(BaseTool):
     name = "query_time_trend"
     description = (
         "Show monthly or quarterly screening trend for one or more diseases. "
         "Use for 'แนวโน้ม', 'เปลี่ยนไปยังไง', 'รายเดือน/ไตรมาส', 'ปี 2024 vs 2025'."
     )
+    Parameters = TimeTrendParams
     parameters_schema = {
         "type": "object",
         "properties": {
@@ -157,6 +175,7 @@ class TimeTrendTool(BaseTool):
     }
 
     def execute(self, args: dict) -> ToolResult:
+        args = self.Parameters(**args).model_dump(exclude_none=True)
         from security import K_ANONYMITY_THRESHOLD
 
         disease = args.get("disease")
@@ -244,12 +263,22 @@ class TimeTrendTool(BaseTool):
 # 2. Province breakdown — non-BKK origin
 # ---------------------------------------------------------------------------
 
+class ProvinceBreakdownParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    top_n: Optional[int] = Field(default=None, description="Top N provinces to return. Default: 10.")
+    region: Optional[str] = Field(
+        default=None,
+        description="Optional: filter by region (Central/North/Northeast/East/South/West).",
+    )
+
+
 class ProvinceBreakdownTool(BaseTool):
     name = "query_province_breakdown"
     description = (
         "Break down out-of-Bangkok (ตจว.) screened persons by home province. "
         "Use for 'มาจากจังหวัดไหน', 'ตจว.', 'ต่างจังหวัด', 'นอก กทม.'."
     )
+    Parameters = ProvinceBreakdownParams
     parameters_schema = {
         "type": "object",
         "properties": {
@@ -259,6 +288,7 @@ class ProvinceBreakdownTool(BaseTool):
     }
 
     def execute(self, args: dict) -> ToolResult:
+        args = self.Parameters(**args).model_dump(exclude_none=True)
         from security import K_ANONYMITY_THRESHOLD
         top_n = int(args.get("top_n", 10))
         region = args.get("region")
@@ -333,6 +363,17 @@ class ProvinceBreakdownTool(BaseTool):
 # 3. Facility lookup — count/list facilities by zone/district/type
 # ---------------------------------------------------------------------------
 
+class FacilityLookupParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    zone_code: Optional[str] = Field(default=None, description="Zone code 01-08.")
+    district_code: Optional[str] = Field(default=None, description="District code (4-digit).")
+    district_name: Optional[str] = Field(default=None, description="District name in Thai.")
+    facility_type: Optional[str] = Field(default=None, description="Optional facility type filter (Thai).")
+    list_count: Optional[int] = Field(
+        default=None, description="How many facilities to list (0 = count only). Default: 5."
+    )
+
+
 class FacilityLookupTool(BaseTool):
     name = "query_facility"
     description = (
@@ -341,6 +382,7 @@ class FacilityLookupTool(BaseTool):
         "'มีกี่แห่ง', 'มีกี่ที่', facility count. "
         "ห้ามใช้กับคำถามเรื่องโรคหรือสถิติผู้ป่วย — ใช้ query_health_data แทน."
     )
+    Parameters = FacilityLookupParams
     parameters_schema = {
         "type": "object",
         "properties": {
@@ -353,6 +395,7 @@ class FacilityLookupTool(BaseTool):
     }
 
     def execute(self, args: dict) -> ToolResult:
+        args = self.Parameters(**args).model_dump(exclude_none=True)
         zone_code = args.get("zone_code")
         district_code = args.get("district_code")
         district_name = args.get("district_name")
@@ -477,12 +520,25 @@ _LIFESTYLE_VAR_TH = {
 }
 
 
+class RiskProfileParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dimension: Optional[Literal["sex", "age", "lifestyle", "all"]] = Field(
+        default=None, description="Which profile dimension to return. 'all' returns sex+age+lifestyle."
+    )
+    lifestyle_var: Optional[Literal["smoking", "alcohol", "exercise"]] = Field(
+        default=None, description="If dimension=lifestyle, pick one. Default: exercise."
+    )
+    district_code: Optional[str] = Field(default=None, description="Optional: scope to one district.")
+    zone_code: Optional[str] = Field(default=None, description="Optional: scope to one zone.")
+
+
 class RiskProfileTool(BaseTool):
     name = "query_risk_profile"
     description = (
         "Risk-factor profile of screened patients: sex/age/lifestyle breakdown. "
         "Use for 'ผู้ป่วย X เพศไหน อายุเท่าไหร่ สูบบุหรี่ไหม', 'โปรไฟล์'."
     )
+    Parameters = RiskProfileParams
     parameters_schema = {
         "type": "object",
         "properties": {
@@ -502,6 +558,7 @@ class RiskProfileTool(BaseTool):
     }
 
     def execute(self, args: dict) -> ToolResult:
+        args = self.Parameters(**args).model_dump(exclude_none=True)
         dim = args.get("dimension", "all")
         lifestyle_var = args.get("lifestyle_var", "exercise")
         district_code = args.get("district_code")
@@ -627,12 +684,25 @@ _METRIC_MAP = {
 }
 
 
+_DistrictCompareMetricLiteral = Literal[tuple(_METRIC_MAP.keys())]  # type: ignore[valid-type]
+
+
+class DistrictCompareParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    metric: Optional[_DistrictCompareMetricLiteral] = Field(  # type: ignore[valid-type]
+        default=None, description="Disease/metric to compare. Default: diabetes."
+    )
+    top_n: Optional[int] = Field(default=None, description="Top N. Default: 5.")
+    bottom_n: Optional[int] = Field(default=None, description="Bottom N. Default: 5.")
+
+
 class DistrictCompareTool(BaseTool):
     name = "query_district_compare"
     description = (
         "Compare districts: top N, bottom N, and city average for a disease/metric. "
         "Use for 'เปรียบเทียบเขต', 'สูงสุด vs ต่ำสุด', 'อันดับ', 'percentile'."
     )
+    Parameters = DistrictCompareParams
     parameters_schema = {
         "type": "object",
         "properties": {
@@ -647,6 +717,7 @@ class DistrictCompareTool(BaseTool):
     }
 
     def execute(self, args: dict) -> ToolResult:
+        args = self.Parameters(**args).model_dump(exclude_none=True)
         metric = args.get("metric", "diabetes")
         if metric not in _METRIC_MAP:
             return ToolResult(text=f"ไม่รู้จัก metric '{metric}'")
@@ -726,12 +797,21 @@ class DistrictCompareTool(BaseTool):
 # 6. Mental health drilldown — zone vs city
 # ---------------------------------------------------------------------------
 
+class MentalHealthCompareParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    zone_code: Optional[str] = Field(default=None, description="Optional zone code 01-08 to drill down.")
+    metric: Optional[Literal["phq9_moderate", "depression_risk", "high_stress", "all"]] = Field(
+        default=None, description="Which mental-health metric to highlight. Default: all."
+    )
+
+
 class MentalHealthCompareTool(BaseTool):
     name = "query_mental_health"
     description = (
         "PHQ-9, depression risk, stress comparison. Optionally compare a zone vs city. "
         "Use for 'PHQ-9', 'ซึมเศร้า', 'สุขภาพจิต', 'เครียด'."
     )
+    Parameters = MentalHealthCompareParams
     parameters_schema = {
         "type": "object",
         "properties": {
@@ -745,6 +825,7 @@ class MentalHealthCompareTool(BaseTool):
     }
 
     def execute(self, args: dict) -> ToolResult:
+        args = self.Parameters(**args).model_dump(exclude_none=True)
         zone_code = args.get("zone_code")
         metric = args.get("metric", "all")
         if zone_code:
@@ -839,12 +920,24 @@ _NCD_CASCADE_FIELDS = {
 }
 
 
+_NCDCascadeDiseaseLiteral = Literal[tuple(_NCD_CASCADE_FIELDS.keys())]  # type: ignore[valid-type]
+
+
+class NCDCascadeParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    disease: _NCDCascadeDiseaseLiteral = Field(  # type: ignore[valid-type]
+        ..., description="Which NCD to trace."
+    )
+    zone_code: Optional[str] = Field(default=None, description="Optional zone scope 01-08.")
+
+
 class NCDCascadeTool(BaseTool):
     name = "query_ncd_cascade"
     description = (
         "NCD care cascade: screened → at risk → diagnosed for one disease. "
         "Use for 'cascade', 'เส้นทางการตรวจ', 'พบเสี่ยง → วินิจฉัย → รักษา'."
     )
+    Parameters = NCDCascadeParams
     parameters_schema = {
         "type": "object",
         "properties": {
@@ -859,6 +952,7 @@ class NCDCascadeTool(BaseTool):
     }
 
     def execute(self, args: dict) -> ToolResult:
+        args = self.Parameters(**args).model_dump(exclude_none=True)
         disease = args.get("disease", "diabetes")
         if disease not in _NCD_CASCADE_FIELDS:
             return ToolResult(text=f"ไม่รู้จักโรค '{disease}'")

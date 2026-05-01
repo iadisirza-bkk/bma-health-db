@@ -1,0 +1,17 @@
+name: query_province_breakdown
+description_th: Break down out-of-Bangkok (ตจว.) screened persons by home province. Use for 'มาจากจังหวัดไหน', 'ตจว.', 'ต่างจังหวัด',
+  'นอก กทม.'.
+class_path: agents.tools.insights:ProvinceBreakdownTool
+enabled: true
+audience:
+- public
+- clinician
+parameters:
+  type: object
+  properties:
+    top_n:
+      type: integer
+      description: 'Top N provinces to return. Default: 10.'
+    region:
+      type: string
+      description: 'Optional: filter by region (Central/North/Northeast/East/South/West).'

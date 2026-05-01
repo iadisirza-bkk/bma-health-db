@@ -1,0 +1,27 @@
+name: query_facility
+description_th: ค้นหา/นับสถานพยาบาล (รพ./คลินิก/ร้านยา) แยกตามเขต/โซน/ประเภท. ใช้กับคำถามเกี่ยวกับ 'จำนวนสถานพยาบาล', 'รพ.ในเขต',
+  'คลินิกในโซน', 'ร้านยา', 'มีกี่แห่ง', 'มีกี่ที่', facility count. ห้ามใช้กับคำถามเรื่องโรคหรือสถิติผู้ป่วย — ใช้ query_health_data
+  แทน.
+class_path: agents.tools.insights:FacilityLookupTool
+enabled: true
+audience:
+- public
+- clinician
+parameters:
+  type: object
+  properties:
+    zone_code:
+      type: string
+      description: Zone code 01-08.
+    district_code:
+      type: string
+      description: District code (4-digit).
+    district_name:
+      type: string
+      description: District name in Thai.
+    facility_type:
+      type: string
+      description: Optional facility type filter (Thai).
+    list_count:
+      type: integer
+      description: 'How many facilities to list (0 = count only). Default: 5.'

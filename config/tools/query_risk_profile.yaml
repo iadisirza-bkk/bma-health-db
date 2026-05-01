@@ -1,0 +1,32 @@
+name: query_risk_profile
+description_th: 'Risk-factor profile of screened patients: sex/age/lifestyle breakdown. Use for ''ผู้ป่วย X เพศไหน อายุเท่าไหร่
+  สูบบุหรี่ไหม'', ''โปรไฟล์''.'
+class_path: agents.tools.insights:RiskProfileTool
+enabled: true
+audience:
+- public
+- clinician
+parameters:
+  type: object
+  properties:
+    dimension:
+      type: string
+      enum:
+      - sex
+      - age
+      - lifestyle
+      - all
+      description: Which profile dimension to return. 'all' returns sex+age+lifestyle.
+    lifestyle_var:
+      type: string
+      enum:
+      - smoking
+      - alcohol
+      - exercise
+      description: 'If dimension=lifestyle, pick one. Default: exercise.'
+    district_code:
+      type: string
+      description: 'Optional: scope to one district.'
+    zone_code:
+      type: string
+      description: 'Optional: scope to one zone.'
