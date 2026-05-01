@@ -8,22 +8,31 @@ from __future__ import annotations
 
 from typing import Optional, List, Dict
 
+import hashlib
 import hmac
 import importlib.util
 import logging
 import os
 import secrets
+import shutil
+import tempfile
 import threading
 import time
 import uuid
+import zipfile
 from datetime import datetime
 from io import StringIO
+from pathlib import Path
 
 import pandas as pd
 import psycopg2
-from fastapi import APIRouter, Request, UploadFile, File, Form, HTTPException
+from fastapi import (
+    APIRouter, Request, UploadFile, File, Form, HTTPException,
+    Header, BackgroundTasks,
+)
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
 from database import (
     execute_query as _execute_query_reader,
@@ -32,17 +41,17 @@ from database import (
     get_writer_conn,
 )
 
-# Admin endpoints write to private.* AND public.import_history — always use the
-# writer pool (etl_user). Auth is enforced via _require_auth + CSRF before any
-# DB call.
+# Admin endpoints write to public.import_history and bma_med.* — always use
+# the writer pool (etl_user). Auth is enforced via _require_auth + CSRF before
+# any DB call.
 #
 # Override get_conn → get_writer_conn for the admin module.
 get_conn = get_writer_conn
 
 
 def execute_query(sql: str, params=None):
-    """Admin variant: runs through writer pool (etl_user) so SELECT private.*
-    works. The reader pool (api_user) has zero access to private."""
+    """Admin variant: runs through writer pool (etl_user). The reader pool
+    (api_user) has zero access to writer-only tables."""
     import psycopg2.extras as _extras
     with get_writer_conn() as conn:
         with conn.cursor(cursor_factory=_extras.RealDictCursor) as cur:
@@ -146,7 +155,7 @@ CURRENT_YEAR = int(os.getenv("CURRENT_YEAR", str(datetime.now().year)))
 # tables. On a v3-only deployment the queries either return empty results
 # (legacy compat tables exist but are empty) or fail outright.
 #
-# Until the pages are rewritten against `private.*` + `public.mv_*`,
+# Until the pages are rewritten against `bma_med.*` + `public.mv_*`,
 # render a banner so the operator isn't fooled by silent zeros. We treat
 # the page as "pending v3 rewrite" when EVERY raw_* canonical table has
 # zero rows (i.e. no legacy data is present).
@@ -233,65 +242,6 @@ def _has_data_source_column(cur) -> bool:
     _HAS_DATA_SOURCE_COL = bool(cur.fetchone()[0])
     return _HAS_DATA_SOURCE_COL
 
-
-def _delete_for_sources(cur, sources: List[str]) -> str:
-    """Delete v3 private.* data for the given sources (preserves other sources).
-
-    Cascades:
-      - private.patient_alias → patient_id
-      - private.patient (CASCADE deletes patient_address / chronic / family / allergy / attribute)
-      - private.visit_event (CASCADE deletes visit_measurement / pain / etc.)
-      - private.lab_event   (CASCADE deletes lab_measurement)
-
-    Returns a short label for logging.
-    """
-    if not sources:
-        return "noop"
-
-    placeholders = ",".join(["%s"] * len(sources))
-    params = tuple(sources)
-
-    # ── Bulk-delete child measurement tables FIRST, then events ──
-    # The FK from visit_measurement → visit_event has ON DELETE CASCADE, so a
-    # naive DELETE on visit_event triggers per-row cascade (slow at scale —
-    # ~150s for portal source which fans out to ~49M visit_measurement rows
-    # across 16 hash partitions × 4 indexes each). A manual bulk DELETE on
-    # the child first lets Postgres use a single hash semi-join (~30-40s) and
-    # the parent DELETE then has nothing to cascade.
-    cur.execute(f"""
-        DELETE FROM private.visit_measurement vm
-         USING private.visit_event ve
-         WHERE vm.visit_id = ve.id
-           AND ve.source_code IN ({placeholders})
-    """, params)
-    cur.execute(f"""
-        DELETE FROM private.lab_measurement lm
-         USING private.lab_event le
-         WHERE lm.lab_id = le.id
-           AND le.source_code IN ({placeholders})
-    """, params)
-    cur.execute(f"DELETE FROM private.visit_event WHERE source_code IN ({placeholders})", params)
-    cur.execute(f"DELETE FROM private.lab_event   WHERE source_code IN ({placeholders})", params)
-
-    # Drop patient_alias rows for the targeted sources. The CTE used to be
-    # required to identify "exclusively in these sources" — but the orphan
-    # cleanup below handles that more directly, so the simple DELETE suffices.
-    cur.execute(
-        f"DELETE FROM private.patient_alias WHERE source_code IN ({placeholders})",
-        params,
-    )
-
-    # Delete patients now alias-orphaned (no remaining alias).
-    # NOT EXISTS is safer + faster than NOT IN (no NULL-semantics quirks; PG
-    # plans this as a hash anti-join in one pass).
-    cur.execute("""
-        DELETE FROM private.patient p
-         WHERE NOT EXISTS (
-           SELECT 1 FROM private.patient_alias pa WHERE pa.patient_id = p.id
-         )
-    """)
-
-    return "delete " + ",".join(sources)
 
 # --------------------------------------------------------------------------- #
 # Authentication helpers
@@ -413,36 +363,41 @@ def _require_auth(request: Request):
 # File type detection and mapping
 # --------------------------------------------------------------------------- #
 
+# TODO: legacy, remove in next sprint — the single-file `/admin/upload` page
+# (which is the only consumer of FILE_TYPE_MAP) targets the dropped legacy
+# schema via `_run_import`. Keep the dict so the UI still renders, but use
+# `bma_med.*` table names for display only — there is no active write path
+# behind these labels anymore. The new flow lives at `/api/admin/upload-excel`.
 FILE_TYPE_MAP = {
-    "pt": {"table": "private.patient", "csv": "pt.csv", "importer": "patients"},
-    "pthistory": {"table": "private.visit_event", "csv": "pthistory.csv", "importer": "visits"},
+    "pt": {"table": "bma_med.{src}_patient", "csv": "pt.csv", "importer": "patients"},
+    "pthistory": {"table": "bma_med.{src}_visit", "csv": "pthistory.csv", "importer": "visits"},
     "vitalsignslf": {
-        "table": "private.visit_event + visit_measurement",
+        "table": "bma_med.{src}_visit + measurements",
         "csv": "vitalsignslf.csv",
         "importer": "vital",
     },
     "homevisit": {
-        "table": "private.patient_address + visit_measurement",
+        "table": "bma_med.{src}_address + measurements",
         "csv": "homevisit.csv",
         "importer": "homevisit",
     },
     "homehealth": {
-        "table": "private.visit_measurement",
+        "table": "bma_med.{src}_measurement",
         "csv": "homehealth.csv",
         "importer": "homehealth",
     },
     "labhealth": {
-        "table": "private.lab_event + lab_measurement",
+        "table": "bma_med.{src}_lab + measurements",
         "csv": "labhealth.csv",
         "importer": "lab",
     },
     "labhealthext": {
-        "table": "private.lab_event + lab_measurement",
+        "table": "bma_med.{src}_lab + measurements",
         "csv": "labhealthext.csv",
         "importer": "lab_ext",
     },
     "app2": {
-        "table": "private.* (auto-split)",
+        "table": "bma_med.app2_* (auto-split)",
         "csv": "app2.csv",
         "importer": "app2",
     },
@@ -507,23 +462,20 @@ def _coverage_report(df_columns: list, source_code: str, file_type: str) -> dict
     """Return mapping coverage: how many CSV columns match variable_definition.
 
     Used by /admin/upload preview to inform user before commit.
+
+    TODO: legacy, remove in next sprint — historically queried the dropped
+    legacy variable-definition table. The single-file `/admin/upload` path
+    is superseded by `/api/admin/upload-excel`; this whole helper goes when
+    that legacy page is retired. For now we return empty coverage so the
+    preview still renders without raising.
     """
     if not source_code or source_code not in ("portal", "app1", "app2"):
         return {"matched": 0, "unmatched": 0, "address": 0, "total": len(df_columns)}
 
     upper_cols = {c.upper() for c in df_columns}
-    try:
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT csv_column_name, domain
-                    FROM private.variable_definition
-                    WHERE source_code = %s AND deprecated_at IS NULL
-                """, (source_code,))
-                known = {row[0].upper(): row[1] for row in cur.fetchall()}
-    except Exception:
-        return {"matched": 0, "unmatched": len(df_columns), "address": 0,
-                "total": len(df_columns)}
+    # Variable-definition lookup is gone with the schema; treat every column as
+    # "unmatched (significant)" minus the visit-meta whitelist below.
+    known: Dict[str, str] = {}
 
     matched = upper_cols & set(known.keys())
     address_cols = {c for c in matched if known.get(c) == 'address'}
@@ -716,164 +668,18 @@ def _sanitize_error(exc: Exception) -> str:
 
 
 def _run_import(upload_id: str, history_id: int):
-    """Execute the ETL import in a background thread.
+    """Stub — the legacy single-file ETL import is retired.
 
-    v3 (2026-04-27): writes to private.* schema via etl.import_csv_v3
-    (EAV pattern). Public.mv_* refreshed at end so dashboard sees new data.
+    The body used to dispatch to `etl.import_csv_v3` and write into the now-
+    dropped legacy schema. The replacement is `_run_pipeline_upload` behind
+    `/api/admin/upload-excel`. If this background-thread target is ever
+    reached, fail the history row loudly instead of pretending success.
     """
-    data = _upload_cache.pop(upload_id, None)
-    if not data:
-        _update_history(history_id, "error", 0, 0, "Upload data expired or missing", 0.0)
-        return
-
-    start = time.time()
-    conn = None
-    try:
-        conn = psycopg2.connect(DATABASE_URL_WRITER)
-        conn.autocommit = False
-        cur = conn.cursor()
-
-        # Refuse to start if another import is already running on this DB.
-        if not _try_acquire_import_lock(cur):
-            _update_history(
-                history_id, "error", 0, 0,
-                "Another import is currently running. Try again when it finishes.",
-                time.time() - start,
-            )
-            logger.warning("Import refused: another import holds the lock")
-            return
-
-        file_type = data["file_type"]
-        source_code = data.get("source_code") or "portal"
-        df = data["df"]
-
-        # ─── ETL v3 dispatch — writes to private.* (EAV) ────────────────
-        # Use _load_etl_v3() (file-path import) — same pattern as _load_etl()
-        # because uvicorn runs from api/ and etl/ has no __init__.py
-        etlv3 = _load_etl_v3()
-
-        # Create import_batch row for audit
-        cur.execute("""
-            INSERT INTO private.import_batch
-              (source_code, filename, csv_file_type, uploaded_at, status, progress_pct)
-            VALUES (%s, %s, %s, NOW(), 'running', 0)
-            RETURNING id
-        """, (source_code, data["filename"], file_type))
-        batch_id = cur.fetchone()[0]
-        conn.commit()
-
-        _update_progress(history_id, f"v3 import {source_code}/{file_type}", 20)
-
-        if file_type == "pt":
-            # Patient master + alias
-            pid_map = etlv3.import_patients(cur, df, source_code, batch_id)
-            rows_imported = len(pid_map)
-        elif file_type == "app2":
-            # Combined CSV — auto-splits patient + visit
-            n_pat, n_vis = etlv3.import_app2(cur, df, batch_id)
-            rows_imported = n_vis
-        elif file_type in ("vitalsignslf", "homevisit", "homehealth"):
-            # Need patient_map first — fetch from existing
-            cur.execute("""
-                SELECT p.idcard_hash, p.id
-                FROM private.patient p
-                JOIN private.patient_alias pa ON pa.patient_id = p.id
-                WHERE pa.source_code = %s
-            """, (source_code,))
-            pid_map = {h: pid for h, pid in cur.fetchall()}
-            if not pid_map:
-                raise ValueError(
-                    f"No patients found for source={source_code}. "
-                    "Upload pt.csv first.",
-                )
-            rows_imported = etlv3.import_visits_and_measurements(
-                cur, df, source_code, file_type, pid_map, batch_id,
-            )
-        elif file_type in ("labhealth", "labhealthext"):
-            cur.execute("""
-                SELECT p.idcard_hash, p.id FROM private.patient p
-                JOIN private.patient_alias pa ON pa.patient_id = p.id
-                WHERE pa.source_code = %s
-            """, (source_code,))
-            pid_map = {h: pid for h, pid in cur.fetchall()}
-            rows_imported = etlv3.import_lab(cur, df, source_code, pid_map, batch_id)
-        elif file_type == "pthistory":
-            cur.execute("""
-                SELECT p.idcard_hash, p.id FROM private.patient p
-                JOIN private.patient_alias pa ON pa.patient_id = p.id
-                WHERE pa.source_code = %s
-            """, (source_code,))
-            pid_map = {h: pid for h, pid in cur.fetchall()}
-            rows_imported = etlv3.import_visits_and_measurements(
-                cur, df, source_code, file_type, pid_map, batch_id,
-            )
-        else:
-            raise ValueError(f"Unknown file type: {file_type}")
-
-        # Update import_batch
-        cur.execute("""
-            UPDATE private.import_batch
-            SET status = 'completed', rows_inserted = %s, rows_parsed = %s,
-                duration_ms = %s, progress_pct = 90
-            WHERE id = %s
-        """, (rows_imported, len(df), int((time.time() - start) * 1000), batch_id))
-
-        # Commit raw data FIRST — safe even if MV refresh fails
-        _update_progress(history_id, "commit", 85)
-        conn.commit()
-
-        # Refresh public.mv_* (k-anonymized aggregates) — non-fatal
-        _update_progress(history_id, "refresh public MVs", 92)
-        view_status: str
-        view_err: Optional[str] = None
-        try:
-            cur.execute("SELECT view_name, status FROM public.refresh_all_mvs()")
-            results = cur.fetchall()
-            failed = [r[0] for r in results if r[1] != 'ok']
-            if failed:
-                view_status = "partial"
-                view_err = f"failed: {', '.join(failed)}"
-            else:
-                view_status = "success"
-            conn.commit()
-        except Exception as exc:
-            conn.rollback()
-            view_status = "failed"
-            view_err = _sanitize_error(exc)
-            logger.error("MV refresh failed after import: %s", view_err)
-
-        # Flush Redis cache + in-memory data_adapter cache
-        _update_progress(history_id, "flush caches", 99)
-        try:
-            from cache import cache_flush_all
-            from services.data_adapter import invalidate_cache as invalidate_data_cache
-            cache_flush_all()
-            invalidate_data_cache()
-        except Exception:
-            logger.warning("Cache flush after import failed (non-fatal)")
-
-        duration = time.time() - start
-        _update_progress(history_id, "done", 100)
-        _update_history(
-            history_id, "success", rows_imported, 0, None, duration,
-            view_refresh_status=view_status,
-            view_refresh_error=view_err,
-        )
-        logger.info(
-            "Import complete: file_type=%s rows=%d duration=%.2fs view_refresh=%s",
-            file_type, rows_imported, duration, view_status,
-        )
-
-    except Exception as exc:
-        if conn:
-            conn.rollback()
-        duration = time.time() - start
-        error_msg = _sanitize_error(exc)
-        _update_history(history_id, "error", 0, 0, error_msg, duration)
-        logger.exception("Import failed for upload_id=%s", upload_id)
-    finally:
-        if conn:
-            conn.close()
+    _upload_cache.pop(upload_id, None)
+    _update_history(
+        history_id, "error", 0, 0,
+        "Endpoint replaced by /api/admin/upload-excel", 0.0,
+    )
 
 # --------------------------------------------------------------------------- #
 # Router and templates
@@ -1024,10 +830,15 @@ async def dashboard(request: Request, source: str = "all"):
       source: all | portal | app1 | app2 (default: all) — filters raw table
               counts and materialized view row counts per data_source.
 
-    Uses a 5-minute Redis cache for the heavy COUNT queries on partitioned
-    private.* tables (visit_measurement is 28M rows). Bundle-import explicitly
-    calls cache_flush_all() at the end so this never serves stale data after
-    a real upload.
+    Uses a 5-minute Redis cache for the heavy COUNT queries. The
+    `/api/admin/upload-excel` flow calls cache_flush_all() at the end so this
+    never serves stale data after a real upload.
+
+    TODO: legacy, remove in next sprint — the COUNT queries below still
+    target the dropped legacy schema. Each one is wrapped in try/except so
+    the page renders zeros instead of 500s, but the dashboard now needs a
+    rewrite against `bma_med.*` (or the public mv_* aggregates) to surface
+    real numbers.
     """
     _require_auth(request)
     source = _normalize_source(source)
@@ -1063,123 +874,44 @@ async def dashboard(request: Request, source: str = "all"):
 
     try:
         where_clause, params = _source_where_clause(source)
-        # v3 dashboard reads from private.* via patient_alias.source_code
-        src_filter_sql = ""
-        src_filter_params = ()
-        if source != "all":
-            src_filter_sql = " AND pa.source_code = %s"
-            src_filter_params = (source,)
+        # TODO: legacy dashboard counts — these queries historically read from
+        # the now-dropped legacy schema. Stub to zero so the page renders
+        # without 500s; rewrite against `bma_med.*` or the public mv_*
+        # aggregates to surface real numbers.
 
-        # ─── v3: counts from private.* ────────────────────────────────────
-        # Table specs map old raw_* names → new private.* aggregations.
-        # n_records ("ครั้ง"):  visit/measurement-level row counts
-        # n_people  ("คน"):     distinct patient_id
-        _v3_specs = [
-            ("private.patient",            "patients",
-             """SELECT COUNT(DISTINCT pa.patient_id) AS n_records,
-                       COUNT(DISTINCT pa.patient_id) AS n_people
-                FROM private.patient_alias pa
-                WHERE 1=1{src}""" ),
-            ("private.visit_event",        "vitalsigns",
-             """SELECT COUNT(*) AS n_records,
-                       COUNT(DISTINCT patient_id) AS n_people
-                FROM private.visit_event WHERE cancel_status = 0{src_visit}"""),
-            ("private.visit_event",        "visits",
-             """SELECT COUNT(*) AS n_records,
-                       COUNT(DISTINCT patient_id) AS n_people
-                FROM private.visit_event WHERE cancel_status = 0{src_visit}"""),
-            ("private.lab_event",          "lab",
-             """SELECT COUNT(*) AS n_records,
-                       COUNT(DISTINCT patient_id) AS n_people
-                FROM private.lab_event WHERE cancel_status = 0{src_lab}"""),
-            ("private.patient_address",    "homevisit",
-             """SELECT COUNT(*) AS n_records,
-                       COUNT(DISTINCT patient_id) AS n_people
-                FROM private.patient_address{src_addr}"""),
-            # homehealth/lab_extended: avoid the expensive JOIN-back-to-event by
-            # using pg_class partition-row estimates for n_records (instant) and
-            # reusing visit/lab event distinct-patient count for n_people.
-            # `JOIN visit_event` over 28M visit_measurement rows costs ~28s; this
-            # pre-aggregated path costs <50ms.
-            ("private.visit_measurement",  "homehealth",
-             """SELECT
-                  (SELECT COALESCE(SUM(c.reltuples)::bigint, 0)
-                   FROM pg_class c
-                   JOIN pg_inherits i ON i.inhrelid = c.oid
-                   JOIN pg_class p ON p.oid = i.inhparent
-                   WHERE p.relname = 'visit_measurement') AS n_records,
-                  (SELECT COUNT(DISTINCT patient_id)
-                   FROM private.visit_event WHERE cancel_status = 0{src_visit}) AS n_people"""),
-            ("private.lab_measurement",    "lab_extended",
-             """SELECT
-                  (SELECT COALESCE(SUM(c.reltuples)::bigint, 0)
-                   FROM pg_class c
-                   JOIN pg_inherits i ON i.inhrelid = c.oid
-                   JOIN pg_class p ON p.oid = i.inhparent
-                   WHERE p.relname = 'lab_measurement') AS n_records,
-                  (SELECT COUNT(DISTINCT patient_id)
-                   FROM private.lab_event WHERE cancel_status = 0{src_lab}) AS n_people"""),
+        # Each spec is (display_label, key) — counts default to zero.
+        _legacy_dashboard_specs = [
+            ("bma_med.*_patient",      "patients"),
+            ("bma_med.*_visit",        "vitalsigns"),
+            ("bma_med.*_visit",        "visits"),
+            ("bma_med.*_lab",          "lab"),
+            ("bma_med.*_address",      "homevisit"),
+            ("bma_med.*_measurement",  "homehealth"),
+            ("bma_med.*_lab_meas",     "lab_extended"),
         ]
-        # Source filter substitutions
-        v_src       = " AND source_code = %s" if source != "all" else ""
-        v_visit_v   = " AND ve.source_code = %s" if source != "all" else ""
-        v_lab_l     = " AND le.source_code = %s" if source != "all" else ""
-        v_addr      = (" WHERE source_code = %s" if source != "all" else "")
-        v_params    = (source,) if source != "all" else ()
 
         raw_tables = []
-        for tbl, key, sql_template in _v3_specs:
-            sql = sql_template.format(
-                src=src_filter_sql,
-                src_visit=v_src,
-                src_lab=v_src,
-                src_visit_v=v_visit_v,
-                src_lab_l=v_lab_l,
-                src_addr=v_addr,
-            )
-            try:
-                if key == "patients":
-                    rows = execute_query(sql, src_filter_params)
-                else:
-                    rows = execute_query(sql, v_params if v_params else None)
-                rows = rows or [{"n_records": 0, "n_people": 0}]
-            except Exception as exc:
-                logger.warning(f"Dashboard query failed for {tbl}: {exc}")
-                rows = [{"n_records": 0, "n_people": 0}]
-            row = rows[0]
-            n_rec = int(row.get("n_records") or 0)
-            n_ppl = int(row.get("n_people") or 0)
-            table_counts[key] = n_rec
+        for tbl, key in _legacy_dashboard_specs:
+            table_counts[key] = 0
             raw_tables.append({
                 "name": tbl,
-                "count": n_rec,
-                "n_records": n_rec,
-                "n_people": n_ppl,
+                "count": 0,
+                "n_records": 0,
+                "n_people": 0,
             })
-        people_counts = {key: rt["n_people"] for rt, (_, key, _) in
-                         zip(raw_tables, _v3_specs)}
+        people_counts = {key: 0 for _, key in _legacy_dashboard_specs}
 
         # ─── Per-source breakdown ────────────────────────────────────────
-        try:
-            source_breakdown = execute_query("""
-                SELECT pa.source_code AS data_source, COUNT(*) AS n
-                FROM private.patient_alias pa
-                GROUP BY pa.source_code ORDER BY pa.source_code
-            """) or []
-        except Exception:
-            source_breakdown = []
+        # TODO: legacy — was a GROUP BY on the dropped patient_alias table.
+        # Stubbed until the rewrite against bma_med.* lands.
+        source_breakdown = []
 
         # ─── Coverage stats vs project target ────────────────────────────
+        # TODO: legacy — was DISTINCT counts on the dropped patient_alias /
+        # patient tables. Stubbed for now.
         try:
-            cov_rows = execute_query("""
-                SELECT pa.source_code AS data_source, COUNT(DISTINCT pa.patient_id) AS n
-                FROM private.patient_alias pa
-                GROUP BY pa.source_code
-            """) or []
-            n_per_source = {r["data_source"]: int(r["n"]) for r in cov_rows}
-            n_unique_all = int(execute_scalar(
-                "SELECT COUNT(*) FROM private.patient WHERE NOT is_erased"
-            ) or 0)
+            n_per_source: Dict[str, int] = {}
+            n_unique_all = 0
             coverage_stats = {
                 "target":            COVERAGE_TARGET,
                 "n_unique_all":      n_unique_all,
@@ -1314,8 +1046,8 @@ async def upload_csv(
 ):
     """Handle CSV file upload: parse, detect type, show preview.
 
-    NEW (v3 schema): `source_code` is required so ETL knows which
-    `private.variable_definition` rows to use for column mapping.
+    Legacy single-file path; the live import flow is `/api/admin/upload-excel`.
+    `source_code` is still required for the preview UI.
     """
     _require_auth(request)
 
@@ -2240,17 +1972,23 @@ async def agreement_page(request: Request, pair: str = "portal-app1"):
 
     # Fast path — skip heavy compute if either source has 0 rows.
     # Note: agreement_service still reads from `raw_patients` etc.; until it
-    # is rewritten against private.* the page can only render against legacy
-    # data. Treat absence of raw_* rows as v3_pending so the user gets a
-    # clear banner instead of a misleading "ไม่สามารถวิเคราะห์ได้" screen.
+    # is rewritten against `bma_med.*` the page can only render against
+    # legacy data. Treat absence of raw_* rows as v3_pending so the user gets
+    # a clear banner instead of a misleading "ไม่สามารถวิเคราะห์ได้" screen.
     v3_pending = not _legacy_raw_has_data()
     sources_present: set = set()
     report = None
     if not v3_pending:
         try:
-            present_q = execute_query(
-                "SELECT data_source, COUNT(*) AS n FROM raw_patients GROUP BY data_source"
-            ) or []
+            # bma_med.* doesn't have a data_source column on patient — derive
+            # presence from which per-source pt table holds each patient_id.
+            present_q = execute_query("""
+                SELECT 'app1' AS data_source, COUNT(*) AS n FROM bma_med.app1_pt
+                UNION ALL
+                SELECT 'portal' AS data_source, COUNT(*) AS n FROM bma_med.portal_pt
+                UNION ALL
+                SELECT 'app2' AS data_source, COUNT(*) AS n FROM bma_med.app2_app2
+            """) or []
             sources_present = {r["data_source"] for r in present_q if r["n"] > 0}
         except Exception:
             sources_present = set()
@@ -2442,9 +2180,15 @@ async def cross_stats_page(request: Request, tab: str = "coverage"):
     sources_present: set = set()
     if legacy_has_data:
         try:
-            presence = execute_query(
-                "SELECT data_source, COUNT(*) AS n FROM raw_patients GROUP BY data_source"
-            ) or []
+            # bma_med.* doesn't have a data_source column on patient — derive
+            # presence from which per-source pt table holds each patient_id.
+            presence = execute_query("""
+                SELECT 'app1' AS data_source, COUNT(*) AS n FROM bma_med.app1_pt
+                UNION ALL
+                SELECT 'portal' AS data_source, COUNT(*) AS n FROM bma_med.portal_pt
+                UNION ALL
+                SELECT 'app2' AS data_source, COUNT(*) AS n FROM bma_med.app2_app2
+            """) or []
             sources_present = {r["data_source"] for r in presence if r["n"] > 0}
         except Exception:
             sources_present = set()
@@ -2590,9 +2334,10 @@ async def process_erasure(request: Request, idcard_hash: str = Form(...), csrf_t
             cur.execute("SELECT execute_patient_erasure(%s)", (idcard_hash,))
             rows_deleted = cur.fetchone()[0]
 
-            # 3. Verify — count any rows that still reference this patient
+            # 3. Verify — count any rows that still reference this patient.
+            # bma_med.patient.pid_encoded is the renamed equivalent of idcard_hash.
             cur.execute(
-                "SELECT id FROM raw_patients WHERE idcard_hash = %s",
+                "SELECT patient_id FROM bma_med.patient WHERE pid_encoded = %s",
                 (idcard_hash,),
             )
             patient_ids = [r[0] for r in cur.fetchall()]
@@ -2807,538 +2552,845 @@ def _detect_file_type_from_name(name: str) -> Optional[str]:
 
 
 # --------------------------------------------------------------------------- #
-# Facility bootstrap — one-time seed of private.facility from clinic_latlong.xls
+# Facility bootstrap removed (2026-05-01) — `_ensure_facilities_seeded` was
+# the v3 ETL's one-time seed of the legacy facility table from
+# clinic_latlong.xls. That schema is gone; facility data now lives under
+# `bma_med.*` and is seeded by the new pipeline directly. Helper had no live
+# callers.
 # --------------------------------------------------------------------------- #
-# v3 ETL `etl/import_csv_v3.py:_validate_facility` queries `private.facility`.
-# When that table is empty, every visit's `facility_code` is silently NULLed
-# and facility-level KPIs / map pins return zero data. This helper seeds the
-# table from the bundled XLS so a fresh deployment Just Works.
-
-_FACILITY_XLS = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "fact", "clinic_latlong.xls"
-)
 
 
-def _ensure_facilities_seeded(conn) -> Optional[Dict]:
-    """If private.facility is empty, run etl/import_facilities.py on the
-    bundled XLS. Returns import stats or None when no action was taken.
+# ─── bma-med pipeline integration helpers ──────────────────────────────────
+# Path to the bma-med repo (sibling checkout). The four pipeline scripts
+# (ingest.py / clean.py / validate.py / export.py) live at the top level.
+BMA_MED_ROOT = "/Users/dev/bma-med"
 
-    Idempotent: skips entirely when the table has any rows.
+
+def _set_history_error(history_id: int, error: str,
+                       detail: Optional[str] = None) -> None:
+    """Mark an import_history row as failed with an error message + detail.
+
+    `detail` is appended to `error_message` for human-readable diagnosis
+    (e.g. validation report markdown). Truncates the combined message to
+    avoid blowing past column limits — full reports remain on disk.
     """
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM private.facility")
-    n = cur.fetchone()[0]
-    cur.close()
-    if n > 0:
-        return None  # already seeded — nothing to do
-
-    if not os.path.exists(_FACILITY_XLS):
-        logger.warning(
-            "Facility seed skipped: %s not found", _FACILITY_XLS
-        )
-        return {"skipped": True, "reason": "xls_missing"}
-
-    # Lazy-load etl/import_facilities.py via spec_from_file_location to
-    # match the existing v1/v3 ETL loader pattern.
-    spec = importlib.util.spec_from_file_location(
-        "etl_import_facilities",
-        os.path.join(ETL_DIR, "import_facilities.py"),
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-
-    df = mod.load_xls(_FACILITY_XLS)
-    stats = mod.import_facilities(conn, df)
-    logger.info(
-        "Facility seed: ref_facilities=%d, private.facility=%d (%s)",
-        stats.get("inserted", 0), stats.get("v3_inserted", 0),
-        "v3 schema present" if not stats.get("v3_skipped")
-        else "v3 schema not present (skipped)",
-    )
-
-    # Geocode facilities: lat/lng → district_code + zone_code via point-in-polygon.
-    # Without this, gis/facilities can't filter by zone and the choropleth
-    # zone-summary aggregations miss facility counts. Non-fatal.
-    try:
-        geo_spec = importlib.util.spec_from_file_location(
-            "etl_geocode_facilities",
-            os.path.join(ETL_DIR, "geocode_facilities.py"),
-        )
-        geo_mod = importlib.util.module_from_spec(geo_spec)
-        geo_spec.loader.exec_module(geo_mod)
-        matched = geo_mod.geocode(dry_run=False)
-        stats["geocoded"] = matched
-        logger.info("Facility geocode: matched=%d", matched)
-    except Exception as exc:
-        logger.warning("Facility geocode skipped (non-fatal): %s", exc)
-        stats["geocoded"] = 0
-
-    return stats
+    msg = error if not detail else f"{error}\n\n{detail}"
+    if len(msg) > 8000:
+        msg = msg[:8000] + "\n…(truncated)"
+    _update_history(history_id, "error", 0, 0, msg, 0.0)
 
 
-def _run_bundle_import(manifest: List[Dict], history_id: int):
-    """Import all CSV files in the manifest in correct order.
+def _refresh_hot_mvs(cur) -> Dict[str, str]:
+    """Refresh the hot materialized views used by the public dashboard.
 
-    manifest entries: {source, file_type, tmp_path, filename, size_bytes}
-    Files are read from disk (never all-in-memory) and processed one-at-a-time.
-    Each tempfile is unlinked after its file is imported.
+    Each view is refreshed in its own try/except so a missing or broken MV
+    doesn't sink the whole upload. Returns {view_name: 'ok' | error_msg}.
     """
-    start = time.time()
+    views = (
+        "public.mv_visit_resolved",
+        "public.summary_district_disease",
+        "public.summary_facility",
+        "public.summary_disease_age_sex",
+    )
+    results: Dict[str, str] = {}
+    for v in views:
+        try:
+            cur.execute(f"REFRESH MATERIALIZED VIEW CONCURRENTLY {v}")
+            results[v] = "ok"
+            logger.info("Refreshed MV %s", v)
+        except Exception as exc:
+            err = _sanitize_error(exc)
+            results[v] = err
+            logger.warning("MV refresh failed for %s (non-fatal): %s", v, err)
+            # Roll back the failed REFRESH so the connection is usable again.
+            try:
+                cur.connection.rollback()
+            except Exception:
+                pass
+    return results
+
+
+# --------------------------------------------------------------------------- #
+# Legacy bundle-upload endpoints removed (2026-05-01).
+#
+# `/admin/upload-bundle` (GET + POST) and the background `_run_bundle_import`
+# worker staged xlsx → CSV → ingest → clean → validate → export → MV refresh
+# directly into the legacy schema. That schema has been dropped; the JSON
+# upload API (`/api/admin/upload-excel`, defined below) is the only supported
+# path now.
+# Stub the old route so legacy frontends/bookmarks get a clear 410 instead of
+# a confusing 404.
+# --------------------------------------------------------------------------- #
+
+@router.api_route("/upload-bundle", methods=["GET", "POST"], include_in_schema=False)
+async def upload_bundle_gone(request: Request):
+    raise HTTPException(
+        status_code=410,
+        detail="Endpoint replaced by /api/admin/upload-excel",
+    )
+
+
+# =========================================================================== #
+# JSON UPLOAD API — /api/admin/upload-excel  (Bearer-token auth)
+# =========================================================================== #
+#
+# Production-secrecy upload path. Accepts:
+#   • .xlsx — demuxed via /Users/dev/bma-med/xlsx_to_bmi100.py
+#   • .zip  — must contain a BMI_100/{app1,app2,portal}/*.csv layout
+#
+# Security guards (see SECURITY CHECKLIST in commit 115_upload_excel_columns):
+#   1. Bearer-token via _require_admin (separate from session-cookie auth)
+#   2. Streaming write w/ MAX_UPLOAD_MB cap (default 1024 MB / 1 GB, env-override via BMA_UPLOAD_MAX_MB)
+#   3. Extension allow-list  (.xlsx | .zip)
+#   4. Magic-byte sniff      (PK\x03\x04 — both .xlsx and .zip are zip-based)
+#   5. Filename sanitization (basename + alnum/._- only, 120-char cap)
+#   6. SHA-256 of body recorded for tamper detection
+#   7. Zip path-traversal guard (reject ".." / absolute / out-of-root members)
+#   8. Tempfile cleanup in `finally` regardless of outcome
+#   9. Audit log via bma_med.security.audit on every state transition
+#  10. Sanitized errors only — never raw tracebacks in API responses
+#  11. Pending-confirm tmpdirs auto-cleaned after 2h (janitor task)
+# =========================================================================== #
+
+MAX_UPLOAD_MB = int(os.environ.get("BMA_UPLOAD_MAX_MB", "1024"))
+ALLOWED_EXT   = {".xlsx", ".zip"}
+ALLOWED_MAGIC = {b"PK\x03\x04"}  # both .zip and .xlsx are zip-based
+ADMIN_BEARER_ENV = "BMA_ADMIN_TOKEN"
+
+# Subprocess timeouts (seconds). At 1 GB / ~10 M rows the export step is the
+# bottleneck — keep generous defaults; override per-deployment if needed.
+PIPELINE_TIMEOUT_INGEST   = int(os.environ.get("BMA_TIMEOUT_INGEST",   "3600"))
+PIPELINE_TIMEOUT_CLEAN    = int(os.environ.get("BMA_TIMEOUT_CLEAN",    "3600"))
+PIPELINE_TIMEOUT_VALIDATE = int(os.environ.get("BMA_TIMEOUT_VALIDATE", "1800"))
+PIPELINE_TIMEOUT_EXPORT   = int(os.environ.get("BMA_TIMEOUT_EXPORT",   "7200"))
+PIPELINE_TIMEOUT_DEMUX    = int(os.environ.get("BMA_TIMEOUT_DEMUX",    "900"))
+
+
+def _safe_filename(name: str) -> str:
+    """Strip directories, keep only alnum + ._- and cap at 120 chars."""
+    base = os.path.basename(name or "")
+    cleaned = "".join(c for c in base if c.isalnum() or c in "._-")[:120]
+    return cleaned or "upload"
+
+
+def _require_admin(authorization: Optional[str]) -> None:
+    """Enforce Bearer-token auth for the JSON admin API.
+
+    Reads the expected token from BMA_ADMIN_TOKEN env. If unset or empty, the
+    JSON API is hard-disabled (HTTP 503) — fail closed so a misconfigured prod
+    box doesn't accept uploads anonymously.
+    """
+    expected = os.environ.get(ADMIN_BEARER_ENV, "").strip()
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="Admin upload API is disabled (BMA_ADMIN_TOKEN not configured).",
+        )
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
+    token = authorization.split(None, 1)[1].strip()
+    if not hmac.compare_digest(token, expected):
+        raise HTTPException(status_code=401, detail="Invalid Bearer token")
+
+
+def _create_history_row(*, filename: str, kind: str,
+                        size_bytes: int, sha256: str,
+                        uploaded_path: str) -> int:
+    """Insert a new import_history row in 'queued' state and return its id."""
     conn = None
-    total_imported = 0
-    steps_done = []
-    tmp_paths = [m["tmp_path"] for m in manifest]
-
     try:
         conn = psycopg2.connect(DATABASE_URL_WRITER)
-        conn.autocommit = False
-        cur = conn.cursor()
-        etlv3 = _load_etl_v3()   # v3 ETL — writes to private.*
-
-        if not _try_acquire_import_lock(cur):
-            _update_history(
-                history_id, "error", 0, 0,
-                "Another import is currently running. Try again when it finishes.",
-                time.time() - start,
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO import_history
+                  (filename, table_name, file_type, status, started_at,
+                   sha256, size_bytes, kind, uploaded_path)
+                VALUES (%s, %s, %s, 'queued', NOW(), %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (filename[:255], "ALL", kind, sha256, size_bytes,
+                 kind, uploaded_path),
             )
-            logger.warning("Bundle import refused: another import holds the lock")
+            return cur.fetchone()[0]
+    finally:
+        if conn:
+            conn.close()
+
+
+def _fetch_history(history_id: int) -> Dict:
+    """Return the full import_history row as a dict (or 404)."""
+    rows = execute_query(
+        "SELECT * FROM import_history WHERE id = %s", (history_id,),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="history not found")
+    return dict(rows[0])
+
+
+def _set_history_fields(history_id: int, **fields) -> None:
+    """Generic UPDATE on import_history for arbitrary whitelisted columns.
+
+    Whitelist enforced — never lets caller-supplied keys slip into SQL.
+    """
+    allowed = {
+        "status", "validate_status", "validate_report",
+        "tmpdir_path", "uploaded_path", "kind",
+        "view_refresh_status", "view_refresh_error",
+        "rows_imported", "rows_skipped", "error_message",
+        "duration_seconds", "completed_at",
+    }
+    safe = {k: v for k, v in fields.items() if k in allowed}
+    if not safe:
+        return
+    cols = ", ".join(f"{k} = %s" for k in safe)
+    vals = list(safe.values()) + [history_id]
+    conn = None
+    try:
+        conn = psycopg2.connect(DATABASE_URL_WRITER)
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE import_history SET {cols} WHERE id = %s",
+                tuple(vals),
+            )
+    except Exception:
+        logger.exception("Failed to update history fields id=%s", history_id)
+    finally:
+        if conn:
+            conn.close()
+
+
+def _audit(history_id: int, transition: str, **detail) -> None:
+    """Best-effort audit-log write for upload-excel state transitions.
+
+    Never raises — audit is informational; a logging failure must not abort
+    the import. Imports the helper from /Users/dev/bma-med/security/audit.py.
+    """
+    try:
+        import sys as _sys
+        if BMA_MED_ROOT not in _sys.path:
+            _sys.path.insert(0, BMA_MED_ROOT)
+        from security.audit import audit_event  # type: ignore
+        ev = audit_event(
+            operator=os.environ.get("BMA_OPERATOR", "admin"),
+            operation="UPLOAD_EXCEL",
+            resource=f"admin.upload-excel:{transition}",
+            params={"history_id": history_id},
+            detail=detail or None,
+        )
+        logger.info("audit-log[%s]: %s", transition, ev)
+    except Exception as exc:
+        logger.warning("audit-log failed (non-fatal) [%s]: %s", transition, exc)
+
+
+# --------------------------------------------------------------------------- #
+# Pipeline runner — the body that actually processes the staged upload.
+# --------------------------------------------------------------------------- #
+
+def _safe_extract_zip(zip_path: str, dest_dir: str) -> List[str]:
+    """Extract a zip into dest_dir, rejecting any path-traversal members.
+
+    Returns the list of extracted relative paths. Raises ValueError on a
+    traversal attempt — the caller should mark the import 'error' and abort.
+    """
+    extracted: List[str] = []
+    dest_abs = os.path.realpath(dest_dir)
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        for member in zf.infolist():
+            name = member.filename
+            # Reject obvious traversal patterns BEFORE resolving.
+            if (
+                not name
+                or name.startswith("/")
+                or name.startswith("\\")
+                or ".." in name.replace("\\", "/").split("/")
+                or os.path.isabs(name)
+            ):
+                raise ValueError(f"unsafe zip member rejected: {name!r}")
+            target = os.path.realpath(os.path.join(dest_abs, name))
+            # Final containment check — defends against symlinks-in-zip and
+            # encoded path tricks that string-checks can miss.
+            if not (target == dest_abs or target.startswith(dest_abs + os.sep)):
+                raise ValueError(f"zip member escapes root: {name!r}")
+            zf.extract(member, dest_abs)
+            extracted.append(name)
+    return extracted
+
+
+def _run_pipeline_upload(uploaded_path: str, kind: str, history_id: int) -> None:
+    """Background pipeline for the JSON upload-excel endpoint.
+
+    Stages the upload into a BMI_100/-shaped tmpdir, then runs ingest →
+    clean → validate. Outcome:
+        validate rc=0  → continue to export → MV refresh → success
+        validate rc=1  → status='validation_failed', stop
+        validate rc=2  → status='pending_confirm', tmpdir kept; operator
+                         must call /api/admin/upload-excel/confirm
+    On success/cancel/error the tmpdir + uploaded_path are cleaned up.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path as _Path
+
+    start = time.time()
+    _set_history_fields(history_id, status="running")
+    _audit(history_id, "start", kind=kind, uploaded_path=uploaded_path)
+
+    tmpdir = tempfile.mkdtemp(prefix="bma_upload_xlsx_")
+    _set_history_fields(history_id, tmpdir_path=tmpdir)
+
+    paused_for_confirm = False
+    try:
+        _update_progress(history_id, "stage files", 5)
+
+        if kind == "zip":
+            try:
+                _safe_extract_zip(uploaded_path, tmpdir)
+            except (zipfile.BadZipFile, ValueError) as exc:
+                _set_history_error(history_id, "zip extraction failed",
+                                   detail=str(exc)[:2000])
+                _audit(history_id, "error",
+                       reason="bad_zip", message=str(exc)[:200])
+                return
+        elif kind == "xlsx":
+            r = subprocess.run(
+                ["python3",
+                 os.path.join(BMA_MED_ROOT, "xlsx_to_bmi100.py"),
+                 uploaded_path, tmpdir],
+                capture_output=True, text=True,
+                timeout=PIPELINE_TIMEOUT_DEMUX,
+            )
+            if r.returncode != 0:
+                _set_history_error(
+                    history_id, "xlsx demux failed",
+                    detail=(r.stderr or r.stdout or "")[-4000:],
+                )
+                _audit(history_id, "error",
+                       reason="xlsx_demux_failed",
+                       rc=r.returncode)
+                return
+        else:
+            _set_history_error(history_id, f"unknown kind {kind!r}")
             return
 
-        # Group manifest by source for easy lookup. We discover which sources
-        # are present FIRST so we can scope the delete to just those.
-        by_source: Dict[str, Dict[str, Dict]] = {"portal": {}, "app1": {}, "app2": {}}
-        for m in manifest:
-            by_source[m["source"]][m["file_type"]] = m
-        sources_in_bundle = [s for s, files in by_source.items() if files]
+        # If the demuxer/zip used a BMI_100/ wrapper directory, descend into
+        # it so subsequent scripts see {portal,app1,app2}/ at the root.
+        bmi_root = _Path(tmpdir) / "BMI_100"
+        raw_root = str(bmi_root) if bmi_root.is_dir() else tmpdir
+        env = {**os.environ, "RAW_ROOT": raw_root}
 
-        # One transaction across all files — rollback on any failure.
-        # Per-source delete preserves data from sources NOT in this bundle.
-        _update_progress(history_id, "delete prior data", 1)
-        delete_label = _delete_for_sources(cur, sources_in_bundle)
-        logger.info("Bundle import: %s", delete_label)
+        # ─── 1/4 ingest ────────────────────────────────────────────────
+        _update_progress(history_id, "ingest", 15)
+        r = subprocess.run(
+            ["python3", os.path.join(BMA_MED_ROOT, "ingest.py")],
+            env=env, cwd=BMA_MED_ROOT,
+            capture_output=True, text=True,
+            timeout=PIPELINE_TIMEOUT_INGEST,
+        )
+        if r.returncode != 0:
+            _set_history_error(history_id, "ingest failed",
+                               detail=(r.stderr or r.stdout or "")[-4000:])
+            _audit(history_id, "error", reason="ingest_failed",
+                   rc=r.returncode)
+            return
 
-        # Ensure private.facility has rows BEFORE we insert visits (the v3 ETL
-        # silently NULLs `facility_code` when the FK target is missing). This
-        # is a one-time seed: idempotent skip when the table is non-empty.
-        _update_progress(history_id, "seed facilities (if empty)", 3)
+        # ─── 2/4 clean ─────────────────────────────────────────────────
+        _update_progress(history_id, "clean", 35)
+        r = subprocess.run(
+            ["python3", os.path.join(BMA_MED_ROOT, "clean.py")],
+            env=env, cwd=BMA_MED_ROOT,
+            capture_output=True, text=True,
+            timeout=PIPELINE_TIMEOUT_CLEAN,
+        )
+        if r.returncode != 0:
+            _set_history_error(history_id, "clean failed",
+                               detail=(r.stderr or r.stdout or "")[-4000:])
+            _audit(history_id, "error", reason="clean_failed",
+                   rc=r.returncode)
+            return
+
+        # ─── 3/4 validate ──────────────────────────────────────────────
+        _update_progress(history_id, "validate", 55)
+        r = subprocess.run(
+            ["python3", os.path.join(BMA_MED_ROOT, "validate.py")],
+            env=env, cwd=BMA_MED_ROOT,
+            capture_output=True, text=True,
+            timeout=PIPELINE_TIMEOUT_VALIDATE,
+        )
+        report_path = _Path(BMA_MED_ROOT) / "output" / "validate" / "report.md"
+        report_md = ""
+        if report_path.exists():
+            try:
+                report_md = report_path.read_text(encoding="utf-8")
+            except Exception:
+                report_md = ""
+
+        if r.returncode == 1:
+            _set_history_fields(
+                history_id,
+                status="validation_failed",
+                validate_status="fail",
+                validate_report=(report_md or
+                                 (r.stderr or r.stdout or "")[-8000:]),
+                error_message="validation failed",
+                completed_at=datetime.now(),
+            )
+            _audit(history_id, "validate_fail")
+            return
+        if r.returncode == 2:
+            # Warnings-only — pause for operator confirmation. Tmpdir stays
+            # alive; the janitor wipes it after 2h if no confirm/cancel.
+            _set_history_fields(
+                history_id,
+                status="pending_confirm",
+                validate_status="warning",
+                validate_report=report_md,
+            )
+            paused_for_confirm = True
+            _audit(history_id, "pending_confirm")
+            return
+        if r.returncode != 0:
+            _set_history_error(history_id,
+                               f"validate failed (rc={r.returncode})",
+                               detail=(r.stderr or r.stdout or "")[-4000:])
+            _audit(history_id, "error", reason="validate_failed",
+                   rc=r.returncode)
+            return
+
+        # rc == 0 — clean run; export inline.
+        _set_history_fields(history_id, validate_status="pass",
+                            validate_report=report_md)
+        _resume_pipeline_export(tmpdir, kind, history_id, env_raw_root=raw_root)
+
+    except Exception as exc:
+        _set_history_error(history_id, "pipeline failed",
+                           detail=_sanitize_error(exc))
+        _audit(history_id, "error", reason="pipeline_exception",
+               message=_sanitize_error(exc))
+        logger.exception("upload-excel pipeline failed (history=%s)", history_id)
+    finally:
+        # Always clean the original uploaded file.
         try:
-            seed_stats = _ensure_facilities_seeded(conn)
-            if seed_stats and not seed_stats.get("skipped"):
-                steps_done.append(
-                    f"facility-seed:{seed_stats.get('v3_inserted', 0)}"
-                )
-        except Exception as exc:
-            # Non-fatal: log and continue. The visits will still import (they
-            # just won't have facility_code linked) — better than failing the
-            # whole bundle for a missing optional XLS.
-            logger.warning("Facility seed failed (non-fatal): %s", exc)
-            conn.rollback()
-            # Re-acquire the lock since rollback released it
-            if not _try_acquire_import_lock(cur):
-                _update_history(
-                    history_id, "error", 0, 0,
-                    "Failed to re-acquire import lock after facility seed rollback",
-                    time.time() - start,
-                )
-                return
-            # Re-do the per-source delete in the fresh transaction
-            _delete_for_sources(cur, sources_in_bundle)
-
-        # Estimate total work
-        total_files = sum(len(v) for v in by_source.values())
-        files_done = 0
-
-        import pandas as _pd
-
-        def _pct_bounds(file_idx: int) -> tuple[int, int]:
-            span = 85 / max(total_files, 1)
-            s = 5 + int(span * file_idx)
-            e = 5 + int(span * (file_idx + 1))
-            return s, e
-
-        def _new_batch(source_code: str, label: str) -> int:
-            """Create a per-source import_batch row inside the bundle.
-            Returns the batch_id which is then passed to ETL functions."""
-            cur.execute("""
-                INSERT INTO private.import_batch
-                  (source_code, filename, csv_file_type, status)
-                VALUES (%s, %s, %s, 'running')
-                RETURNING id
-            """, (source_code, f"bundle-{history_id}/{label}", label))
-            return cur.fetchone()[0]
-
-        for source in SOURCE_IMPORT_ORDER:
-            files = by_source.get(source, {})
-            if not files:
-                continue
-            logger.info("Processing source: %s (%d files)", source, len(files))
-
-            # ─── App2: combined CSV — split internally ──────────────────
-            if source == "app2":
-                m = files.get("app2")
-                if m:
-                    batch_id = _new_batch("app2", "app2")
-                    s, _e = _pct_bounds(files_done)
-                    _update_progress(history_id, f"{source}/app2", s)
-                    df = _pd.read_csv(m["tmp_path"], dtype=str, low_memory=False,
-                                      keep_default_na=True)
-                    n_pat, n_vis = etlv3.import_app2(cur, df, batch_id)
-                    total_imported += n_vis
-                    steps_done.append(f"{m['filename']}(app2:{n_pat}p/{n_vis}v)")
-                    cur.execute("""UPDATE private.import_batch
-                        SET status='completed', rows_inserted=%s WHERE id=%s""",
-                        (n_vis, batch_id))
-                    del df
-                    files_done += 1
-                continue
-
-            # ─── Portal / App1: pt.csv first to populate patient table ──
-            m_pt = files.get("pt")
-            if m_pt:
-                batch_id = _new_batch(source, "pt")
-                s, _e = _pct_bounds(files_done)
-                _update_progress(history_id, f"{source}/pt", s)
-                df = _pd.read_csv(m_pt["tmp_path"], dtype=str, low_memory=False,
-                                  keep_default_na=True)
-                pid_map_pt = etlv3.import_patients(cur, df, source, batch_id)
-                total_imported += len(pid_map_pt)
-                steps_done.append(f"{m_pt['filename']}({source}/pt:{len(pid_map_pt)})")
-                cur.execute("""UPDATE private.import_batch
-                    SET status='completed', rows_inserted=%s WHERE id=%s""",
-                    (len(pid_map_pt), batch_id))
-                del df
-                files_done += 1
-
-            # Build pid_map from patient_alias (resolve idcard_hash → patient_id)
-            cur.execute("""
-                SELECT p.idcard_hash, p.id FROM private.patient p
-                JOIN private.patient_alias pa ON pa.patient_id = p.id
-                WHERE pa.source_code = %s
-            """, (source,))
-            pid_map = {h: pid for h, pid in cur.fetchall()}
-
-            # ─── Child files: vital, hv, hh, lab, labext, pthistory ─────
-            for ft in ("vitalsignslf", "homevisit", "homehealth",
-                       "pthistory", "labhealth", "labhealthext"):
-                m = files.get(ft)
-                if not m:
-                    continue
-                ft_batch_id = _new_batch(source, ft)
-                s, _e = _pct_bounds(files_done)
-                _update_progress(history_id, f"{source}/{ft}", s)
-                df = _pd.read_csv(m["tmp_path"], dtype=str, low_memory=False,
-                                  keep_default_na=True)
-
-                if ft in ("labhealth", "labhealthext"):
-                    n = etlv3.import_lab(cur, df, source, pid_map, ft_batch_id)
-                else:
-                    n = etlv3.import_visits_and_measurements(
-                        cur, df, source, ft, pid_map, ft_batch_id,
-                    )
-                total_imported += n
-                steps_done.append(f"{m['filename']}({source}/{ft}:{n})")
-                cur.execute("""UPDATE private.import_batch
-                    SET status='completed', rows_inserted=%s WHERE id=%s""",
-                    (n, ft_batch_id))
-                del df
-                files_done += 1
-
-        _update_progress(history_id, "commit", 92)
-        conn.commit()
-        logger.info("Bundle import: data committed (%d rows total)", total_imported)
-
-        # Refresh public.mv_* (k-anonymized aggregates) — non-fatal
-        _update_progress(history_id, "refresh public MVs", 95)
-        view_status = "skipped"
-        view_err = None
+            os.unlink(uploaded_path)
+        except OSError:
+            pass
+        # Cleanup tmpdir UNLESS we're holding it for operator confirmation.
+        if not paused_for_confirm:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            _set_history_fields(history_id, tmpdir_path=None)
+        # Best-effort duration update if the row didn't already finalize.
         try:
-            cur.execute("SELECT view_name, status FROM public.refresh_all_mvs()")
-            results = cur.fetchall()
-            failed = [r[0] for r in results if r[1] != 'ok']
+            row = _fetch_history(history_id)
+            if row.get("status") in ("running", "queued"):
+                _set_history_fields(
+                    history_id, duration_seconds=round(time.time() - start, 2),
+                )
+        except Exception:
+            pass
+
+
+def _resume_pipeline_export(tmpdir: str, kind: str, history_id: int,
+                            *, env_raw_root: Optional[str] = None) -> None:
+    """Run export → MV refresh → flush caches → mark success.
+
+    Used both by the inline rc=0 path and by the /confirm endpoint when the
+    operator approves a 'pending_confirm' upload.
+    """
+    import subprocess
+    from pathlib import Path as _Path
+
+    start = time.time()
+    raw_root = env_raw_root
+    if raw_root is None:
+        bmi = _Path(tmpdir) / "BMI_100"
+        raw_root = str(bmi) if bmi.is_dir() else tmpdir
+    env = {**os.environ, "RAW_ROOT": raw_root}
+
+    conn = None
+    view_status = "skipped"
+    view_err: Optional[str] = None
+    rows_inserted = 0
+    try:
+        # ─── 4/4 export ────────────────────────────────────────────────
+        _update_progress(history_id, "export", 75)
+        r = subprocess.run(
+            ["python3", os.path.join(BMA_MED_ROOT, "export.py")],
+            env=env, cwd=BMA_MED_ROOT,
+            capture_output=True, text=True,
+            timeout=PIPELINE_TIMEOUT_EXPORT,
+        )
+        if r.returncode != 0:
+            _set_history_error(history_id, "export failed",
+                               detail=(r.stderr or r.stdout or "")[-4000:])
+            _audit(history_id, "error", reason="export_failed",
+                   rc=r.returncode)
+            return
+
+        # Best-effort row count from export stdout — never load-bearing.
+        try:
+            for line in (r.stdout or "").splitlines():
+                if "rows" in line.lower() and "exported" in line.lower():
+                    digits = "".join(c for c in line if c.isdigit())
+                    if digits:
+                        rows_inserted = int(digits[-12:])
+                        break
+        except Exception:
+            rows_inserted = 0
+
+        # ─── Refresh hot MVs ───────────────────────────────────────────
+        _update_progress(history_id, "refresh hot MVs", 92)
+        try:
+            conn = psycopg2.connect(DATABASE_URL_WRITER)
+            conn.autocommit = False
+            cur = conn.cursor()
+            mv_results = _refresh_hot_mvs(cur)
+            conn.commit()
+            failed = [k for k, v in mv_results.items() if v != "ok"]
             view_status = "partial" if failed else "success"
             if failed:
-                view_err = f"failed: {', '.join(failed)}"
-            conn.commit()
+                view_err = "failed: " + ", ".join(failed)
         except Exception as exc:
-            conn.rollback()
             view_status = "failed"
             view_err = _sanitize_error(exc)
-            logger.error("MV refresh failed after bundle import: %s", view_err)
+        finally:
+            if conn:
+                conn.close()
 
-        # Flush caches
-        _update_progress(history_id, "flush caches", 99)
+        # ─── Flush caches ──────────────────────────────────────────────
+        _update_progress(history_id, "flush caches", 98)
         try:
             from cache import cache_flush_all
             from services.data_adapter import invalidate_cache as invalidate_data_cache
             cache_flush_all()
             invalidate_data_cache()
         except Exception:
-            logger.warning("Cache flush after bundle import failed (non-fatal)")
+            logger.warning("Cache flush after upload-excel failed (non-fatal)")
 
         duration = time.time() - start
         _update_progress(history_id, "done", 100)
         _update_history(
-            history_id, "success", total_imported, 0, None, duration,
-            view_refresh_status=view_status,
-            view_refresh_error=view_err,
+            history_id, "success", rows_inserted, 0, None, duration,
+            view_refresh_status=view_status, view_refresh_error=view_err,
         )
-        logger.info(
-            "Bundle import complete: %d files, %d rows, %.2fs — %s",
-            len(steps_done), total_imported, duration, ", ".join(steps_done),
-        )
-
+        _audit(history_id, "success",
+               rows_inserted=rows_inserted, view_status=view_status)
     except Exception as exc:
-        if conn:
-            conn.rollback()
-        duration = time.time() - start
-        error_msg = _sanitize_error(exc)
-        _update_history(history_id, "error", total_imported, 0, error_msg, duration)
-        logger.exception("Bundle import failed")
+        _set_history_error(history_id, "export pipeline failed",
+                           detail=_sanitize_error(exc))
+        _audit(history_id, "error", reason="export_exception",
+               message=_sanitize_error(exc))
+        logger.exception("upload-excel export failed (history=%s)", history_id)
     finally:
-        if conn:
-            conn.close()
-        # Clean up tempfiles regardless of outcome
-        for p in tmp_paths:
-            try:
-                os.unlink(p)
-            except OSError:
-                pass
+        # Done with the staged dir whether success or fail.
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        _set_history_fields(history_id, tmpdir_path=None)
 
 
-@router.get("/upload-bundle", response_class=HTMLResponse)
-async def upload_bundle_page(request: Request):
-    """Render the bundle upload form (multiple CSV files at once)."""
-    _require_auth(request)
-    csrf_token = _generate_csrf_token(request)
-    response = templates.TemplateResponse(
-        "admin/upload_bundle.html",
-        {
-            "request": request,
-            "file_types": FILE_TYPE_MAP,
-            "messages": _get_flash(request),
-            "csrf_token": csrf_token,
-        },
-    )
-    response.set_cookie("csrf_token", csrf_token, httponly=True, samesite="strict", max_age=86400)
-    return response
+# --------------------------------------------------------------------------- #
+# Endpoints
+# --------------------------------------------------------------------------- #
+#
+# New router with a clean /api/admin prefix so these routes don't get
+# double-prefixed by the parent `router` (whose prefix is /admin). Included
+# in main.py BEFORE admin_api_router so it wins for duplicate paths.
+
+upload_excel_router = APIRouter(prefix="/api/admin", tags=["Admin API"])
 
 
-@router.post("/upload-bundle", response_class=HTMLResponse)
-async def upload_bundle_submit(request: Request):
-    """Accept up to 13 CSV files across 3 source folders (portal/, app1/, app2/).
+@upload_excel_router.post("/upload-excel")
+async def upload_screening(
+    background: BackgroundTasks,
+    request: Request,
+    file: UploadFile = File(...),
+    authorization: Optional[str] = Header(None),
+):
+    """Accept an .xlsx OR .zip upload, stream to disk, kick off the pipeline.
 
-    Files are streamed to tempfiles on disk (no full-in-memory buffering).
-    Source is detected from either the `relpaths` form field (folder upload) or
-    a fallback of filename + user-supplied source selector.
+    Backward-compat: returns the legacy keys `districtsUpdated` and `errors`
+    so older frontends keep working.
     """
-    _require_auth(request)
-
-    form = await request.form()
-    csrf_token_val = form.get("csrf_token", "")
-    if not _validate_csrf(request, csrf_token_val):
-        raise HTTPException(status_code=403, detail="CSRF validation failed")
-
-    files = form.getlist("files")
-    relpaths = form.getlist("relpaths")   # parallel to files; may be empty
-    default_source = form.get("default_source", "").strip().lower() or None
-
-    if not files:
-        response = RedirectResponse(url="/admin/upload-bundle", status_code=303)
-        _set_flash(response, "error", "No files uploaded.")
-        return response
-
-    import shutil, tempfile
-
-    manifest: List[Dict] = []
-    errors: List[str] = []
-
-    for idx, upload_file in enumerate(files):
-        if not hasattr(upload_file, "filename") or not upload_file.filename:
-            continue
-        fname = upload_file.filename
-        if not fname.lower().endswith(".csv"):
-            errors.append(f"{fname}: ไม่ใช่ไฟล์ .csv")
-            continue
-
-        relpath = relpaths[idx] if idx < len(relpaths) else fname
-
-        # Stream upload to a tempfile on disk (memory-safe even for 500MB+ files)
-        tmp = tempfile.NamedTemporaryFile(
-            suffix=".csv", prefix="bma_upload_", delete=False
+    from auth import require_admin_session_or_bearer
+    require_admin_session_or_bearer(request, authorization)
+    fname = _safe_filename(file.filename or "upload")
+    ext = Path(fname).suffix.lower()
+    if ext not in ALLOWED_EXT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only {sorted(ALLOWED_EXT)} supported, got {ext!r}",
         )
-        bytes_written = 0
-        try:
-            # copyfileobj streams in 64 KB chunks — SpooledTemporaryFile is
-            # already disk-backed if the file was >1 MB, so this is a
-            # disk-to-disk copy. Memory stays flat.
-            upload_file.file.seek(0)
-            while True:
-                chunk = upload_file.file.read(65536)
-                if not chunk:
-                    break
-                bytes_written += len(chunk)
-                if bytes_written > MAX_FILE_BYTES:
-                    tmp.close()
+
+    # Stream to a tempfile with size guard + sha256 in one pass.
+    tmp = tempfile.NamedTemporaryFile(
+        prefix="bma-upload-", suffix=ext, delete=False,
+    )
+    sha = hashlib.sha256()
+    total = 0
+    LIMIT = MAX_UPLOAD_MB * 1024 * 1024
+    try:
+        while True:
+            chunk = await file.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > LIMIT:
+                tmp.close()
+                try:
                     os.unlink(tmp.name)
-                    errors.append(f"{fname}: ไฟล์ใหญ่เกิน {MAX_FILE_BYTES // (1024*1024)} MB")
-                    break
-                tmp.write(chunk)
-            else:
-                pass
-        finally:
+                except OSError:
+                    pass
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File exceeds {MAX_UPLOAD_MB} MB",
+                )
+            sha.update(chunk)
+            tmp.write(chunk)
+    finally:
+        try:
             tmp.close()
+        except Exception:
+            pass
 
-        if bytes_written > MAX_FILE_BYTES:
-            continue
-        if bytes_written == 0:
-            try:
-                os.unlink(tmp.name)
-            except OSError:
-                pass
-            errors.append(f"{fname}: ไฟล์ว่าง")
-            continue
-
-        # Determine (source, file_type) from relpath → filename → default
-        source = _detect_source_from_path(relpath) or default_source
-        file_type = _detect_file_type_from_name(fname)
-
-        if file_type == "app2":
-            source = "app2"     # app2.csv is uniquely scoped
-        if not source:
+    # Magic-byte sniff — both .xlsx and .zip start with PK\x03\x04.
+    try:
+        with open(tmp.name, "rb") as fh:
+            head = fh.read(4)
+    except OSError as exc:
+        try:
             os.unlink(tmp.name)
-            errors.append(
-                f"{fname}: ตรวจจับ source (portal/app1/app2) ไม่ได้ — "
-                f"โปรดอัปโหลดเป็นโฟลเดอร์หรือเลือก default source"
-            )
-            continue
-        if not file_type:
+        except OSError:
+            pass
+        raise HTTPException(status_code=500,
+                            detail=f"upload spool error: {_sanitize_error(exc)}")
+    if head not in ALLOWED_MAGIC:
+        try:
             os.unlink(tmp.name)
-            errors.append(f"{fname}: ตรวจจับประเภทไฟล์ไม่ได้")
-            continue
-
-        # Check duplicates (same source+file_type twice)
-        dup = next(
-            (m for m in manifest
-             if m["source"] == source and m["file_type"] == file_type),
-            None,
+        except OSError:
+            pass
+        raise HTTPException(
+            status_code=400,
+            detail="File header doesn't match an allowed type (xlsx/zip)",
         )
-        if dup:
+
+    if total == 0:
+        try:
             os.unlink(tmp.name)
-            errors.append(
-                f"{fname}: ซ้ำกับ {dup['filename']} — ทั้งคู่เป็น {source}/{file_type}"
+        except OSError:
+            pass
+        raise HTTPException(status_code=400, detail="Empty upload")
+
+    sha_hex = sha.hexdigest()
+    kind = ext.lstrip(".")  # 'xlsx' | 'zip'
+    try:
+        history_id = _create_history_row(
+            filename=fname, kind=kind, size_bytes=total,
+            sha256=sha_hex, uploaded_path=tmp.name,
+        )
+    except Exception as exc:
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+        logger.exception("Failed to create history row for upload")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to queue upload: {_sanitize_error(exc)}",
+        )
+
+    _audit(history_id, "queue", filename=fname, kind=kind,
+           size_bytes=total, sha256=sha_hex)
+    background.add_task(_run_pipeline_upload, tmp.name, kind, history_id)
+
+    return {
+        "history_id": history_id,
+        "status": "queued",
+        "size_bytes": total,
+        "sha256": sha_hex,
+        # Backward-compat keys for legacy frontends.
+        "districtsUpdated": [],
+        "errors": [],
+    }
+
+
+class ConfirmRequest(BaseModel):
+    history_id: int
+
+
+@upload_excel_router.post("/upload-excel/confirm")
+def confirm_upload(
+    req: ConfirmRequest,
+    background: BackgroundTasks,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+):
+    """Confirm a 'pending_confirm' upload and resume export.
+
+    Operator must have reviewed the validate report (warnings) before calling.
+    """
+    from auth import require_admin_session_or_bearer
+    require_admin_session_or_bearer(request, authorization)
+    row = _fetch_history(req.history_id)
+    if row.get("status") != "pending_confirm":
+        raise HTTPException(
+            status_code=409,
+            detail=f"history {req.history_id} not in pending_confirm "
+                   f"(current: {row.get('status')!r})",
+        )
+    tmpdir = row.get("tmpdir_path")
+    kind = row.get("kind") or "zip"
+    if not tmpdir or not os.path.isdir(tmpdir):
+        # Tmpdir was cleaned (timeout or restart) — operator must re-upload.
+        _set_history_error(
+            req.history_id,
+            "staged tmpdir is gone (timed out or server restarted) — re-upload required",
+        )
+        _audit(req.history_id, "confirm_too_late")
+        raise HTTPException(
+            status_code=410,
+            detail="staged tmpdir missing — re-upload required",
+        )
+
+    _set_history_fields(req.history_id, status="running")
+    _audit(req.history_id, "confirm")
+    background.add_task(_resume_pipeline_export, tmpdir, kind, req.history_id)
+    return {
+        "history_id": req.history_id,
+        "status": "confirmed",
+    }
+
+
+@upload_excel_router.post("/upload-excel/cancel")
+def cancel_upload(
+    req: ConfirmRequest,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+):
+    """Cancel a 'pending_confirm' upload, wipe the staged tmpdir."""
+    from auth import require_admin_session_or_bearer
+    require_admin_session_or_bearer(request, authorization)
+    row = _fetch_history(req.history_id)
+    if row.get("status") != "pending_confirm":
+        raise HTTPException(
+            status_code=409,
+            detail=f"history {req.history_id} not pending_confirm",
+        )
+    tmpdir = row.get("tmpdir_path")
+    if tmpdir and os.path.isdir(tmpdir):
+        shutil.rmtree(tmpdir, ignore_errors=True)
+    _set_history_fields(
+        req.history_id, status="cancelled",
+        tmpdir_path=None, error_message="cancelled by operator",
+        completed_at=datetime.now(),
+    )
+    _audit(req.history_id, "cancel")
+    return {"history_id": req.history_id, "status": "cancelled"}
+
+
+@upload_excel_router.get("/upload-excel/status/{history_id}")
+def upload_status(
+    history_id: int,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+):
+    """Polling endpoint for the JSON upload-excel flow."""
+    from auth import require_admin_session_or_bearer
+    require_admin_session_or_bearer(request, authorization)
+    row = _fetch_history(history_id)
+    return {
+        "history_id": history_id,
+        "status":           row.get("status"),
+        "validate_status":  row.get("validate_status"),
+        "validate_report":  row.get("validate_report"),
+        "error":            row.get("error_message"),
+        "rows_inserted":    row.get("rows_imported"),
+        "view_status":      row.get("view_refresh_status"),
+        "timestamp":        (
+            row.get("completed_at") or row.get("started_at")
+        ).isoformat() if (row.get("completed_at") or row.get("started_at"))
+        else None,
+        # Backward-compat keys for legacy frontends.
+        "districtsUpdated": [],
+        "errors": [row["error_message"]] if row.get("error_message") else [],
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Janitor — wipe pending_confirm tmpdirs older than 2h.
+# --------------------------------------------------------------------------- #
+
+PENDING_CONFIRM_TTL_SECONDS = 2 * 3600   # 2 hours
+JANITOR_INTERVAL_SECONDS    = 30 * 60    # wake every 30 min
+
+_janitor_started = False
+_janitor_lock = threading.Lock()
+
+
+def _janitor_pass() -> int:
+    """One sweep: cancel pending_confirm rows older than the TTL.
+
+    Returns the number of rows cancelled. Never raises.
+    """
+    cancelled = 0
+    try:
+        rows = execute_query(
+            """
+            SELECT id, tmpdir_path, started_at
+            FROM import_history
+            WHERE status = 'pending_confirm'
+              AND started_at < NOW() - (%s || ' seconds')::INTERVAL
+            """,
+            (str(PENDING_CONFIRM_TTL_SECONDS),),
+        ) or []
+    except Exception:
+        logger.exception("janitor query failed")
+        return 0
+
+    for row in rows:
+        hid = row["id"]
+        tmpdir = row.get("tmpdir_path")
+        try:
+            if tmpdir and os.path.isdir(tmpdir):
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            _set_history_fields(
+                hid, status="cancelled", tmpdir_path=None,
+                error_message="auto-cancelled: pending_confirm TTL exceeded",
+                completed_at=datetime.now(),
             )
-            continue
+            _audit(hid, "auto_cancel_ttl")
+            cancelled += 1
+        except Exception:
+            logger.exception("janitor cleanup failed for history_id=%s", hid)
+    return cancelled
 
-        manifest.append({
-            "source": source,
-            "file_type": file_type,
-            "tmp_path": tmp.name,
-            "filename": fname,
-            "size_bytes": bytes_written,
-        })
 
-    if errors:
-        # Clean up any tempfiles that were already created
-        for m in manifest:
-            try:
-                os.unlink(m["tmp_path"])
-            except OSError:
-                pass
-        response = RedirectResponse(url="/admin/upload-bundle", status_code=303)
-        _set_flash(response, "error", " | ".join(errors))
-        return response
+def _janitor_loop() -> None:
+    """Background daemon — sweep every JANITOR_INTERVAL_SECONDS forever."""
+    while True:
+        try:
+            n = _janitor_pass()
+            if n:
+                logger.info("upload-excel janitor: cancelled %d stale pending_confirm rows", n)
+        except Exception:
+            logger.exception("janitor loop iteration failed")
+        time.sleep(JANITOR_INTERVAL_SECONDS)
 
-    if not manifest:
-        response = RedirectResponse(url="/admin/upload-bundle", status_code=303)
-        _set_flash(response, "error", "ไม่พบไฟล์ CSV ที่ตรวจจับประเภทได้")
-        return response
 
-    # ─── Pre-flight: variable_definition coverage ───────────────────────
-    # v3 ETL maps each CSV column → variable_id via private.variable_definition.
-    # If a source has zero variable_definition rows, the EAV insert produces
-    # zero measurements (silent partial success). Warn the operator BEFORE
-    # the long-running import starts. (Auto-bootstrapping is risky because
-    # the bootstrap script TRUNCATEs variable_code_value+variable_definition
-    # — we let the operator decide.)
-    sources_in_bundle = sorted({m["source"] for m in manifest})
-    preflight_warnings: List[str] = []
-    try:
-        for src in sources_in_bundle:
-            n = execute_scalar(
-                "SELECT COUNT(*) FROM private.variable_definition "
-                "WHERE source_code = %s AND deprecated_at IS NULL",
-                (src,),
-            ) or 0
-            if int(n) == 0:
-                preflight_warnings.append(
-                    f"private.variable_definition ว่างสำหรับ source={src} — "
-                    "EAV measurements จะไม่ถูก insert. รัน "
-                    "`python etl/bootstrap_variable_definitions.py --xlsx /path/all_var.xlsx` "
-                    "ก่อนแล้วค่อย retry."
-                )
-    except Exception as exc:
-        logger.warning("variable_definition preflight failed: %s", exc)
+def start_upload_janitor() -> None:
+    """Start the periodic cleanup thread (idempotent).
 
-    if preflight_warnings:
-        # Clean up any tempfiles since we abort the import
-        for m in manifest:
-            try:
-                os.unlink(m["tmp_path"])
-            except OSError:
-                pass
-        response = RedirectResponse(url="/admin/upload-bundle", status_code=303)
-        _set_flash(response, "error",
-                   "Preflight ล้มเหลว: " + " | ".join(preflight_warnings))
-        return response
-
-    # Build summary for flash message
-    file_list = ", ".join(
-        f"{m['filename']}({m['source']}/{m['file_type']})"
-        for m in sorted(manifest, key=lambda x: (x["source"], x["file_type"]))
-    )
-    total_bytes = sum(m["size_bytes"] for m in manifest)
-
-    try:
-        with get_conn() as conn_hist:
-            with conn_hist.cursor() as cur_hist:
-                cur_hist.execute(
-                    """
-                    INSERT INTO import_history
-                        (filename, table_name, file_type, status, started_at)
-                    VALUES (%s, %s, %s, 'running', NOW())
-                    RETURNING id
-                    """,
-                    (f"[Bundle] {len(manifest)} files", "ALL", "bundle"),
-                )
-                history_id = cur_hist.fetchone()[0]
-            conn_hist.commit()
-    except Exception as exc:
-        logger.exception("Failed to create bundle import_history")
-        # Clean up tempfiles since we can't proceed
-        for m in manifest:
-            try:
-                os.unlink(m["tmp_path"])
-            except OSError:
-                pass
-        response = RedirectResponse(url="/admin/upload-bundle", status_code=303)
-        _set_flash(response, "error", f"Failed to start import: {_sanitize_error(exc)}")
-        return response
-
-    # Launch background thread — ownership of tempfiles transfers to the worker,
-    # which unlinks them in its finally block.
-    thread = threading.Thread(
-        target=_run_bundle_import,
-        args=(manifest, history_id),
-        daemon=True,
-        name=f"bundle-import-{history_id}",
-    )
-    thread.start()
-
-    size_mb = total_bytes / (1024 * 1024)
-    response = RedirectResponse(url="/admin/history", status_code=303)
-    _set_flash(
-        response, "success",
-        f"Bundle import started (job #{history_id}): {len(manifest)} files, "
-        f"{size_mb:.1f} MB — {file_list}",
-    )
-    return response
+    Mounted from api/main.py:lifespan() at app startup.
+    """
+    global _janitor_started
+    with _janitor_lock:
+        if _janitor_started:
+            return
+        t = threading.Thread(
+            target=_janitor_loop,
+            daemon=True,
+            name="upload-excel-janitor",
+        )
+        t.start()
+        _janitor_started = True
+        logger.info("upload-excel janitor started (interval=%ds, ttl=%ds)",
+                    JANITOR_INTERVAL_SECONDS, PENDING_CONFIRM_TTL_SECONDS)

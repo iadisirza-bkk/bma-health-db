@@ -1,5 +1,6 @@
 """Health Promotion router — BMI distribution, behavior-disease correlation,
-risk factor profile, exercise frequency, waist risk analysis."""
+risk factor profile, exercise frequency, waist risk analysis.
+Refactored for bma_med.* schema."""
 from __future__ import annotations
 
 from typing import Optional
@@ -10,6 +11,52 @@ from database import execute_query, execute_scalar
 from security import enforce_k_anonymity, suppress_scalar_if_small, K_ANONYMITY_THRESHOLD
 
 router = APIRouter(prefix="/api/v2/promotion", tags=["Health Promotion"])
+
+# --------------------------------------------------------------------------- #
+# Reusable UNION across the two main vitalsigns sources (app1 + portal).
+# Subselect aliased as `v` so handlers can plug it in as `FROM ({_VISITS_UNION_SQL}) v`.
+# --------------------------------------------------------------------------- #
+_VISITS_UNION_SQL = """
+SELECT patient_id, vstdate AS visit_date, hbpn AS sbp, lbpn AS dbp,
+       alcohal AS alcohol, smoke,
+       record_cancelled AS cancel_status,
+       dm AS found_dm, hpt AS found_hpt, cdvcl AS found_cvd,
+       stroke AS found_stroke, fat AS found_obesity, chltr AS found_dyslipidemia,
+       riskdm AS risk_dm, riskhpt AS risk_hpt,
+       riskcdvcl AS risk_cvd, riskbmi AS risk_bmi
+FROM bma_med.app1_vitalsignslf
+UNION ALL
+SELECT patient_id, vstdate AS visit_date, hbpn AS sbp, lbpn AS dbp,
+       alcohal AS alcohol, smoke,
+       record_cancelled AS cancel_status,
+       dm AS found_dm, hpt AS found_hpt, cdvcl AS found_cvd,
+       stroke AS found_stroke, fat AS found_obesity, chltr AS found_dyslipidemia,
+       riskdm AS risk_dm, riskhpt AS risk_hpt,
+       riskcdvcl AS risk_cvd, riskbmi AS risk_bmi
+FROM bma_med.portal_vitalsignslf
+"""
+
+# Reusable UNION across homehealth sources (excercise, diet flags etc.)
+_HOMEHEALTH_UNION_SQL = """
+SELECT patient_id, vstdate, excercise AS exercise,
+       food, water, noodle,
+       record_cancelled AS cancel_status
+FROM bma_med.app1_homehealth
+UNION ALL
+SELECT patient_id, vstdate, excercise AS exercise,
+       food, water, noodle,
+       record_cancelled AS cancel_status
+FROM bma_med.portal_homehealth
+"""
+
+# Homevisit-derived district lookup (district_code lives in homevisit, not vitalsignslf)
+_HOMEVISIT_DISTRICT_SQL = """
+SELECT patient_id, COALESCE(crdistrict, district)::text AS district_code
+FROM bma_med.app1_homevisit
+UNION ALL
+SELECT patient_id, COALESCE(crdistrict, district)::text AS district_code
+FROM bma_med.portal_homevisit
+"""
 
 # --------------------------------------------------------------------------- #
 # Valid disease keys (shared with main — kept here for validation)
@@ -138,34 +185,40 @@ def behavior_disease_correlation(
         return {"behavior": behavior, "disease": disease, "district": district, "data": rows}
 
     else:
-        # alcohol -- check if data exists in raw_homehealth
-        total_check = execute_scalar(
-            "SELECT COUNT(*) FROM raw_homehealth WHERE alcohol IS NOT NULL"
-        ) or 0
+        # alcohol — moved to vitalsignslf in new schema (alcohal column)
+        total_check = execute_scalar(f"""
+            SELECT COUNT(*) FROM (
+                SELECT alcohal FROM bma_med.app1_vitalsignslf WHERE alcohal IS NOT NULL
+                UNION ALL
+                SELECT alcohal FROM bma_med.portal_vitalsignslf WHERE alcohal IS NOT NULL
+            ) t
+        """) or 0
         if total_check == 0:
-            return {"data_available": False, "message": "ไม่มีข้อมูล alcohol ใน raw_homehealth — ต้องรอข้อมูลจาก HDC"}
+            return {"data_available": False, "message": "ไม่มีข้อมูล alcohol ใน vitalsignslf — ต้องรอข้อมูลจาก HDC"}
 
-        conditions = ["h.alcohol IS NOT NULL"]
+        district_join = ""
+        district_filter = ""
         params = []
         if district:
-            conditions.append("v.district_code = %s")
+            district_join = f"JOIN ({_HOMEVISIT_DISTRICT_SQL}) hv ON v.patient_id = hv.patient_id"
+            district_filter = " AND hv.district_code = %s"
             params.append(district)
-        where = "WHERE " + " AND ".join(conditions)
 
         rows = execute_query(f"""
             SELECT
-              h.alcohol AS behavior_value,
-              COUNT(DISTINCT h.patient_id) AS total
-            FROM raw_homehealth h
-            JOIN raw_vitalsigns v ON h.patient_id = v.patient_id
-                AND v.cancel_status IS DISTINCT FROM 1
-            {where}
-            GROUP BY h.alcohol
-            ORDER BY h.alcohol
+              v.alcohol AS behavior_value,
+              COUNT(DISTINCT v.patient_id) AS total
+            FROM ({_VISITS_UNION_SQL}) v
+            {district_join}
+            WHERE v.alcohol IS NOT NULL
+              AND v.cancel_status IS DISTINCT FROM 1{district_filter}
+            GROUP BY v.alcohol
+            ORDER BY v.alcohol
         """, tuple(params) or None)
 
         rows = enforce_k_anonymity(rows, count_field="total")
-        alcohol_labels = {1: "ไม่ดื่ม", 2: "ดื่ม", 3: "เลิกแล้ว"}
+        # Codebook (factsheet): 0=ไม่ดื่ม, 1=ดื่ม, 2=เคยดื่มแต่เลิกแล้ว
+        alcohol_labels = {0: "ไม่ดื่ม", 1: "ดื่ม", 2: "เลิกแล้ว"}
         for r in rows:
             val = r.get("behavior_value")
             r["behavior_label"] = alcohol_labels.get(val, str(val))
@@ -218,35 +271,36 @@ def risk_factor_profile(
 @router.get("/exercise-frequency")
 def exercise_frequency(district: Optional[str] = Query(None)):
     """Exercise frequency distribution: >=3/wk, <3/wk, never."""
-    total_check = execute_scalar(
-        "SELECT COUNT(*) FROM raw_homehealth WHERE exercise IS NOT NULL"
-    ) or 0
+    total_check = execute_scalar(f"""
+        SELECT COUNT(*) FROM ({_HOMEHEALTH_UNION_SQL}) h WHERE h.exercise IS NOT NULL
+    """) or 0
     if total_check == 0:
         return {
             "data_available": False,
-            "message": "ไม่มีข้อมูลการออกกำลังกาย (exercise) ใน raw_homehealth — ต้องรอข้อมูลจาก HDC",
+            "message": "ไม่มีข้อมูลการออกกำลังกาย (excercise) ใน homehealth — ต้องรอข้อมูลจาก HDC",
         }
 
-    conditions = ["h.exercise IS NOT NULL"]
+    district_join = ""
+    district_filter = ""
     params: list = []
     if district:
-        conditions.append("v.district_code = %s")
+        district_join = f"JOIN ({_HOMEVISIT_DISTRICT_SQL}) hv ON h.patient_id = hv.patient_id"
+        district_filter = " AND hv.district_code = %s"
         params.append(district)
-    where = "WHERE " + " AND ".join(conditions)
 
     rows = execute_query(f"""
         SELECT
-          v.district_code,
+          {"hv.district_code" if district else "NULL::text"} AS district_code,
           SUM(CASE WHEN h.exercise = 1 THEN 1 ELSE 0 END) AS exercise_3plus,
           SUM(CASE WHEN h.exercise = 2 THEN 1 ELSE 0 END) AS exercise_less3,
           SUM(CASE WHEN h.exercise = 3 THEN 1 ELSE 0 END) AS exercise_never,
           COUNT(*) AS total
-        FROM raw_homehealth h
-        JOIN raw_vitalsigns v ON h.patient_id = v.patient_id
-            AND v.cancel_status IS DISTINCT FROM 1
-        {where}
-        GROUP BY v.district_code
-        ORDER BY v.district_code
+        FROM ({_HOMEHEALTH_UNION_SQL}) h
+        {district_join}
+        WHERE h.exercise IS NOT NULL
+          AND h.cancel_status IS DISTINCT FROM 1{district_filter}
+        GROUP BY {"hv.district_code" if district else "1"}
+        ORDER BY 1
     """, tuple(params) or None)
 
     rows = enforce_k_anonymity(rows, count_field="total")
@@ -299,13 +353,15 @@ def waist_risk_analysis(zone_code: Optional[str] = Query(None)):
 # Diet-disease correlation (NEW — Doc 01 Governor requirement)
 # =========================================================================== #
 
+# Map old diet column names → new bma_med columns (homehealth.food/water/noodle)
+# Old food_preference_sweet/salty/fatty/fried don't have direct equivalents.
 DIET_COLUMNS = {
-    "sweet": "food_preference_sweet",
-    "salty": "food_preference_salty",
-    "fatty": "food_preference_fatty",
-    "fried": "food_fried_freq",
-    "sugary_drinks": "drink_sugar_freq",
-    "instant_noodle": "instant_noodle_freq",
+    "sweet": "water",        # sugary drinks proxy (water column = น้ำอัดลม/กาแฟเย็น/ชานม)
+    "salty": "noodle",       # instant noodle/seasoning proxy
+    "fatty": "food",         # fried/curry/coconut proxy
+    "fried": "food",
+    "sugary_drinks": "water",
+    "instant_noodle": "noodle",
 }
 
 DIET_DISEASE_MAP = {
@@ -333,13 +389,20 @@ def diet_disease_correlation(
     if disease not in DIET_DISEASE_MAP:
         return {"error": f"Invalid disease. Valid: {sorted(DIET_DISEASE_MAP.keys())}"}
 
+    # TODO: bma_med equivalent unclear — old food_preference_sweet/salty/fatty/fried
+    # were standalone columns; new schema has only 3 dietary axes (food/water/noodle).
+    # We map best-effort but the semantics may not be 1:1.
     diet_col = DIET_COLUMNS[diet]
     disease_col = DIET_DISEASE_MAP[disease]
 
     # First check if diet data exists
-    filled = execute_scalar(
-        f'SELECT COUNT(*) FROM raw_homehealth WHERE {diet_col} IS NOT NULL'
-    ) or 0
+    filled = execute_scalar(f"""
+        SELECT COUNT(*) FROM (
+            SELECT {diet_col} FROM bma_med.app1_homehealth WHERE {diet_col} IS NOT NULL
+            UNION ALL
+            SELECT {diet_col} FROM bma_med.portal_homehealth WHERE {diet_col} IS NOT NULL
+        ) t
+    """) or 0
 
     if filled == 0:
         return {
@@ -350,28 +413,30 @@ def diet_disease_correlation(
             "suggestion": "ข้อมูลพฤติกรรมอาหารยังไม่ได้นำเข้า ใช้ exercise + smoking + alcohol ที่มีอยู่แทนได้",
         }
 
-    # Join homehealth (diet) with vitalsigns (disease) via patient_id
-    conditions = ["h.cancel_status IS DISTINCT FROM 1", "v.cancel_status IS DISTINCT FROM 1",
-                   f"h.{diet_col} IS NOT NULL"]
+    # Join homehealth (diet) with vitalsigns-union (disease) via patient_id
+    district_join = ""
+    district_filter = ""
     params: list = []
     if district:
-        conditions.append("v.district_code = %s")
+        district_join = f"JOIN ({_HOMEVISIT_DISTRICT_SQL}) hv ON v.patient_id = hv.patient_id"
+        district_filter = " AND hv.district_code = %s"
         params.append(district)
-
-    where = " AND ".join(conditions)
 
     rows = execute_query(f"""
         SELECT
             h.{diet_col} AS diet_value,
             COUNT(DISTINCT v.patient_id) AS total_patients,
-            COUNT(DISTINCT v.patient_id) FILTER (WHERE v.{disease_col}) AS disease_count,
+            COUNT(DISTINCT v.patient_id) FILTER (WHERE v.{disease_col} = 1) AS disease_count,
             ROUND(
-                100.0 * COUNT(DISTINCT v.patient_id) FILTER (WHERE v.{disease_col})
+                100.0 * COUNT(DISTINCT v.patient_id) FILTER (WHERE v.{disease_col} = 1)
                 / NULLIF(COUNT(DISTINCT v.patient_id), 0), 2
             ) AS disease_pct
-        FROM raw_homehealth h
-        JOIN raw_vitalsigns v ON h.patient_id = v.patient_id
-        WHERE {where}
+        FROM ({_HOMEHEALTH_UNION_SQL}) h
+        JOIN ({_VISITS_UNION_SQL}) v ON h.patient_id = v.patient_id
+        {district_join}
+        WHERE h.cancel_status IS DISTINCT FROM 1
+          AND v.cancel_status IS DISTINCT FROM 1
+          AND h.{diet_col} IS NOT NULL{district_filter}
         GROUP BY h.{diet_col}
         HAVING COUNT(DISTINCT v.patient_id) >= %s
         ORDER BY h.{diet_col}

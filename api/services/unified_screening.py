@@ -45,17 +45,23 @@ def build_unified_cte(
     cte_parts = [f"""
 unified AS (
   SELECT
-    visit_id,
+    visit_uid          AS visit_id,
     patient_id,
-    source_code AS source,
-    visit_date  AS day,
+    source_code        AS source,
+    visit_date         AS day,
     home_district_code AS dc,
-    bucket,
+    CASE
+      WHEN home_district_code BETWEEN '1001' AND '1050' THEN 'bkk'
+      WHEN home_district_code IS NULL                   THEN 'unknown'
+      ELSE                                                   'non_bkk'
+    END                AS bucket,
     risk_dm, risk_hpt, risk_cvd, risk_bmi, risk_stroke,
     found_dm, found_hpt, found_cvd, found_obesity,
     found_dyslipidemia, found_stroke
   FROM public.mv_visit_resolved
-  {where_sql}
+  WHERE is_dedup_kept = TRUE
+    AND cancel_status IS DISTINCT FROM 1
+  {('AND ' + ' AND '.join(where_clauses)) if where_clauses else ''}
 )
 """.strip()]
 

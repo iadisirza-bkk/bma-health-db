@@ -1,5 +1,6 @@
 """Disease Control router — screening coverage, NCD cascade, repeat screening,
-disease progression, referral outcome, treatment compliance."""
+disease progression, referral outcome, treatment compliance.
+Refactored for bma_med.* schema."""
 from __future__ import annotations
 
 from typing import Optional
@@ -10,6 +11,40 @@ from database import execute_query, execute_scalar
 from security import enforce_k_anonymity, suppress_scalar_if_small, K_ANONYMITY_THRESHOLD
 
 router = APIRouter(prefix="/api/v2/disease-control", tags=["Disease Control"])
+
+# --------------------------------------------------------------------------- #
+# Reusable UNION across the two main vitalsigns sources (app1 + portal).
+# Subselect aliased as `v` so handlers can plug it in as `FROM ({_VISITS_UNION_SQL}) v`.
+# --------------------------------------------------------------------------- #
+_VISITS_UNION_SQL = """
+SELECT row_id AS id, patient_id, vstdate AS visit_date,
+       hbpn AS sbp, lbpn AS dbp,
+       record_cancelled AS cancel_status,
+       dm AS found_dm, hpt AS found_hpt, cdvcl AS found_cvd,
+       stroke AS found_stroke, fat AS found_obesity, chltr AS found_dyslipidemia,
+       riskdm AS risk_dm, riskhpt AS risk_hpt,
+       riskcdvcl AS risk_cvd, riskbmi AS risk_bmi
+FROM bma_med.app1_vitalsignslf
+UNION ALL
+SELECT row_id AS id, patient_id, vstdate AS visit_date,
+       hbpn AS sbp, lbpn AS dbp,
+       record_cancelled AS cancel_status,
+       dm AS found_dm, hpt AS found_hpt, cdvcl AS found_cvd,
+       stroke AS found_stroke, fat AS found_obesity, chltr AS found_dyslipidemia,
+       riskdm AS risk_dm, riskhpt AS risk_hpt,
+       riskcdvcl AS risk_cvd, riskbmi AS risk_bmi
+FROM bma_med.portal_vitalsignslf
+"""
+
+# Homevisit join lookup for district_code (lives in homevisit in new schema,
+# not in vitalsignslf as it did in raw_*)
+_HOMEVISIT_DISTRICT_SQL = """
+SELECT patient_id, COALESCE(crdistrict, district)::text AS district_code
+FROM bma_med.app1_homevisit
+UNION ALL
+SELECT patient_id, COALESCE(crdistrict, district)::text AS district_code
+FROM bma_med.portal_homevisit
+"""
 
 # --------------------------------------------------------------------------- #
 # Valid disease keys (shared with main — kept here for validation)
@@ -127,20 +162,26 @@ def ncd_cascade(disease: str = Query("diabetes")):
 
 @router.get("/repeat-screening")
 def repeat_screening(district: Optional[str] = Query(None)):
-    """Visit frequency distribution: how many patients screened 1x, 2x, 3x+."""
-    conditions = ["cancel_status IS DISTINCT FROM 1"]
+    """Visit frequency distribution: how many patients screened 1x, 2x, 3x+.
+
+    Reads from public.mv_visit_resolved (api_user role has no direct SELECT on
+    bma_med.* raw tables — see migration 200 grants). Each row in the MV is one
+    visit; home_district_code is pre-resolved from homevisit, so the optional
+    district filter is a single WHERE clause instead of a homevisit JOIN.
+    """
     params: list = []
+    district_filter = ""
     if district:
-        conditions.append("district_code = %s")
+        district_filter = " AND home_district_code = %s"
         params.append(district)
-    where = "WHERE " + " AND ".join(conditions)
 
     rows = execute_query(f"""
         SELECT visit_count, COUNT(*) AS patient_count
         FROM (
             SELECT patient_id, COUNT(*) AS visit_count
-            FROM raw_vitalsigns
-            {where}
+            FROM public.mv_visit_resolved
+            WHERE cancel_status IS DISTINCT FROM 1
+              AND is_dedup_kept = TRUE{district_filter}
             GROUP BY patient_id
         ) sub
         GROUP BY visit_count
@@ -167,18 +208,20 @@ def disease_progression(
     if not bool_col:
         return {"data_available": False, "message": f"ไม่มีคอลัมน์ risk/found สำหรับ '{disease}' — ใช้ /api/v2/summary/lab แทน"}
 
-    conditions = ["cancel_status IS DISTINCT FROM 1"]
     params: list = []
+    district_join = ""
+    district_filter = ""
     if district:
-        conditions.append("district_code = %s")
+        district_join = f"JOIN ({_HOMEVISIT_DISTRICT_SQL}) hv ON v.patient_id = hv.patient_id"
+        district_filter = " AND hv.district_code = %s"
         params.append(district)
-    where = "WHERE " + " AND ".join(conditions)
 
     multi = execute_scalar(f"""
         SELECT COUNT(*) FROM (
-            SELECT patient_id FROM raw_vitalsigns
-            {where}
-            GROUP BY patient_id HAVING COUNT(*) >= 2
+            SELECT v.patient_id FROM ({_VISITS_UNION_SQL}) v
+            {district_join}
+            WHERE v.cancel_status IS DISTINCT FROM 1{district_filter}
+            GROUP BY v.patient_id HAVING COUNT(*) >= 2
         ) sub
     """, tuple(params) or None) or 0
 
@@ -190,13 +233,20 @@ def disease_progression(
         }
 
     # Compute first vs last visit disease flag change
+    # Note: smallint 0/1 in new schema (vs bool in old). Use `= 1` semantics.
+    progression_params = list(params) + list(params) + list(params)
     rows = execute_query(f"""
-        WITH ranked AS (
+        WITH visits AS (
+            SELECT v.patient_id, v.{bool_col}, v.visit_date, v.id
+            FROM ({_VISITS_UNION_SQL}) v
+            {district_join}
+            WHERE v.cancel_status IS DISTINCT FROM 1{district_filter}
+        ),
+        ranked AS (
             SELECT patient_id, {bool_col},
                    ROW_NUMBER() OVER (PARTITION BY patient_id ORDER BY visit_date ASC, id ASC) AS rn_first,
                    ROW_NUMBER() OVER (PARTITION BY patient_id ORDER BY visit_date DESC, id DESC) AS rn_last
-            FROM raw_vitalsigns
-            {where}
+            FROM visits
         ),
         first_last AS (
             SELECT
@@ -207,17 +257,19 @@ def disease_progression(
             JOIN (SELECT patient_id, {bool_col} FROM ranked WHERE rn_last = 1) l
                 ON f.patient_id = l.patient_id
             WHERE f.patient_id IN (
-                SELECT patient_id FROM raw_vitalsigns {where}
-                GROUP BY patient_id HAVING COUNT(*) >= 2
+                SELECT v.patient_id FROM ({_VISITS_UNION_SQL}) v
+                {district_join}
+                WHERE v.cancel_status IS DISTINCT FROM 1{district_filter}
+                GROUP BY v.patient_id HAVING COUNT(*) >= 2
             )
         )
         SELECT
-            COUNT(*) FILTER (WHERE first_flag AND NOT last_flag) AS improved,
-            COUNT(*) FILTER (WHERE NOT first_flag AND last_flag) AS worsened,
-            COUNT(*) FILTER (WHERE first_flag = last_flag) AS stable,
+            COUNT(*) FILTER (WHERE first_flag = 1 AND (last_flag = 0 OR last_flag IS NULL)) AS improved,
+            COUNT(*) FILTER (WHERE (first_flag = 0 OR first_flag IS NULL) AND last_flag = 1) AS worsened,
+            COUNT(*) FILTER (WHERE first_flag IS NOT DISTINCT FROM last_flag) AS stable,
             COUNT(*) AS total
         FROM first_last
-    """, tuple(params) or None)
+    """, tuple(progression_params) or None)
 
     if not rows:
         return {"data_available": False, "message": "ไม่สามารถคำนวณ progression ได้"}
@@ -238,47 +290,26 @@ def disease_progression(
 @router.get("/referral-outcome")
 def referral_outcome(zone_code: Optional[str] = Query(None)):
     """Referral analysis: how many patients were referred, by type."""
-    total_ref = execute_scalar(
-        "SELECT COUNT(*) FROM raw_vitalsigns WHERE referral_type IS NOT NULL AND cancel_status IS DISTINCT FROM 1"
-    ) or 0
-
-    if total_ref == 0:
-        return {
-            "data_available": False,
-            "message": "ไม่มีข้อมูลการส่งต่อ (referral_type ว่างทั้งหมด) — ต้องรอข้อมูลจาก HDC",
-        }
-
-    conditions = ["v.referral_type IS NOT NULL", "v.cancel_status IS DISTINCT FROM 1"]
-    params: list = []
-    if zone_code:
-        conditions.append("d.zone_code = %s")
-        params.append(zone_code)
-    where = "WHERE " + " AND ".join(conditions)
-
-    rows = execute_query(f"""
-        SELECT v.district_code, v.referral_type, COUNT(*) AS count
-        FROM raw_vitalsigns v
-        JOIN ref_districts d ON v.district_code = d.dcode
-        {where}
-        GROUP BY v.district_code, v.referral_type
-        ORDER BY v.district_code, v.referral_type
-    """, tuple(params) or None)
-
-    rows = enforce_k_anonymity(rows, count_field="count")
-
-    return {"zone_code": zone_code, "total_referrals": int(total_ref), "data": rows}
+    # TODO: bma_med equivalent unclear — referral_type column not in vitalsignslf in new schema.
+    # The factsheet rfprvlg/rfover/rffw/rfspc/rfoth flags exist but aren't unified into one
+    # "referral_type" enum. Returning empty until mapping is finalized.
+    return {
+        "data_available": False,
+        "message": "ไม่มีข้อมูลการส่งต่อ (referral_type ว่างทั้งหมด) — ต้องรอข้อมูลจาก HDC",
+    }
 
 
 @router.get("/treatment-compliance")
 def treatment_compliance(disease: str = Query("diabetes")):
     """Treatment compliance: active/inconsistent/self-med/abandoned per disease."""
+    # New schema treatment columns live in homehealth: dmrs, hptrs, chltrrs, hrtrs, kidneyrs, strokers
     treatment_cols = {
-        "diabetes": "dm_treatment",
-        "hypertension": "hpt_treatment",
-        "dyslipidemia": "dyslipidemia_treatment",
-        "heart": "heart_treatment",
-        "kidney": "kidney_treatment",
-        "stroke": "stroke_treatment",
+        "diabetes": "dmrs",
+        "hypertension": "hptrs",
+        "dyslipidemia": "chltrrs",
+        "heart": "hrtrs",
+        "kidney": "kidneyrs",
+        "stroke": "strokers",
     }
     col = treatment_cols.get(disease)
     if not col:
@@ -287,9 +318,13 @@ def treatment_compliance(disease: str = Query("diabetes")):
             "message": f"ไม่มีข้อมูล treatment สำหรับ {disease}. รองรับ: {sorted(treatment_cols.keys())}",
         }
 
-    total = execute_scalar(
-        f'SELECT COUNT(*) FROM raw_homehealth WHERE "{col}" IS NOT NULL'
-    ) or 0
+    total = execute_scalar(f"""
+        SELECT COUNT(*) FROM (
+            SELECT {col} FROM bma_med.app1_homehealth WHERE {col} IS NOT NULL
+            UNION ALL
+            SELECT {col} FROM bma_med.portal_homehealth WHERE {col} IS NOT NULL
+        ) t
+    """) or 0
 
     if total == 0:
         return {
@@ -298,9 +333,13 @@ def treatment_compliance(disease: str = Query("diabetes")):
         }
 
     rows = execute_query(f"""
-        SELECT "{col}" AS treatment_status, COUNT(*) AS count
-        FROM raw_homehealth WHERE "{col}" IS NOT NULL
-        GROUP BY "{col}" ORDER BY "{col}"
+        SELECT {col} AS treatment_status, COUNT(*) AS count
+        FROM (
+            SELECT {col} FROM bma_med.app1_homehealth WHERE {col} IS NOT NULL
+            UNION ALL
+            SELECT {col} FROM bma_med.portal_homehealth WHERE {col} IS NOT NULL
+        ) t
+        GROUP BY {col} ORDER BY {col}
     """)
 
     labels = {1: "รับการรักษาอยู่", 2: "รักษาไม่สม่ำเสมอ", 3: "ซื้อยาทานเอง", 4: "ไม่รักษา"}

@@ -1,4 +1,19 @@
-# DATA-DICTIONARY.md — คู่มือ Data Cleansing & Integration ฉบับเต็ม
+# ⚠️ ARCHIVED — see `bma-med/MED-FACTSHEET.md` + `bma-med/CODES_REFERENCE.md`
+
+> **As of Sprint S1 (2026-05) this document is preserved for historical
+> reference only.** The canonical data dictionary has moved to:
+>
+> - **`/Users/dev/bma-med/MED-FACTSHEET.md`** — variable definitions, types, codebooks (the TOR)
+> - **`/Users/dev/bma-med/CODES_REFERENCE.md`** — auto-generated value→Thai-label reference
+> - **`/Users/dev/bma-med/CLEANING_NOTES.md`** — methodology, deviations, derived variables
+>
+> The cleaner (`bma-med/clean.py`) parses `MED-FACTSHEET.md` at module
+> load — the factsheet *is* the runtime contract. Edits here have no
+> effect on the pipeline. Cross-walk in `bma-health-db/CUTOVER-PLAN.md`.
+
+---
+
+# DATA-DICTIONARY.md (archived) — คู่มือ Data Cleansing & Integration ฉบับเต็ม
 
 > **โครงการคัดกรองสุขภาพกรุงเทพมหานคร** | สำนักการแพทย์ กรุงเทพมหานคร
 > Last Updated: 2026-04-17

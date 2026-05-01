@@ -68,12 +68,17 @@ def headline_kpi():
             top_disease = {"key": key, "name_th": disease_names_th[key], "pct": pct, "count": cnt}
 
     # Most concerning district (highest total disease burden)
+    # Note: summary_district_disease no longer has district_name; join ref_districts.name_th
     worst = execute_query("""
-        SELECT district_code, district_name, total_screened,
-               risk_dm_count + risk_hpt_count + risk_cvd_count + risk_bmi_count AS total_risk
-        FROM summary_district_disease
-        WHERE total_screened >= 5
-        ORDER BY (risk_dm_count + risk_hpt_count + risk_cvd_count + risk_bmi_count)::float / NULLIF(total_screened, 0) DESC
+        SELECT s.district_code, d.name_th AS district_name,
+               SUM(s.total_screened) AS total_screened,
+               SUM(s.risk_dm_count + s.risk_hpt_count + s.risk_cvd_count + s.risk_bmi_count) AS total_risk
+        FROM summary_district_disease s
+        LEFT JOIN ref_districts d ON d.dcode = s.district_code
+        GROUP BY s.district_code, d.name_th
+        HAVING SUM(s.total_screened) >= 5
+        ORDER BY SUM(s.risk_dm_count + s.risk_hpt_count + s.risk_cvd_count + s.risk_bmi_count)::float
+                 / NULLIF(SUM(s.total_screened), 0) DESC
         LIMIT 1
     """)
 

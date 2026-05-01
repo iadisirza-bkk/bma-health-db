@@ -1,4 +1,15 @@
-# MEDICAL-DICTIONARY.md — พจนานุกรมตัวแปรทางการแพทย์ฉบับเต็ม
+# ⚠️ ARCHIVED — see `bma-med/MED-FACTSHEET.md` + `bma-med/CODES_REFERENCE.md`
+
+> **As of Sprint S1 (2026-05) this document is preserved for historical
+> reference only.** Canonical sources are `bma-med/MED-FACTSHEET.md` (TOR)
+> and `bma-med/CODES_REFERENCE.md` (auto-generated value→Thai-label
+> reference). The cleaner reads the factsheet at module load — the
+> factsheet is the runtime contract. Cross-walk in
+> `bma-health-db/CUTOVER-PLAN.md`.
+
+---
+
+# MEDICAL-DICTIONARY.md (archived) — พจนานุกรมตัวแปรทางการแพทย์ฉบับเต็ม
 
 > **โครงการคัดกรองสุขภาพกรุงเทพมหานคร** | สำนักการแพทย์ กรุงเทพมหานคร
 > Last Updated: 2026-04-17

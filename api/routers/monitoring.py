@@ -1,6 +1,6 @@
 """
 Monitoring router — data quality, cleansing, ETL status, audit.
-Extracted from main.py lines 894-935, 938-995, 1492-1515, 2221-2273.
+Refactored for bma_med.* schema.
 """
 from __future__ import annotations
 
@@ -11,47 +11,76 @@ from cache import cache_stats, cache_flush_all
 
 router = APIRouter(prefix="/api/v2/monitoring", tags=["Monitoring"])
 
+# --------------------------------------------------------------------------- #
+# Reusable UNION across the two main vitalsigns sources (app1 + portal)
+# Used for any query that needs aggregate visit data across all sources.
+# --------------------------------------------------------------------------- #
+_VISITS_UNION_SQL = """
+SELECT patient_id, vstdate, hbpn, lbpn, alcohal, smoke, record_cancelled,
+       dm, hpt, cdvcl, stroke, fat, chltr,
+       riskdm, riskhpt, riskcdvcl, riskbmi
+FROM bma_med.app1_vitalsignslf
+UNION ALL
+SELECT patient_id, vstdate, hbpn, lbpn, alcohal, smoke, record_cancelled,
+       dm, hpt, cdvcl, stroke, fat, chltr,
+       riskdm, riskhpt, riskcdvcl, riskbmi
+FROM bma_med.portal_vitalsignslf
+"""
+
+# Map old raw_* table names → list of (schema.table) underlying them in bma_med.*
+# Used by the data-quality + cleansing reports to walk per-source completeness.
+_BMA_MED_TABLE_MAP = {
+    "raw_patients": ["bma_med.patient"],
+    "raw_vitalsigns": ["bma_med.app1_vitalsignslf", "bma_med.portal_vitalsignslf"],
+    "raw_homevisit": ["bma_med.app1_homevisit", "bma_med.portal_homevisit"],
+    "raw_homehealth": ["bma_med.app1_homehealth", "bma_med.portal_homehealth"],
+}
+
 
 @router.get("/data-quality")
 def data_quality():
-    """Data completeness report -- null rates per table per field."""
-    tables = ["raw_patients", "raw_visits", "raw_vitalsigns", "raw_homevisit",
-              "raw_homehealth", "raw_lab_results", "raw_lab_extended"]
+    """Data completeness report -- row counts per legacy table.
+
+    Note: the api_user (bma_api_reader) role intentionally has NO direct SELECT on
+    bma_med.* (raw screening tables). Row counts come from pg_stat_user_tables
+    (catalog access only). Per-column null rates require row-level access and
+    are therefore not reported here — promote a `mv_data_quality` summary view
+    if the field-level breakdown is needed.
+    TODO: bma_med equivalent unclear — once a public.mv_data_quality MV is
+    created from inside bma_med (e.g. via etl_user) and granted to api_user,
+    re-enable per-column null counts here.
+    """
+    # Row counts per underlying bma_med.* table via catalog (no row-level read needed)
+    catalog_rows = execute_query("""
+        SELECT n.nspname AS schema_name,
+               c.relname AS table_name,
+               COALESCE(s.n_live_tup, 0)::bigint AS row_count
+        FROM pg_class c
+        JOIN pg_namespace n ON c.relnamespace = n.oid
+        LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
+        WHERE n.nspname = 'bma_med' AND c.relkind = 'r'
+    """)
+    counts = {f"{r['schema_name']}.{r['table_name']}": int(r['row_count'] or 0)
+              for r in catalog_rows}
+
     result = {}
-    for table in tables:
-        total = execute_scalar(f'SELECT COUNT(*) FROM "{table}"') or 0
-        if total == 0:
-            result[table] = {"total_rows": 0, "fields": {}}
-            continue
+    for legacy_name, real_tables in _BMA_MED_TABLE_MAP.items():
+        total = sum(counts.get(fq, 0) for fq in real_tables)
+        result[legacy_name] = {
+            "total_rows": int(total),
+            "fields": {},
+            "underlying_tables": real_tables,
+            "note": "field-level null counts unavailable to read-only role; "
+                    "promote a public.mv_data_quality MV if needed",
+        }
 
-        cols = execute_query("""
-            SELECT column_name FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = %s
-            AND column_name NOT IN ('id','created_at','updated_at')
-            ORDER BY ordinal_position
-        """, (table,))
-
-        fields = {}
-        for col in cols:
-            cn = col["column_name"]
-            null_count = execute_scalar(
-                f'SELECT COUNT(*) FROM "{table}" WHERE "{cn}" IS NULL'
-            ) or 0
-            fields[cn] = {
-                "null_count": int(null_count),
-                "null_pct": round(100.0 * null_count / total, 1) if total > 0 else 0,
-                "filled_pct": round(100.0 * (total - null_count) / total, 1) if total > 0 else 0,
-            }
-
-        result[table] = {"total_rows": int(total), "fields": fields}
-
-    blocked = []
-    for table, info in result.items():
-        for field, stats in info.get("fields", {}).items():
-            if stats["null_pct"] >= 100 and info["total_rows"] > 0:
-                blocked.append({"table": table, "field": field, "note": f"ไม่มีข้อมูล {field} เลย"})
-
-    return {"tables": result, "blocked_fields": blocked}
+    return {
+        "tables": result,
+        "blocked_fields": [],
+        "data_available_partial": True,
+        "message": "Row counts only — per-column null rates require row-level access "
+                   "to bma_med.* which the api_user does not have.",
+    }
 
 
 @router.get("/cleansing-report")
@@ -59,25 +88,47 @@ def cleansing_report():
     """Data cleansing summary -- what was cleaned during import."""
     tables_info = {}
 
-    for table in ["raw_patients", "raw_vitalsigns", "raw_lab_results", "raw_homevisit", "raw_homehealth", "raw_lab_extended"]:
-        total = execute_scalar(f'SELECT COUNT(*) FROM "{table}"') or 0
+    for legacy_name, real_tables in _BMA_MED_TABLE_MAP.items():
+        total = 0
         cancelled = 0
-        if table != "raw_patients":
-            cancelled = execute_scalar(f'SELECT COUNT(*) FROM "{table}" WHERE cancel_status = 1') or 0
+        for fq in real_tables:
+            schema, tbl = fq.split(".")
+            total += execute_scalar(f'SELECT COUNT(*) FROM {schema}."{tbl}"') or 0
+            if legacy_name != "raw_patients":
+                cancelled += execute_scalar(
+                    f'SELECT COUNT(*) FROM {schema}."{tbl}" WHERE record_cancelled = 1'
+                ) or 0
 
-        tables_info[table] = {
+        tables_info[legacy_name] = {
             "total_rows": int(total),
             "active_rows": int(total - cancelled),
             "cancelled_excluded": int(cancelled),
         }
 
-    null_birth = execute_scalar("SELECT COUNT(*) FROM raw_patients WHERE birth_year IS NULL") or 0
-    null_sex = execute_scalar("SELECT COUNT(*) FROM raw_patients WHERE sex IS NULL") or 0
+    null_birth = execute_scalar(
+        "SELECT COUNT(*) FROM bma_med.patient WHERE birthdate IS NULL"
+    ) or 0
+    null_sex = execute_scalar(
+        "SELECT COUNT(*) FROM bma_med.patient WHERE sex_code IS NULL"
+    ) or 0
     tables_info["raw_patients"]["null_birth_year"] = int(null_birth)
     tables_info["raw_patients"]["null_sex"] = int(null_sex)
 
-    null_district = execute_scalar("SELECT COUNT(*) FROM raw_vitalsigns WHERE district_code IS NULL AND cancel_status = 0") or 0
-    null_bp = execute_scalar("SELECT COUNT(*) FROM raw_vitalsigns WHERE (sbp IS NULL OR sbp = 0) AND cancel_status = 0") or 0
+    # district_code lives in homevisit (crdistrict/district), not in vitalsignslf in new schema.
+    # TODO: bma_med equivalent unclear — counting visits with no homevisit district_code lookup.
+    null_district = 0
+    for fq in ["bma_med.app1_homevisit", "bma_med.portal_homevisit"]:
+        schema, tbl = fq.split(".")
+        null_district += execute_scalar(
+            f'SELECT COUNT(*) FROM {schema}."{tbl}" WHERE district IS NULL AND crdistrict IS NULL'
+        ) or 0
+
+    null_bp = 0
+    for fq in ["bma_med.app1_vitalsignslf", "bma_med.portal_vitalsignslf"]:
+        schema, tbl = fq.split(".")
+        null_bp += execute_scalar(
+            f'SELECT COUNT(*) FROM {schema}."{tbl}" WHERE (hbpn IS NULL OR hbpn = 0) AND record_cancelled = 0'
+        ) or 0
     tables_info["raw_vitalsigns"]["null_district_code"] = int(null_district)
     tables_info["raw_vitalsigns"]["null_bp"] = int(null_bp)
 
@@ -88,21 +139,9 @@ def cleansing_report():
     """)
 
     blocked = []
-    checks = [
-        ("raw_lab_results", "egfr", "eGFR (ค่าการทำงานของไต)"),
-        ("raw_lab_results", "cervical_cancer_result", "มะเร็งปากมดลูก"),
-        ("raw_lab_results", "colorectal_result", "มะเร็งลำไส้"),
-        ("raw_homehealth", "food_preference_sweet", "ความชอบอาหารหวาน"),
-        ("raw_homehealth", "dm_treatment", "สถานะการรักษาเบาหวาน"),
-        ("raw_vitalsigns", "referral_type", "ประเภทการส่งต่อ"),
-    ]
-    for table, field, label in checks:
-        total_t = execute_scalar(f'SELECT COUNT(*) FROM "{table}"') or 0
-        if total_t > 0:
-            filled = execute_scalar(f'SELECT COUNT(*) FROM "{table}" WHERE "{field}" IS NOT NULL') or 0
-            if filled == 0:
-                blocked.append({"table": table, "field": field, "label": label, "null_pct": 100.0})
-
+    # TODO: bma_med equivalent unclear — egfr/cervical/colorectal labs and
+    # food_preference_* / *_treatment / referral_type are not in the migration map.
+    # Returning empty list rather than throwing.
     return {
         "tables": tables_info,
         "recent_imports": last_import,

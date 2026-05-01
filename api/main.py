@@ -23,7 +23,8 @@ from database import execute_scalar, close_pool
 from security import APIKeyMiddleware, RateLimitMiddleware, add_cors
 from errors import BMAException, bma_exception_handler, unhandled_exception_handler
 from cache import cache_stats
-from admin import router as admin_router
+from admin import router as admin_router, upload_excel_router, start_upload_janitor
+from auth import router as auth_router
 from config import validate_production_config
 
 # Routers
@@ -141,6 +142,11 @@ async def lifespan(app: FastAPI):
         start_scheduler()
     except ImportError:
         pass
+    # Periodic cleanup of stale 'pending_confirm' upload-excel tmpdirs.
+    try:
+        start_upload_janitor()
+    except Exception:
+        pass
     yield
     close_pool()
 
@@ -202,6 +208,12 @@ app.add_exception_handler(Exception, unhandled_exception_handler)
 # --------------------------------------------------------------------------- #
 
 app.include_router(admin_router)
+# IMPORTANT: include the new /api/admin/upload-excel router BEFORE
+# admin_api_router (added later via _new_routers loop) so the new
+# auth-protected, pipeline-driven endpoints win over the legacy
+# /upload-excel handler in routers/admin_api.py for duplicate paths.
+app.include_router(upload_excel_router)
+app.include_router(auth_router)
 app.include_router(summary_router)
 app.include_router(zones_router)
 app.include_router(districts_router)

@@ -6,6 +6,10 @@
 {% block content %}
 <div class="space-y-6">
 
+    <div class="warning rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+        หน้านี้ถูก replace โดย <a href="/admin" class="underline font-semibold">/admin</a> (อัพโหลด Excel/zip) — กรุณาใช้หน้าใหม่
+    </div>
+
     <!-- Header -->
     <div>
         <h1 class="text-lg font-bold text-gray-900">Cleansing Report — เกณฑ์ Inclusion / Exclusion</h1>
@@ -25,10 +29,10 @@
                 ฟีเจอร์นี้กำลังย้ายไปใช้ schema v3 — ยังไม่พร้อม
             </p>
             <p class="text-xs text-amber-800 mt-1">
-                หน้านี้อ้างอิง <code>INCLUSION_CRITERIA</code> ที่ผูกกับตาราง <code>raw_*</code> เก่า
-                ซึ่ง migration 105 ปลดออกไปแล้ว v3 บังคับ rule ผ่าน
-                <code>etl/import_csv_v3.py</code> ลง <code>private.visit_measurement.value_num</code> แทน —
-                จะเขียนหน้านี้ใหม่ให้ดึงจาก <code>private.variable_definition.valid_min/valid_max</code> ในรอบถัดไป
+                หน้านี้อ้างอิง <code>INCLUSION_CRITERIA</code> ที่ผูกกับตารางข้อมูลเดิม (schema เดิมที่ถูก archive แล้ว)
+                ซึ่ง migration 105 ปลดออกไปแล้ว schema ใหม่บังคับ rule ผ่าน ETL ลงตาราง measurement (EAV)
+                ตามค่า valid_min / valid_max ใน variable definition แทน —
+                จะเขียนหน้านี้ใหม่ในรอบถัดไป
             </p>
         </div>
     </div>
@@ -163,7 +167,7 @@
             <li><b>Inclusion rule</b> = เกณฑ์ที่ <code>safe_int / safe_float</code> ใน <code>etl/import_csv.py</code> ใช้ —
                 ค่าอยู่ในช่วงนี้ถึงจะเก็บ ไม่งั้นแปลง NULL</li>
             <li><b>—</b> ในเซลล์ source หมายถึง "source นี้ไม่มี data ในตารางนี้เลย"
-                (เช่น <code>raw_visits</code>, <code>raw_lab_extended</code> มีแต่ portal)</li>
+                (เช่น ตารางข้อมูล visits และ lab extended มีแต่ portal)</li>
             <li>สี: <span class="text-emerald-600 font-bold">&lt;20%</span> ดี ·
                 <span class="text-amber-600 font-bold">20-50%</span> ปานกลาง ·
                 <span class="text-orange-600 font-bold">50-80%</span> เกือบขาด ·

@@ -1,4 +1,5 @@
-"""Research router -- extracted from main.py."""
+"""Research router -- extracted from main.py.
+Refactored for bma_med.* schema."""
 from __future__ import annotations
 
 from typing import Optional
@@ -9,6 +10,22 @@ from database import execute_query, execute_scalar
 from security import K_ANONYMITY_THRESHOLD
 
 router = APIRouter(prefix="/api/v2/research", tags=["Research"])
+
+# --------------------------------------------------------------------------- #
+# Reusable UNION across the two main vitalsigns sources (app1 + portal).
+# Subselect aliased as `v` so handlers can plug it in as `FROM ({_VISITS_UNION_SQL}) v`.
+# --------------------------------------------------------------------------- #
+_VISITS_UNION_SQL = """
+SELECT row_id AS id, patient_id, vstdate AS visit_date,
+       hbpn AS sbp, lbpn AS dbp,
+       record_cancelled AS cancel_status
+FROM bma_med.app1_vitalsignslf
+UNION ALL
+SELECT row_id AS id, patient_id, vstdate AS visit_date,
+       hbpn AS sbp, lbpn AS dbp,
+       record_cancelled AS cancel_status
+FROM bma_med.portal_vitalsignslf
+"""
 
 
 # ------------------------------------------------------------------ #
@@ -71,16 +88,19 @@ def research_individual_data(
 
     # Return aggregated individual-level stats (NOT actual records)
     # This is a safe proxy: summarize the shape of individual data
-    stats = execute_query("""
+    # TODO: bma_med equivalent unclear — facility_code (hptcode) and district_code
+    # don't live on vitalsignslf in new schema. Set to NULL counts.
+    stats = execute_query(f"""
+        WITH v AS ({_VISITS_UNION_SQL})
         SELECT
-            COUNT(DISTINCT p.id) as total_patients,
+            COUNT(DISTINCT p.patient_id) as total_patients,
             COUNT(DISTINCT v.id) as total_visits,
-            COUNT(DISTINCT v.facility_code) as facilities,
-            COUNT(DISTINCT v.district_code) as districts,
+            NULL::int as facilities,
+            NULL::int as districts,
             MIN(v.visit_date) as date_range_start,
             MAX(v.visit_date) as date_range_end
-        FROM raw_patients p
-        LEFT JOIN raw_vitalsigns v ON p.id = v.patient_id AND v.cancel_status IS DISTINCT FROM 1
+        FROM bma_med.patient p
+        LEFT JOIN v ON p.patient_id = v.patient_id AND v.cancel_status IS DISTINCT FROM 1
     """)
 
     s = stats[0] if stats else {}
@@ -145,22 +165,40 @@ def statistical_test(
 @router.get("/correlation-matrix")
 def correlation_matrix():
     """Correlation matrix of key health variables (aggregate level)."""
-    # Return district-level averages for correlation computation
+    # Return district-level averages for correlation computation.
+    # Notes:
+    # - summary_district_disease is now grained by (data_source, district_code) — aggregate
+    #   per district with SUM/AVG.
+    # - summary_district_lab and summary_bmi_waist are stub views (always 0 rows) in the
+    #   bma_med.* migration; LEFT JOINs return NULL → COALESCE(...,0) keeps shape stable.
+    # - summary_bmi_waist.sex is INT (NULL in the stub); the legacy `b.sex='all'` filter
+    #   is incompatible with the new type. Drop the filter — the stub returns no rows
+    #   anyway, and once promoted, a real per-district aggregate will replace it.
+    # TODO: bma_med equivalent unclear — once summary_bmi_waist / summary_district_lab
+    # are promoted from stubs, restore proper sex='all' rollup if applicable.
     rows = execute_query("""
         SELECT d.dcode AS district_code,
-               COALESCE(s.total_screened, 0) as screened,
-               COALESCE(s.pct_risk_dm, 0) as dm_pct,
-               COALESCE(s.pct_risk_hpt, 0) as hpt_pct,
-               COALESCE(s.pct_risk_cvd, 0) as cvd_pct,
-               COALESCE(l.avg_fbs, 0) as avg_fbs,
-               COALESCE(l.avg_hemoglobin, 0) as avg_hemoglobin,
-               COALESCE(l.avg_cholesterol, 0) as avg_cholesterol,
-               COALESCE(b.avg_bmi, 0) as avg_bmi
+               COALESCE(s.screened, 0)              AS screened,
+               COALESCE(s.dm_pct, 0)                AS dm_pct,
+               COALESCE(s.hpt_pct, 0)               AS hpt_pct,
+               COALESCE(s.cvd_pct, 0)               AS cvd_pct,
+               COALESCE(l.avg_fbs, 0)               AS avg_fbs,
+               COALESCE(l.avg_hemoglobin, 0)        AS avg_hemoglobin,
+               COALESCE(l.avg_cholesterol, 0)       AS avg_cholesterol,
+               COALESCE(b.avg_bmi, 0)               AS avg_bmi
         FROM ref_districts d
-        LEFT JOIN summary_district_disease s ON d.dcode = s.district_code
+        LEFT JOIN (
+            SELECT district_code,
+                   SUM(total_screened)                                                  AS screened,
+                   AVG(NULLIF(pct_risk_dm, 0))                                          AS dm_pct,
+                   AVG(NULLIF(pct_risk_hpt, 0))                                         AS hpt_pct,
+                   AVG(NULLIF(pct_risk_cvd, 0))                                         AS cvd_pct
+            FROM summary_district_disease
+            GROUP BY district_code
+        ) s ON d.dcode = s.district_code
         LEFT JOIN summary_district_lab l ON d.dcode = l.district_code
-        LEFT JOIN summary_bmi_waist b ON d.dcode = b.district_code AND b.sex = 'all'
-        WHERE COALESCE(s.total_screened, 0) >= 5
+        LEFT JOIN summary_bmi_waist b ON d.dcode = b.district_code
+        WHERE COALESCE(s.screened, 0) >= 5
         ORDER BY d.dcode
     """)
     return {"variables": ["screened", "dm_pct", "hpt_pct", "cvd_pct", "avg_fbs", "avg_hemoglobin", "avg_cholesterol", "avg_bmi"],
@@ -298,3 +336,47 @@ def ncd_diagnostic_report():
         },
         "data": rows,
     }
+
+
+# ------------------------------------------------------------------ #
+# GET /api/v2/research/ncd-diagnostic-by-zone
+# ------------------------------------------------------------------ #
+
+@router.get("/ncd-diagnostic-by-zone")
+def ncd_diagnostic_by_zone(zone_code: Optional[str] = None):
+    """Per-zone version of /ncd-diagnostic-report (≥migration 114).
+
+    Returns 11 disease rows per zone × 4 metrics, suitable for the map
+    hover tooltip. Optional `?zone_code=03` filters to one zone.
+    """
+    if zone_code:
+        rows = execute_query("""
+            SELECT zone_code, disease_key, disease_name_th, lab_threshold,
+                   at_risk, sick_clinical, new_clinical, by_snp_criteria
+            FROM public.mv_ncd_diagnostic_zone
+            WHERE zone_code = %s
+            ORDER BY
+              CASE disease_key
+                WHEN 'diabetes' THEN 1 WHEN 'hypertension' THEN 2
+                WHEN 'dyslipidemia' THEN 3 WHEN 'obesity' THEN 4
+                WHEN 'kidney' THEN 5 WHEN 'liver' THEN 6
+                WHEN 'anemia' THEN 7 WHEN 'cardiovascular' THEN 8
+                WHEN 'stroke' THEN 9 WHEN 'cervical_cancer' THEN 10
+                WHEN 'colorectal_cancer' THEN 11 END
+        """, (zone_code,))
+    else:
+        rows = execute_query("""
+            SELECT zone_code, disease_key, disease_name_th, lab_threshold,
+                   at_risk, sick_clinical, new_clinical, by_snp_criteria
+            FROM public.mv_ncd_diagnostic_zone
+            ORDER BY zone_code,
+              CASE disease_key
+                WHEN 'diabetes' THEN 1 WHEN 'hypertension' THEN 2
+                WHEN 'dyslipidemia' THEN 3 WHEN 'obesity' THEN 4
+                WHEN 'kidney' THEN 5 WHEN 'liver' THEN 6
+                WHEN 'anemia' THEN 7 WHEN 'cardiovascular' THEN 8
+                WHEN 'stroke' THEN 9 WHEN 'cervical_cancer' THEN 10
+                WHEN 'colorectal_cancer' THEN 11 END
+        """)
+
+    return {"k_anonymity": K_ANONYMITY_THRESHOLD, "data": rows}

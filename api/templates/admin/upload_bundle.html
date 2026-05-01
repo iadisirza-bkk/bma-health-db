@@ -6,6 +6,10 @@
 {% block content %}
 <div class="space-y-6">
 
+    <div class="warning rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+        หน้านี้ถูก replace โดย <a href="/admin" class="underline font-semibold">/admin</a> (อัพโหลด Excel/zip) — กรุณาใช้หน้าใหม่
+    </div>
+
     <!-- Page Header -->
     <div>
         <h1 class="text-lg font-bold text-gray-900">Bundle Upload (3-Source)</h1>
@@ -45,11 +49,9 @@
         <div>
             <span class="font-bold">ลบเฉพาะข้อมูลของ source ที่อัปโหลด — sources อื่นยังอยู่</span><br>
             ระบบจะ <code class="px-1 bg-amber-100 rounded">DELETE</code> เฉพาะ
-            <code class="px-1 bg-amber-100 rounded">private.visit_event</code>,
-            <code class="px-1 bg-amber-100 rounded">private.lab_event</code>,
-            <code class="px-1 bg-amber-100 rounded">private.patient_alias</code>
-            ของ source ที่อัปโหลด แล้วลบ <code class="px-1 bg-amber-100 rounded">private.patient</code>
-            ที่ไม่มี alias เหลืออยู่ ก่อนนำเข้าใหม่ —
+            ข้อมูล visit event, lab event และ patient alias
+            ของ source ที่อัปโหลด แล้วลบข้อมูลผู้ป่วย
+            ที่ไม่มี alias เหลืออยู่ ก่อนนำเข้าใหม่ (ตารางข้อมูลเดิมที่ถูก archive แล้ว) —
             ทั้งหมดอยู่ใน 1 transaction (rollback ได้ถ้าล้มเหลว)
             <br>
             <span class="text-amber-700 text-xs">เช่น อัปโหลดเฉพาะ portal/ → app1+app2 ที่อยู่ใน DB จะไม่ถูกแตะต้อง.

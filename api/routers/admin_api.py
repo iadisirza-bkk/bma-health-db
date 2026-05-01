@@ -435,8 +435,13 @@ def verify_audit_log_chain(authorization: Optional[str] = Header(None)):
 MAX_UPLOAD_SIZE = 500 * 1024 * 1024  # 500 MB
 
 
-@router.post("/upload-excel", response_model=ExcelUploadResponse)
-def upload_excel(
+# DEPRECATED 2026-05-01 — replaced by `upload_excel_router.upload_screening`
+# in api/admin.py (auth-protected, streaming, validate-gated, pipeline-driven).
+# This route is no longer registered: the decorator below is renamed to
+# `_legacy_upload_excel` so it's importable as a function but FastAPI doesn't
+# wire it up. Kept as code reference for the next sprint's data-migration
+# plan; safe to delete once the new flow has been live for one cycle.
+def _legacy_upload_excel(
     file: UploadFile = File(..., description="Excel (.xlsx) file with district health data"),
     authorization: Optional[str] = Header(None),
 ):
