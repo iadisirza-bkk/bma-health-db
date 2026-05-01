@@ -1,0 +1,60 @@
+# =============================================================================
+# Chart spec: disease_lab_crosstab
+# -----------------------------------------------------------------------------
+# Heatmap: lab marker bins (x) × disease (y), cell value = patient count.
+# Built from mv_lab_distribution (district × source × lab_marker × value_bin)
+# joined to NCD diagnostic flags. Repository method: lab_distribution.
+# Front-end legacy component: src/components/sidebar/DiseaseLabCrosstab.tsx
+# Backend handler being replaced: GET /api/v2/epidemiology/disease-lab-crosstab
+# Note: legacy component reads summary_lab_disease_cross (a wide pivot with
+# avg_*/n_* columns); the new chart spec uses the long-format mv_lab_distribution
+# bins instead — see manifest note for the column-name mismatch.
+# =============================================================================
+spec_id: disease_lab_crosstab
+kind: heatmap
+title_th: "ค่า Lab × โรค (Cross-tab)"
+title_en: "Lab Markers × Disease Cross-tab"
+description_th: "ความหนาแน่นของผู้ป่วย จำแนกตามช่วงค่า Lab (FBS, SBP, Cholesterol, LDL, eGFR, Hb) × โรคที่ตรวจพบ"
+query_id: lab_distribution
+query_params: {}
+accepts:
+  - { name: district,   kind: district, required: false }
+  - { name: zone,       kind: zone,     required: false }
+  - { name: lab_marker, kind: enum,     required: false, values: [fbs, cholest, ldl, hdl, trigly, hmgb, hmtc, crtinine, egfrrs, sgot, sgpt, uricacid] }
+axes:
+  x: value_bin
+  y: lab_marker
+  value: n
+count_field: n
+color_palette:
+  - "#e6f5ef"   # bma.green.50  — coldest (low n)
+  - "#b3e0cc"   # bma.green.100
+  - "#80cba9"   # bma.green.200
+  - "#4db686"   # bma.green.300
+  - "#26a66d"   # bma.green.400
+  - "#009960"   # bma.green.500
+  - "#00744B"   # bma.green.DEFAULT
+  - "#005C3B"   # bma.green.700
+  - "#00442C"   # bma.green.800 — hottest (high n)
+k_anon_threshold: 5
+units:
+  value: "n"
+extra:
+  show_legend: true
+  show_data_labels: true
+  visual_map: true
+  visual_map_min: 0
+  axis_label_rotate: 0
+  marker_labels:
+    fbs:      "FBS (mg/dL)"
+    cholest:  "Cholesterol (mg/dL)"
+    ldl:      "LDL (mg/dL)"
+    hdl:      "HDL (mg/dL)"
+    trigly:   "Triglycerides (mg/dL)"
+    hmgb:     "Hemoglobin (g/dL)"
+    hmtc:     "Hematocrit (%)"
+    crtinine: "Creatinine (mg/dL)"
+    egfrrs:   "eGFR (mL/min/1.73m²)"
+    sgot:     "SGOT (U/L)"
+    sgpt:     "SGPT (U/L)"
+    uricacid: "Uric Acid (mg/dL)"

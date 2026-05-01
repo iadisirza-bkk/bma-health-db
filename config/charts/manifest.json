@@ -1,0 +1,93 @@
+{
+  "version": "1.0",
+  "generated_for": "ADR-01 — Chart Registry & Config-Driven Dashboard",
+  "spec_count": 6,
+  "specs": [
+    {
+      "spec_id": "risk_factor_profile",
+      "file": "risk_factor_profile.yaml",
+      "kind": "bar",
+      "query_id": "risk_factor_profile",
+      "replaces_endpoint": "/api/v2/promotion/risk-factor-profile",
+      "replaces_component": "frontend/src/components/sidebar/RiskFactorProfile.tsx"
+    },
+    {
+      "spec_id": "behavior_disease",
+      "file": "behavior_disease.yaml",
+      "kind": "stacked_bar",
+      "query_id": "behavior_disease_correlation",
+      "replaces_endpoint": "/api/v2/promotion/behavior-disease-correlation",
+      "replaces_component": "frontend/src/components/sidebar/BehaviorDisease.tsx"
+    },
+    {
+      "spec_id": "age_pyramid",
+      "file": "age_pyramid.yaml",
+      "kind": "pyramid",
+      "query_id": "age_pyramid",
+      "replaces_endpoint": "/api/v2/epidemiology/age-pyramid",
+      "replaces_component": "frontend/src/components/sidebar/AgeSexPyramid.tsx"
+    },
+    {
+      "spec_id": "screening_coverage",
+      "file": "screening_coverage.yaml",
+      "kind": "bar",
+      "query_id": "screening_coverage",
+      "replaces_endpoint": "/api/v2/disease-control/screening-coverage",
+      "replaces_component": "frontend/src/components/sidebar/ScreeningCoverage.tsx"
+    },
+    {
+      "spec_id": "repeat_screening",
+      "file": "repeat_screening.yaml",
+      "kind": "bar",
+      "query_id": "repeat_screening",
+      "replaces_endpoint": "/api/v2/disease-control/repeat-screening",
+      "replaces_component": "frontend/src/components/sidebar/RepeatScreening.tsx"
+    },
+    {
+      "spec_id": "disease_lab_crosstab",
+      "file": "disease_lab_crosstab.yaml",
+      "kind": "heatmap",
+      "query_id": "lab_distribution",
+      "replaces_endpoint": "/api/v2/epidemiology/disease-lab-crosstab",
+      "replaces_component": "frontend/src/components/sidebar/DiseaseLabCrosstab.tsx"
+    }
+  ],
+  "validation": {
+    "tool": "config/charts/validate.py",
+    "validator_used": "duck-type fallback (real ChartSpec Pydantic model not yet importable; the parallel agent owns it)",
+    "result": "ALL PASS (6/6)",
+    "ran_at_pwd": "/Users/dev/bma-health-db/config/charts"
+  },
+  "color_system": {
+    "primary_brand": "#00744B (bma.green.DEFAULT)",
+    "sequential_palette_source": "tailwind.config.ts → colors.bma.green {50..900}",
+    "categorical_palette_source": "tailwind.config.ts → colors.ci.{blue,pink,leaf,orange} + bma.gold.DEFAULT",
+    "rationale": "Single-series charts use bma-green sequential (50→900). Multi-series uses bma.green.DEFAULT + bma.gold.DEFAULT + ci.* categorical hues for clear separation."
+  },
+  "frontend_inconsistencies_for_migration_agent": [
+    {
+      "spec_id": "behavior_disease",
+      "issue": "Legacy component renders a heatmap (correlation matrix) but ADR-01 task requires stacked_bar. Spec uses stacked_bar; the renderer must build series from the per-row {behavior_value, total} shape currently returned by the handler — current handler does NOT return a per-disease breakdown, only a single disease at a time. Backend repository method may need to fan-out across diseases or the stacked_bar will degenerate to a plain bar."
+    },
+    {
+      "spec_id": "screening_coverage",
+      "issue": "Legacy ScreeningCoverage.tsx renders a single aggregate progress bar from per-district rows (it sums them client-side). New spec is a per-district bar chart preserving the row schema {dcode, name_th, population, screened, coverage_pct}. axes.x = name_th matches MV column directly."
+    },
+    {
+      "spec_id": "repeat_screening",
+      "issue": "Legacy RepeatScreening.tsx expects a flat object {once, twice, three_plus} but the backend now returns rows {visit_count, patient_count}. Spec follows the MV-correct schema; renderer must apply bucket_overflow=3 to collapse 3..N visit counts into a single 3+ bucket."
+    },
+    {
+      "spec_id": "age_pyramid",
+      "issue": "Legacy AgeSexPyramid.tsx pivots {age_group, male_count, female_count} client-side; the handler in epidemiology.py already returns this pre-pivoted shape. Spec assumes the canonical (long) schema {age_group, sex, count} from MV summary_disease_age_sex — the repository method must un-pivot or output long-format."
+    },
+    {
+      "spec_id": "disease_lab_crosstab",
+      "issue": "Legacy component reads summary_lab_disease_cross with WIDE columns (avg_fbs_dm_positive, n_fbs_dm_positive, …). MV mv_lab_distribution provides LONG schema (district_code, source_code, lab_marker, value_bin, n). Spec uses the long schema; the repository.lab_distribution() method must join lab bins to per-disease cohorts. A new MV may be needed or the migration agent must port the WIDE pivot into the long shape."
+    },
+    {
+      "spec_id": "risk_factor_profile",
+      "issue": "Legacy RiskFactorProfile.tsx renders a DONUT (pie chart) of risk factors, not a bar chart as ADR-01 specifies. Spec is bar with axes {factor_name, percentage}, but current handler returns per-district rows with pct_smoking/pct_no_exercise — the repository must un-pivot into rows {factor_name, percentage} (city-wide aggregate) before rendering."
+    }
+  ]
+}

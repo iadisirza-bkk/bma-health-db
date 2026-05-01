@@ -1,0 +1,40 @@
+# =============================================================================
+# Chart spec: age_pyramid
+# -----------------------------------------------------------------------------
+# Population pyramid (horizontal bars: male negative, female positive) over
+# age bands of screened patients. Source: summary_disease_age_sex.
+# Front-end legacy component: src/components/sidebar/AgeSexPyramid.tsx
+# Backend handler being replaced: GET /api/v2/epidemiology/age-pyramid
+# =============================================================================
+spec_id: age_pyramid
+kind: pyramid
+title_th: "ปิรามิดประชากรที่คัดกรอง (อายุ × เพศ)"
+title_en: "Age × Sex Pyramid of Screened Population"
+description_th: "การกระจายของผู้คัดกรองตามช่วงอายุและเพศ — แท่งซ้าย = ชาย, แท่งขวา = หญิง"
+query_id: age_pyramid
+query_params: {}
+accepts:
+  - { name: district, kind: district, required: false }
+  - { name: zone,     kind: zone,     required: false }
+axes:
+  x: age_band
+  y: persons
+  series: sex_code
+count_field: persons
+color_palette:
+  - "#00744B"   # bma.green.DEFAULT — male
+  - "#C9A94E"   # bma.gold.DEFAULT — female
+k_anon_threshold: 5
+units:
+  x: "คน"
+extra:
+  show_legend: true
+  show_data_labels: false
+  # sex_code values come from the MV: '10' = male, '20' = female (per
+  # bma_med factsheet). Renderer maps codes → labels for display and
+  # negates one series so it draws to the left of the axis.
+  series_labels:
+    "10": "ชาย"
+    "20": "หญิง"
+  series_order: ["10", "20"]
+  invert_x_for: "10"   # render males as negative values for mirror layout

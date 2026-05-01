@@ -87,6 +87,11 @@ try:
     _new_routers.append(admin_api_router)
 except ImportError:
     pass
+try:
+    from routers.charts import router as charts_router
+    _new_routers.append(charts_router)
+except ImportError:
+    pass
 
 # --------------------------------------------------------------------------- #
 # Audit logging

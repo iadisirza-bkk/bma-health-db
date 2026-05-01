@@ -1,0 +1,36 @@
+# =============================================================================
+# Chart spec: risk_factor_profile
+# -----------------------------------------------------------------------------
+# NCD risk factor prevalence (smoking, no-exercise, alcohol) — citywide or
+# filtered by district / zone. Source: summary_district_risk_factors via
+# MVRepository.risk_factor_profile().
+# Front-end legacy component: src/components/sidebar/RiskFactorProfile.tsx
+# Backend handler being replaced: GET /api/v2/promotion/risk-factor-profile
+# =============================================================================
+spec_id: risk_factor_profile
+kind: bar
+title_th: "ปัจจัยเสี่ยง NCD"
+title_en: "NCD Risk Factor Profile"
+description_th: "ร้อยละของผู้คัดกรองที่มีพฤติกรรมเสี่ยง (สูบบุหรี่, ไม่ออกกำลังกาย, ดื่มสุรา) จำแนกตามเขต/โซน"
+query_id: risk_factor_profile
+query_params: {}
+accepts:
+  - { name: district, kind: district, required: false }
+  - { name: zone,     kind: zone,     required: false }
+axes:
+  x: factor_label_th
+  y: percentage
+count_field: persons
+color_palette:
+  - "#00744B"   # bma.green.DEFAULT (primary)
+  - "#009960"   # bma.green.500
+  - "#26a66d"   # bma.green.400
+  - "#4db686"   # bma.green.300
+  - "#80cba9"   # bma.green.200
+k_anon_threshold: 5
+units:
+  y: "%"
+extra:
+  show_legend: false
+  show_data_labels: true
+  sort: "desc_by_y"

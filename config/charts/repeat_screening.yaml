@@ -1,0 +1,39 @@
+# =============================================================================
+# Chart spec: repeat_screening
+# -----------------------------------------------------------------------------
+# Distribution of patients by visit count — how many got screened 1, 2, 3+ times.
+# Source: mv_visit_resolved aggregated to (visit_count, patient_count).
+# Front-end legacy component: src/components/sidebar/RepeatScreening.tsx
+# Backend handler being replaced: GET /api/v2/disease-control/repeat-screening
+# Note: the backend handler returns row schema {visit_count, patient_count};
+# the legacy frontend reshapes into {once, twice, three_plus} buckets — the new
+# chart preserves the granular schema and lets the renderer bucket if needed.
+# =============================================================================
+spec_id: repeat_screening
+kind: bar
+title_th: "การคัดกรองซ้ำ (จำนวนครั้ง)"
+title_en: "Repeat Screening Visit Frequency"
+description_th: "จำนวนผู้ป่วยจำแนกตามจำนวนครั้งที่ได้รับการคัดกรอง — ใช้ดูความต่อเนื่องของการบริการ"
+query_id: repeat_screening
+query_params: {}
+accepts:
+  - { name: district, kind: district, required: false }
+axes:
+  x: bucket
+  y: persons
+count_field: persons
+color_palette:
+  - "#00744B"   # bma.green.DEFAULT — 1 visit
+  - "#009960"   # bma.green.500    — 2 visits
+  - "#26a66d"   # bma.green.400    — 3+ visits
+  - "#4db686"   # bma.green.300
+  - "#80cba9"   # bma.green.200
+k_anon_threshold: 5
+units:
+  x: "ครั้ง"
+  y: "คน"
+extra:
+  show_legend: false
+  show_data_labels: true
+  x_axis_type: "category"
+  bucket_overflow: 3   # collapse visit_count >= 3 into single "3+" bucket

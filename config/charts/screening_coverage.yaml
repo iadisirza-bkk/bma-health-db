@@ -1,0 +1,46 @@
+# =============================================================================
+# Chart spec: screening_coverage
+# -----------------------------------------------------------------------------
+# Per-district screening coverage rate (screened / population × 100).
+# Source: ref_districts JOIN summary_district_disease.
+# Front-end legacy component: src/components/sidebar/ScreeningCoverage.tsx
+# Backend handler being replaced: GET /api/v2/disease-control/screening-coverage
+# Note: legacy returns a single aggregate; the new chart is a per-district bar.
+# =============================================================================
+spec_id: screening_coverage
+kind: bar
+title_th: "อัตราการคัดกรองรายเขต"
+title_en: "Screening Coverage by District"
+description_th: "ร้อยละของประชากรที่ได้รับการคัดกรอง จำแนกรายเขต (50 เขตของ กทม.)"
+query_id: screening_coverage
+query_params: {}
+accepts:
+  - { name: zone, kind: zone, required: false }
+axes:
+  x: district_name
+  y: pct_coverage
+count_field: total_screened
+color_palette:
+  - "#00442C"   # bma.green.800 — darkest (high coverage)
+  - "#005C3B"   # bma.green.700
+  - "#00744B"   # bma.green.DEFAULT
+  - "#009960"   # bma.green.500
+  - "#26a66d"   # bma.green.400
+  - "#4db686"   # bma.green.300
+  - "#80cba9"   # bma.green.200
+  - "#b3e0cc"   # bma.green.100
+  - "#e6f5ef"   # bma.green.50  — lightest (low coverage)
+k_anon_threshold: 5
+units:
+  y: "%"
+extra:
+  show_legend: false
+  show_data_labels: true
+  sort: "desc_by_y"
+  reference_lines:
+    - { value: 50, label: "ต้องเร่ง", color: "#f59e0b" }
+    - { value: 80, label: "ครอบคลุมดี", color: "#22c55e" }
+  color_by_value:
+    - { lt: 50,  color: "#ef4444" }   # error.500
+    - { lt: 80,  color: "#f59e0b" }   # warning.500
+    - { gte: 80, color: "#00744B" }   # bma.green.DEFAULT

@@ -1,0 +1,53 @@
+# =============================================================================
+# Chart spec: behavior_disease
+# -----------------------------------------------------------------------------
+# Distribution of one behaviour level (e.g. smoking 0/1, alcohol 0/1/2,
+# exercise 1/2/3) across the screened population. x = behaviour value,
+# y = persons. Stacked by source so we can see app1 vs app2 vs portal.
+# Backend handler being replaced: GET /api/v2/promotion/behavior-disease-correlation
+# Front-end legacy component: src/components/sidebar/BehaviorDisease.tsx
+# Note: the legacy chart cross-tabbed behaviour × disease, which would
+# require a new MV joining mv_lifestyle to NCD diagnostic flags. For S2
+# we ship the simpler behaviour-distribution view; the cross-tab variant
+# is logged in manifest.json as a follow-up MV ticket.
+# =============================================================================
+spec_id: behavior_disease
+kind: stacked_bar
+title_th: "การกระจายพฤติกรรมเสี่ยง"
+title_en: "Risk Behavior Distribution"
+description_th: "จำนวนผู้คัดกรองจำแนกตามระดับพฤติกรรม (สูบบุหรี่, สุรา, ออกกำลังกาย) — แยกตามแหล่งที่มาของข้อมูล"
+query_id: behavior_disease_correlation
+query_params:
+  behavior: smoke
+accepts:
+  # `behavior` is not strictly required from the caller because
+  # query_params already provides a default. Pass `?behavior=alcohol` to
+  # switch series.
+  - { name: behavior, kind: enum,     required: false, values: [smoke, alcohol, exercise] }
+  - { name: district, kind: district, required: false }
+axes:
+  x: value
+  y: persons
+  series: source_code
+count_field: persons
+color_palette:
+  - "#00744B"   # bma.green.DEFAULT — primary disease
+  - "#C9A94E"   # bma.gold.DEFAULT — secondary
+  - "#0071ce"   # ci.blue
+  - "#ec3faa"   # ci.pink
+  - "#67a33b"   # ci.leaf
+  - "#ffb449"   # ci.orange
+k_anon_threshold: 5
+units:
+  y: "คน"
+extra:
+  show_legend: true
+  show_data_labels: false
+  stack_id: "behavior"
+  # Display labels per behaviour. Renderer keys on the active filter to
+  # pick the right map. Numeric strings because the MV stores `value` as
+  # text.
+  x_labels:
+    smoke:    { "0": "ไม่สูบ",   "1": "สูบ" }
+    alcohol:  { "0": "ไม่ดื่ม",  "1": "ดื่ม", "2": "เลิกแล้ว" }
+    exercise: { "1": ">=3 วัน/สัปดาห์", "2": "<3 วัน/สัปดาห์", "3": "ไม่ออกกำลังกาย" }
