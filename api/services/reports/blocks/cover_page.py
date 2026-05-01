@@ -4,16 +4,25 @@ Per ADR-03 §3 this is the canonical "first page" block: title (from the
 descriptor), optional subtitle (from params), generation date (from
 params or ``ctx.requested_at``), optional logo. Used by every report
 flavor — both whitepaper-style PDFs and HTML dashboards.
+
+Two modes:
+    * ``mode="title"`` (default) — the front cover. Behaviour preserved
+      byte-for-byte from the original implementation.
+    * ``mode="closing"`` — a back-cover finale ("ขอบคุณ") used by the
+      whitepaper template's last page.
 """
 from __future__ import annotations
 
-from typing import Any, ClassVar, Dict, Optional
+from typing import Any, ClassVar, Dict, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
 from services.latex_utils import latex_escape
 from services.reports.blocks.base import ContentBlock
 from services.reports.spec import RenderContext
+
+
+CoverMode = Literal["title", "closing"]
 
 
 class _CoverPageParams(BaseModel):
@@ -25,6 +34,7 @@ class _CoverPageParams(BaseModel):
     subtitle_en: Optional[str] = None
     generation_date: Optional[str] = None
     logo_path: Optional[str] = None
+    mode: CoverMode = "title"
 
 
 def _html_escape(text: str) -> str:
@@ -36,7 +46,10 @@ def _html_escape(text: str) -> str:
 
 
 class CoverPageBlock(ContentBlock):
-    """Title page block — title, subtitle, date, optional logo."""
+    """Title page block — title, subtitle, date, optional logo.
+
+    With ``mode="closing"`` the same block emits a back-cover finale.
+    """
 
     block_id: ClassVar[str] = "cover_page"
     Parameters: ClassVar[type[BaseModel]] = _CoverPageParams
@@ -71,6 +84,7 @@ class CoverPageBlock(ContentBlock):
             "generation_date_str": date_str,
             "logo_path": params.logo_path,
             "lang": ctx.lang,
+            "mode": params.mode,
         }
 
     def render_latex(
@@ -79,6 +93,11 @@ class CoverPageBlock(ContentBlock):
         params: BaseModel,
         ctx: RenderContext,
     ) -> str:
+        if data.get("mode") == "closing":
+            return self._render_latex_closing(data)
+        return self._render_latex_title(data)
+
+    def _render_latex_title(self, data: Dict[str, Any]) -> str:
         # ``\title{...}`` + ``\maketitle`` is the conventional LaTeX cover.
         # We assemble each piece separately so a missing subtitle / logo
         # simply omits its line instead of producing ``\subtitle{}``.
@@ -107,12 +126,33 @@ class CoverPageBlock(ContentBlock):
         parts.append(r"\maketitle")
         return "\n".join(parts) + "\n"
 
+    def _render_latex_closing(self, data: Dict[str, Any]) -> str:
+        # Article-mode finale — a centered "ขอบคุณ" section with optional
+        # subtitle. We use ``\section*`` (un-numbered) so it doesn't
+        # appear in the table of contents and ``\newpage`` to push the
+        # finale onto its own sheet (legacy whitepaper convention).
+        parts: list[str] = [r"\newpage", r"\begin{center}"]
+        parts.append(r"\section*{\Huge ขอบคุณ}")
+        if data.get("subtitle"):
+            parts.append(
+                r"{\large "
+                + latex_escape(str(data["subtitle"]))
+                + r"\par}"
+            )
+        parts.append(r"\end{center}")
+        return "\n".join(parts) + "\n"
+
     def render_html(
         self,
         data: Dict[str, Any],
         params: BaseModel,
         ctx: RenderContext,
     ) -> str:
+        if data.get("mode") == "closing":
+            return self._render_html_closing(data)
+        return self._render_html_title(data)
+
+    def _render_html_title(self, data: Dict[str, Any]) -> str:
         # Build the cover header. Each optional piece (subtitle, logo)
         # is gated separately so the HTML stays clean when omitted.
         pieces: list[str] = []
@@ -132,3 +172,11 @@ class CoverPageBlock(ContentBlock):
         pieces.append(f'<p class="cover-date">{date}</p>')
         body = "".join(pieces)
         return f'<header class="cover">{body}</header>'
+
+    def _render_html_closing(self, data: Dict[str, Any]) -> str:
+        pieces: list[str] = ['<h1>ขอบคุณ</h1>']
+        if data.get("subtitle"):
+            sub = _html_escape(str(data["subtitle"]))
+            pieces.append(f"<p>{sub}</p>")
+        body = "".join(pieces)
+        return f'<section class="cover cover-closing">{body}</section>'

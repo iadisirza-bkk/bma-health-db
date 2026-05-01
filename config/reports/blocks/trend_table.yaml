@@ -1,0 +1,5 @@
+block_id: trend_table
+class_path: services.reports.blocks.trend_table:TrendTableBlock
+description_th: "ตาราง Mann-Kendall trends"
+description_en: "Mann-Kendall trend table with directional arrows"
+enabled: true

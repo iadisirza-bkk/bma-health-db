@@ -201,3 +201,117 @@ new method — block code stays SQL-free.
 - Bilingual/side-by-side rendering — defer.
 - Database-backed descriptors (live-edit from admin UI) — same deferral as ADR-01 §"Open
   question deferred to S5".
+
+---
+
+## S6 addendum: container blocks (2026-06-15)
+
+### Why an addendum
+
+S6 needs a side-by-side layout for the whitepaper template (a chart on the left
+plus a paragraph of commentary on the right, repeated several times). The S4
+ADR did not contemplate "a block that contains other blocks" — every block in
+§3 is a leaf that emits markup directly. Instead of reopening the whole
+descriptor surface, we extend it narrowly: ONE container block, ONE level of
+nesting, and a single new public method on the orchestrator.
+
+### `two_column_layout` block
+
+A new ContentBlock with `block_id = "two_column_layout"`. Its `Parameters`
+model carries two LISTS OF `SectionSpec`s (one per column):
+
+```python
+class TwoColumnLayoutParams(BaseModel):
+    left: list[SectionSpec]
+    right: list[SectionSpec]
+    ratio: tuple[float, float] = (0.5, 0.5)   # widths summing to 1.0
+    gap_em: float = 1.0                       # inter-column gap
+```
+
+Children ride inside `params.left` / `params.right` because
+`SectionSpec.params: dict[str, Any]` is already free-form. No descriptor
+schema change is needed — a YAML author writes a `two_column_layout` section
+exactly like any other section, just with `params.left` / `params.right`
+populated by nested SectionSpec mappings.
+
+### Composition through `params`, not a new descriptor field
+
+We deliberately did NOT add a `children: list[SectionSpec]` field to
+`SectionSpec`. Reasons:
+
+1. It would force every block's parameter validation to ignore (or
+   special-case) a field they don't use.
+2. The orchestrator would have to special-case "container" sections in
+   `_render_section`, breaking the "all blocks look alike" invariant from §3.
+3. `SectionSpec.params` is already typed as `dict[str, Any]` — no schema
+   churn is needed to ship this.
+
+The trade-off is that nested-section YAML has one extra indentation level.
+That's acceptable for a feature used in only a handful of places.
+
+### `ctx.extra["report_service"]` injection contract
+
+A container block must re-enter the orchestrator to resolve its children.
+`ReportService.render` now sets `ctx.extra["report_service"] = self` before
+the first dispatch. `two_column_layout.collect()` retrieves the handle and
+calls `report_service._render_sections(child_specs, ctx)` for each column.
+Non-container blocks ignore the entry; the contract is "if you need to recurse,
+look here".
+
+If `ctx.extra["report_service"]` is missing (a one-off "render block in
+isolation" test), `two_column_layout.collect()` raises `RuntimeError` with a
+clear "ReportService normally injects this automatically" message rather than
+crashing with `AttributeError` later.
+
+### `_render_sections` is now public
+
+What was `ReportService._build_sections(desc, ctx)` is renamed to
+`ReportService._render_sections(sections, ctx)` — same logic, but it now takes
+an explicit list of `SectionSpec`s instead of pulling them off the descriptor.
+The old name remains as a one-line alias so any external test that called
+`_build_sections` keeps working.
+
+The leading underscore is preserved (it's a back-channel, not a stable public
+API surface) but the docstring documents it as the recursion entry point for
+container blocks.
+
+### Depth=1 cap
+
+A `two_column_layout` whose `params.left` or `params.right` contains another
+`two_column_layout` is rejected. This is enforced in TWO places:
+
+1. **Block-level (friendly error):** `TwoColumnLayoutBlock.collect()` scans
+   its own params for child sections with `block == "two_column_layout"` and
+   raises `ValueError("two_column_layout cannot nest inside itself (S6
+   depth=1 cap)")`.
+2. **Orchestrator-level (backstop):** `RenderContext` gains
+   `recursion_depth: int = 0`. Each call into `_render_sections` from a
+   container increments it; depth > `ReportService.MAX_RECURSION_DEPTH` (==1)
+   raises `ValueError`. This protects against a future container block that
+   forgets the block-level check.
+
+### Why depth=1 and not arbitrary recursion
+
+Arbitrary nesting is a footgun in declarative configs — a typo can produce a
+descriptor that recurses indefinitely, each level multiplying the data-collection
+work and producing markup nobody intended. Depth=1 is enough for the current
+whitepaper template (one layout per section, leaf blocks inside). If a real use
+case appears later (e.g. a 2x2 grid that genuinely needs `two_column_layout`s
+inside `two_column_layout`s), we revisit — at that point the right answer is
+probably a separate `grid_layout` block, not relaxing this cap.
+
+### `visible_in` still applies to nested children
+
+The same `section.visible_in` filter used at the top level fires for nested
+sections too — `_render_sections` is the single gate. A child marked
+`visible_in=["html"]` is skipped in the LaTeX render path exactly as it
+would be at the top level.
+
+### Renderers
+
+* **LaTeX:** two `\begin{minipage}[t]{<ratio>\textwidth} … \end{minipage}`
+  chunks separated by `\hspace{<gap_em>em}`.
+* **HTML:** a `<div class="two-column">` with inline grid styles
+  (`display: grid; grid-template-columns: <left%> <right%>; gap: <gap>em;`).
+  Inline styles keep the artefact self-contained.
+* **PPTX:** not implemented — the only S6 use case is the whitepaper.

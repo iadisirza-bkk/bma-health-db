@@ -1,0 +1,5 @@
+block_id: two_column_layout
+class_path: services.reports.blocks.two_column_layout:TwoColumnLayoutBlock
+description_th: "เลย์เอาต์สองคอลัมน์ (container block) — รับรายการ SectionSpec สองชุด (ซ้าย/ขวา) แล้ว render ข้างกัน เนสต์ไม่เกิน 1 ชั้น"
+description_en: "Two-column layout container — accepts two lists of SectionSpec (left/right) and renders them side-by-side. Depth=1 cap (S6 addendum to ADR-03)."
+enabled: true

@@ -1,0 +1,5 @@
+block_id: crosstab
+class_path: services.reports.blocks.crosstab:CrosstabBlock
+description_th: "ตารางไขว้ปัจจัย × โรค (ขนาดคอลัมน์ผันแปร)"
+description_en: "Factor × disease cross-tab — dynamic column count (whitepaper §3 parity)"
+enabled: true

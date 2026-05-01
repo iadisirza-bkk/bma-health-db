@@ -1,0 +1,5 @@
+block_id: callout
+class_path: services.reports.blocks.callout:CalloutBlock
+description_th: "กล่องข้อความเน้น (info/warn/example/note)"
+description_en: "Highlighted callout box (info/warn/example/note)"
+enabled: true

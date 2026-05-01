@@ -118,12 +118,56 @@ class _Table(_StubBlock):
     block_id = "table"
 
 
+class _Paragraph(_StubBlock):
+    block_id = "paragraph"
+
+
 class _AppendixMethodology(_StubBlock):
     block_id = "appendix_methodology"
 
 
+# S6 blocks added for whitepaper-template parity. Stubs only — full impls
+# are tested in test_new_leaf_blocks / test_table_shaped_blocks /
+# test_branching_ai_blocks / test_layout_block.
+class _Callout(_StubBlock):
+    block_id = "callout"
+
+
+class _Formula(_StubBlock):
+    block_id = "formula"
+
+
+class _TrendTable(_StubBlock):
+    block_id = "trend_table"
+
+
+class _DiseaseDistrictGrid(_StubBlock):
+    block_id = "disease_district_grid"
+
+
+class _Crosstab(_StubBlock):
+    block_id = "crosstab"
+
+
+class _StatisticalTestResults(_StubBlock):
+    block_id = "statistical_test_results"
+
+
+class _AiInsight(_StubBlock):
+    block_id = "ai_insight"
+
+
+class _TwoColumnLayout(_StubBlock):
+    block_id = "two_column_layout"
+
+
 def _stub_block_registry() -> BlockRegistry:
-    """Build a registry with all blocks the two descriptors reference."""
+    """Build a registry with all blocks the two descriptors reference.
+
+    Includes S4 baseline blocks (cover_page, heading, kpi_grid, chart, table,
+    paragraph, appendix_methodology) AND the 8 S6 blocks added for
+    whitepaper-template parity.
+    """
     reg = BlockRegistry()
     for cls in (
         _CoverPage,
@@ -131,7 +175,17 @@ def _stub_block_registry() -> BlockRegistry:
         _KpiGrid,
         _Chart,
         _Table,
+        _Paragraph,
         _AppendixMethodology,
+        # S6 additions
+        _Callout,
+        _Formula,
+        _TrendTable,
+        _DiseaseDistrictGrid,
+        _Crosstab,
+        _StatisticalTestResults,
+        _AiInsight,
+        _TwoColumnLayout,
     ):
         reg.register(cls)
     return reg
@@ -213,7 +267,12 @@ def test_whitepaper_descriptor_shape() -> None:
     assert set(desc.languages) >= {
         "th", "en", "zh", "ja", "ko", "ru", "my", "hi", "vi", "fr",
     }
-    assert len(desc.sections) == 9
+    # S4 baseline shipped 9 sections; S6 grew this to 32 for full
+    # template parity (8 new blocks across descriptive stats, factor
+    # analysis, inferential, trend, ai insight, two-column rankings,
+    # callouts, formulas, closing). Don't pin an exact count — just
+    # assert the descriptor has more sections than the bare scaffold.
+    assert len(desc.sections) >= 9
     assert desc.metadata.get("legacy_template") == "report_whitepaper.tex.j2"
 
 

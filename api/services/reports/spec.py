@@ -128,6 +128,13 @@ class RenderContext:
     is typed as ``Any`` here because ``ReportDataCollector`` is introduced
     in S4.2; once that lands, callers can rely on the ``TYPE_CHECKING``
     import for static analysis without dragging the symbol into runtime.
+
+    ``recursion_depth`` tracks how deeply the orchestrator has descended
+    into nested ``SectionSpec`` trees (S6 addendum to ADR-03). The
+    top-level call is depth 0; container blocks like ``two_column_layout``
+    re-enter the orchestrator at depth 1. Depth > 1 is rejected — the
+    layout primitive is not reentrant. See ADR-03 "S6 addendum: container
+    blocks" for the rationale.
     """
 
     data_collector: Any
@@ -136,6 +143,7 @@ class RenderContext:
     descriptor: ReportDescriptor
     requested_at: datetime
     extra: Dict[str, Any] = field(default_factory=dict)
+    recursion_depth: int = 0
 
 
 @dataclass

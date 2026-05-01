@@ -1,17 +1,27 @@
 # =============================================================================
-# Report descriptor: whitepaper
+# Report descriptor: whitepaper (S6 — full template parity)
 # -----------------------------------------------------------------------------
 # Replaces the legacy XeLaTeX template `templates/latex/report_whitepaper.tex.j2`
-# and the monolithic flow in `report_generator.ReportGenerator.generate(lang,
-# 'whitepaper')`. Per ADR-03 §1, every section here is a reference to a
-# registered ContentBlock — adding/removing/reordering content is a YAML edit,
-# not a code change.
+# (561 LOC) and the monolithic flow in
+# `report_generator.ReportGenerator.generate(lang, 'whitepaper')`. Every section
+# is a reference to a registered ContentBlock — adding / removing / reordering
+# is a YAML edit, not a code change. Per ADR-03 §1.
+#
+# S6 added 8 new blocks for visual parity with the legacy template:
+#   * disease_district_grid — Section 2 (per-disease longtable loop)
+#   * crosstab              — Section 3 (factor × disease cross-tabulation)
+#   * statistical_test_results — Section 4 (inferential stats, branching)
+#   * trend_table           — Section 6 (Mann-Kendall up/down/stable arrows)
+#   * two_column_layout     — Section 9 (side-by-side risk rankings)
+#   * formula               — Appendix (statistical formulas)
+#   * callout               — recommendations / warnings
+#   * cover_page (mode=closing) — closing thank-you slide
 #
 # Multilingual: each declared language MUST have matching i18n strings supplied
 # at render time by the orchestrator (heading text_th + auto-fallback to
 # title_en / title_th for other locales).
 #
-# Cache: `data_hash`-keyed — the orchestrator reuses the artefact whenever the
+# Cache: data_hash-keyed — the orchestrator reuses the artefact whenever the
 # upstream collector reports an unchanged data hash for (report_id, fmt, lang).
 # =============================================================================
 report_id: whitepaper
@@ -21,12 +31,21 @@ formats: [latex, html]
 languages: [th, en, zh, ja, ko, ru, my, hi, vi, fr]
 audience: [public, clinician]
 sections:
+  # -------------------------------------------------------------------------
+  # Cover
+  # -------------------------------------------------------------------------
   - id: cover
     block: cover_page
-    params: { logo_path: "templates/latex/assets/bma_logo.png" }
+    params:
+      mode: title
+      logo_path: "templates/latex/assets/bma_logo.png"
+
+  # -------------------------------------------------------------------------
+  # Section 1 — Executive summary (KPIs)
+  # -------------------------------------------------------------------------
   - id: exec_summary_h
     block: heading
-    params: { text_th: "บทสรุปผู้บริหาร", level: 1 }
+    params: { text_th: "1. บทสรุปผู้บริหาร", level: 1 }
   - id: exec_kpis
     block: kpi_grid
     params:
@@ -34,15 +53,77 @@ sections:
         - { label_th: "ผู้คัดกรองทั้งหมด", source_path: "summary.total_screened", format: int }
         - { label_th: "เขตที่ครอบคลุม", source_path: "summary.districts_covered", format: int }
         - { label_th: "ผู้พบโรค NCD", source_path: "summary.found_ncd", format: int }
-  - id: risk_section_h
+  - id: exec_callout
+    block: callout
+    params:
+      kind: info
+      title_th: "ขอบเขตของรายงาน"
+      text_th: "รายงานนี้ครอบคลุมข้อมูลคัดกรองสุขภาพระดับประชากรของกรุงเทพมหานคร — ข้อมูลรวม (aggregate) เท่านั้น มี k-anonymity ≥ 5 ทุกชั้น"
+
+  # -------------------------------------------------------------------------
+  # Section 2 — Descriptive statistics: per-disease district breakdown
+  # (replaces the legacy template's `for disease in data.diseases` longtable
+  # loop — disease_district_grid block iterates 8 diseases internally)
+  # -------------------------------------------------------------------------
+  - id: descriptive_h
     block: heading
-    params: { text_th: "ปัจจัยเสี่ยง NCD", level: 1 }
-  - id: risk_chart
+    params: { text_th: "2. สถิติเชิงพรรณนา — รายเขต × รายโรค", level: 1 }
+  - id: disease_district_breakdown
+    block: disease_district_grid
+    params:
+      diseases: [dm, hpt, cvd, stroke, obesity, dyslipidemia]
+      metrics: [risk_count, risk_pct, found_count, found_pct]
+      max_districts_per_disease: 50
+
+  # -------------------------------------------------------------------------
+  # Section 3 — Risk factor analysis: factor × disease cross-tab
+  # (replaces the legacy template's per-factor tabular with dynamic columns)
+  # -------------------------------------------------------------------------
+  - id: factor_h
+    block: heading
+    params: { text_th: "3. การวิเคราะห์ปัจจัยเสี่ยง", level: 1 }
+  - id: factor_chart
     block: chart
-    params: { spec_id: risk_factor_profile, caption_th: "ร้อยละผู้คัดกรองที่มีปัจจัยเสี่ยง" }
+    params:
+      spec_id: risk_factor_profile
+      caption_th: "ร้อยละผู้คัดกรองที่มีปัจจัยเสี่ยงรายโรค"
+  - id: factor_crosstab
+    block: crosstab
+    params:
+      source_path: factor_disease_crosstab
+      row_field: factor
+      col_field: disease
+      value_field: count
+      row_label_th: "ปัจจัยเสี่ยง"
+      col_label_th: "โรค"
+      cell_format: int
+      include_total: true
+
+  # -------------------------------------------------------------------------
+  # Section 4 — Inferential statistics (branches per test type)
+  # (replaces the legacy template's `{% if test.test_type == 'odds_ratio' %}`
+  # branching — statistical_test_results block branches internally)
+  # -------------------------------------------------------------------------
+  - id: inferential_h
+    block: heading
+    params: { text_th: "4. สถิติเชิงอนุมาน", level: 1 }
+  - id: inferential_intro
+    block: paragraph
+    params:
+      text_th: "ผลการวิเคราะห์เชิงอนุมาน — ค่า p < 0.05 แสดงเป็นตัวหนา"
+  - id: inferential_results
+    block: statistical_test_results
+    params:
+      source_path: statistical_tests
+      include_types: [odds_ratio, logistic_regression, correlation]
+      sig_threshold: 0.05
+
+  # -------------------------------------------------------------------------
+  # Section 5 — Coverage analysis
+  # -------------------------------------------------------------------------
   - id: coverage_h
     block: heading
-    params: { text_th: "อัตราการคัดกรองรายเขต", level: 1 }
+    params: { text_th: "5. ความครอบคลุมการคัดกรอง", level: 1 }
   - id: coverage_chart
     block: chart
     params: { spec_id: screening_coverage }
@@ -54,9 +135,134 @@ sections:
         - { key: district_name, header_th: "เขต", format: str }
         - { key: total_screened, header_th: "ผู้คัดกรอง", format: int }
         - { key: pct_coverage, header_th: "อัตรา %", format: pct2 }
+
+  # -------------------------------------------------------------------------
+  # Section 6 — Trend analysis (Mann-Kendall arrows)
+  # -------------------------------------------------------------------------
+  - id: trend_h
+    block: heading
+    params: { text_th: "6. แนวโน้มตามช่วงเวลา (Mann-Kendall)", level: 1 }
+  - id: trend_summary
+    block: trend_table
+    params:
+      source_path: trends
+      max_rows: 30
+
+  # -------------------------------------------------------------------------
+  # Section 7 — Demographics (age × sex pyramid)
+  # -------------------------------------------------------------------------
+  - id: demographics_h
+    block: heading
+    params: { text_th: "7. ปิรามิดประชากร (อายุ × เพศ)", level: 1 }
+  - id: pyramid
+    block: chart
+    params: { spec_id: age_pyramid }
+
+  # -------------------------------------------------------------------------
+  # Section 8 — AI-generated insight
+  # -------------------------------------------------------------------------
+  - id: insight_h
+    block: heading
+    params: { text_th: "8. ข้อสังเกตจาก AI", level: 1 }
+  - id: ai_summary
+    block: ai_insight
+    params:
+      prompt_template_th: |
+        จากข้อมูลคัดกรองของกรุงเทพมหานคร: ผู้คัดกรองทั้งหมด {total_screened} คน,
+        พบโรค NCD {found_ncd} คน. สรุปประเด็นสำคัญ 3 ข้อในมุมมองสาธารณสุข
+        เป็นภาษาไทย ความยาวไม่เกิน 200 คำ.
+      data_keys: [total_screened, found_ncd]
+      max_tokens: 500
+      fallback_text_th: "ข้อมูลเชิงลึกจาก AI ไม่พร้อมใช้งานในขณะนี้ กรุณาตรวจสอบสถานะของ LMStudio"
+
+  # -------------------------------------------------------------------------
+  # Section 9 — Risk rankings (two-column: top 10 highest vs lowest)
+  # (replaces the legacy template's side-by-side `\begin{minipage}` layout)
+  # -------------------------------------------------------------------------
+  - id: rankings_h
+    block: heading
+    params: { text_th: "9. การจัดอันดับเขต (สูงสุด vs ต่ำสุด)", level: 1 }
+  - id: rankings_two_column
+    block: two_column_layout
+    params:
+      ratio: [0.5, 0.5]
+      gap_em: 1.5
+      left:
+        - id: rankings_high
+          block: heading
+          params: { text_th: "เขตที่มีอัตราพบโรคสูงสุด (top 10)", level: 2 }
+        - id: rankings_high_chart
+          block: chart
+          params:
+            spec_id: screening_coverage
+            caption_th: "เขตอัตราคัดกรองสูงสุด"
+      right:
+        - id: rankings_low
+          block: heading
+          params: { text_th: "เขตที่มีอัตราพบโรคต่ำสุด (bottom 10)", level: 2 }
+        - id: rankings_low_chart
+          block: chart
+          params:
+            spec_id: screening_coverage
+            caption_th: "เขตอัตราคัดกรองต่ำสุด"
+
+  # -------------------------------------------------------------------------
+  # Recommendation callouts
+  # -------------------------------------------------------------------------
+  - id: rec_main
+    block: callout
+    params:
+      kind: warn
+      title_th: "ข้อเสนอแนะหลัก"
+      text_th: "เขตที่มีอัตราคัดกรองต่ำกว่า 50% ควรเร่งกระจายบริการคัดกรองเชิงรุก"
+  - id: rec_secondary
+    block: callout
+    params:
+      kind: example
+      title_th: "ตัวอย่างแนวทางที่ใช้ได้ผล"
+      text_th: "การส่งทีมสุขภาพชุมชนเข้าคัดกรองในชุมชนหนาแน่นช่วยเพิ่มความครอบคลุมได้ ~15% ภายใน 3 เดือน"
+
+  # -------------------------------------------------------------------------
+  # Appendix — methodology + statistical formulas
+  # -------------------------------------------------------------------------
+  - id: appendix_h
+    block: heading
+    params: { text_th: "ภาคผนวก", level: 1 }
   - id: methodology
     block: appendix_methodology
     params: {}
+  - id: formula_or_h
+    block: heading
+    params: { text_th: "ภาคผนวก ก — สมการที่ใช้", level: 2 }
+  - id: formula_or
+    block: formula
+    params:
+      latex: "OR = \\frac{a/b}{c/d}"
+      caption_th: "สูตร Odds Ratio (OR)"
+      numbered: true
+  - id: formula_logistic
+    block: formula
+    params:
+      latex: "\\log\\left(\\frac{p}{1-p}\\right) = \\beta_0 + \\beta_1 X_1 + \\cdots + \\beta_n X_n"
+      caption_th: "สูตร Logistic Regression"
+      numbered: true
+  - id: formula_mannkendall
+    block: formula
+    params:
+      latex: "Z = \\frac{S - \\text{sgn}(S)}{\\sqrt{\\text{Var}(S)}}"
+      caption_th: "สูตร Mann-Kendall Trend Test"
+      numbered: true
+
+  # -------------------------------------------------------------------------
+  # Closing
+  # -------------------------------------------------------------------------
+  - id: closing
+    block: cover_page
+    params:
+      mode: closing
+      subtitle_th: "ขอบคุณ"
+      logo_path: "templates/latex/assets/bma_logo.png"
+
 style:
   font_family: "Sarabun"
   primary_color: "#00744B"
@@ -67,3 +273,13 @@ cache:
 metadata:
   legacy_template: "report_whitepaper.tex.j2"
   ports_from: "report_generator.ReportGenerator.generate(lang, 'whitepaper')"
+  s6_parity: true
+  s6_blocks_used:
+    - disease_district_grid
+    - crosstab
+    - statistical_test_results
+    - trend_table
+    - two_column_layout
+    - formula
+    - callout
+    - cover_page (mode=closing)

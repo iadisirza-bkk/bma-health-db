@@ -1,0 +1,5 @@
+block_id: disease_district_grid
+class_path: services.reports.blocks.disease_district_grid:DiseaseDistrictGridBlock
+description_th: "ตารางรายเขตของแต่ละโรค"
+description_en: "Per-disease district breakdown — one longtable per disease (whitepaper §2 parity)"
+enabled: true

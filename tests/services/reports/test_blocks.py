@@ -453,27 +453,35 @@ async def test_appendix_methodology_mentions_required_topics() -> None:
 
 # ---------------------------------------------------------------------------
 # Registry sanity — the package import side-effect chain must end with
-# all 7 blocks discoverable from the singleton (this is the smoke test
-# the task explicitly calls out).
+# the S4 baseline blocks discoverable from the singleton. We check a
+# *subset* (set issubset) rather than equality so this test stays green
+# as new blocks land in S6+ without anyone having to babysit it.
 # ---------------------------------------------------------------------------
 
 
-def test_block_registry_lists_all_seven_blocks() -> None:
+# Blocks that shipped in S4 (the original ADR-03 §3 list). New blocks may
+# be added in subsequent sprints — that's fine; the registry MUST always
+# contain at least these.
+S4_BASELINE_BLOCKS = frozenset({
+    "appendix_methodology",
+    "chart",
+    "cover_page",
+    "heading",
+    "kpi_grid",
+    "paragraph",
+    "table",
+})
+
+
+def test_block_registry_lists_baseline_blocks() -> None:
     # ``reload=True`` defends against test ordering: other tests in
     # the suite may have replaced the singleton with a tmp-dir registry
     # for their own scenarios. Re-discovering from the default path
     # gives us a deterministic check regardless of run order.
     reg = block_registry(reload=True)
-    ids = reg.list_ids()
-    assert ids == sorted(
-        [
-            "appendix_methodology",
-            "chart",
-            "cover_page",
-            "heading",
-            "kpi_grid",
-            "paragraph",
-            "table",
-        ]
-    )
-    assert len(reg) == 7
+    ids = set(reg.list_ids())
+    missing = S4_BASELINE_BLOCKS - ids
+    assert not missing, f"S4 baseline blocks missing from registry: {sorted(missing)}"
+    # Sanity: the registry should be at least the S4 baseline. Don't pin
+    # an exact count — S6 added 8 more, S7+ may add more still.
+    assert len(reg) >= len(S4_BASELINE_BLOCKS)

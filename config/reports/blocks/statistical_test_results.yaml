@@ -1,0 +1,5 @@
+block_id: statistical_test_results
+class_path: services.reports.blocks.statistical_test_results:StatisticalTestResultsBlock
+description_th: "ตารางผลทดสอบทางสถิติเชิงอนุมาน (OR / Logistic / Correlation / Chi² / t-test) แบ่งตามชนิดของ test"
+description_en: "Inferential-statistics results table — branches per test type (odds ratio, logistic regression, correlation, chi-square, t-test). Significant rows are bolded."
+enabled: true

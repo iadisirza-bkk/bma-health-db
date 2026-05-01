@@ -1,5 +1,5 @@
 block_id: cover_page
 class_path: services.reports.blocks.cover_page:CoverPageBlock
-description_th: "หน้าปก: ชื่อเรื่อง, โลโก้, วันที่"
-description_en: "Cover page: title, logo, generation date"
+description_th: "หน้าปก/ปิดท้าย: ชื่อเรื่อง, โลโก้, วันที่ (mode=title|closing)"
+description_en: "Cover or closing page: title, logo, date (mode=title|closing)"
 enabled: true

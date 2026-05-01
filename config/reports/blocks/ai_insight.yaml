@@ -1,0 +1,5 @@
+block_id: ai_insight
+class_path: services.reports.blocks.ai_insight:AiInsightBlock
+description_th: "ย่อหน้าสรุปสั้น ๆ ภาษาไทยที่สังเคราะห์โดย LLM ผ่าน ChatService (ผ่าน ctx.extra['chat_service']) — มี fallback แบบสตริงคงที่"
+description_en: "Short Thai prose paragraph synthesised by the LLM via ChatService (injected through ctx.extra['chat_service']) — falls back to a static string when no chat service is wired."
+enabled: true

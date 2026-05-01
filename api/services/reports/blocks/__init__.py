@@ -29,15 +29,35 @@ from services.reports.blocks.base import (
     ContentBlock,
     block_registry,
 )
+from services.reports.blocks.ai_insight import (
+    AiInsightBlock,
+    AiInsightParams,
+)
 from services.reports.blocks.appendix_methodology import (
     AppendixMethodologyBlock,
 )
+from services.reports.blocks.callout import CalloutBlock
 from services.reports.blocks.chart import ChartBlock
 from services.reports.blocks.cover_page import CoverPageBlock
+from services.reports.blocks.crosstab import CrosstabBlock, CrosstabParams
+from services.reports.blocks.disease_district_grid import (
+    DiseaseDistrictGridBlock,
+    DiseaseDistrictGridParams,
+)
+from services.reports.blocks.formula import FormulaBlock
 from services.reports.blocks.heading import HeadingBlock
 from services.reports.blocks.kpi_grid import KPIGridBlock, KPISpec
 from services.reports.blocks.paragraph import ParagraphBlock
+from services.reports.blocks.statistical_test_results import (
+    StatisticalTestResultsBlock,
+    StatTestParams,
+)
 from services.reports.blocks.table import ColSpec, TableBlock
+from services.reports.blocks.trend_table import TrendTableBlock
+from services.reports.blocks.two_column_layout import (
+    TwoColumnLayoutBlock,
+    TwoColumnLayoutParams,
+)
 
 __all__ = [
     # ABC + registry surface
@@ -53,7 +73,20 @@ __all__ = [
     "ChartBlock",
     "TableBlock",
     "AppendixMethodologyBlock",
+    "CalloutBlock",
+    "FormulaBlock",
+    "TrendTableBlock",
+    "DiseaseDistrictGridBlock",
+    "CrosstabBlock",
+    "TwoColumnLayoutBlock",
+    "StatisticalTestResultsBlock",
+    "AiInsightBlock",
     # Helper Pydantic models exposed for tests / type hints
     "KPISpec",
     "ColSpec",
+    "DiseaseDistrictGridParams",
+    "CrosstabParams",
+    "TwoColumnLayoutParams",
+    "StatTestParams",
+    "AiInsightParams",
 ]

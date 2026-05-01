@@ -1,0 +1,5 @@
+block_id: formula
+class_path: services.reports.blocks.formula:FormulaBlock
+description_th: "สมการคณิตศาสตร์"
+description_en: "A single LaTeX math equation, optionally captioned"
+enabled: true

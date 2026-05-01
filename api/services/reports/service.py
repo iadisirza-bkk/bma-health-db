@@ -292,8 +292,14 @@ class ReportService:
             descriptor=desc,
             requested_at=datetime.now(timezone.utc),
         )
+        # ADR-03 S6 addendum: container blocks (e.g. ``two_column_layout``)
+        # need a back-reference to the orchestrator so they can resolve
+        # their own nested children through the same render pipeline.
+        # Stash it in ``ctx.extra`` so the public ``RenderContext`` shape
+        # stays stable for non-container blocks that don't care.
+        ctx.extra["report_service"] = self
 
-        sections = await self._build_sections(desc, ctx)
+        sections = await self._render_sections(desc.sections, ctx)
 
         # ------------------------------------------------------------
         # Hand off to the renderer. Tectonic / file I/O is sync, so we
@@ -401,9 +407,23 @@ class ReportService:
         tmp.write_text(data_hash, encoding="utf-8")
         tmp.replace(sidecar)
 
-    async def _build_sections(
+    # ------------------------------------------------------------------
+    # Section rendering — public per ADR-03 S6 addendum so container
+    # blocks (e.g. ``two_column_layout``) can re-enter the orchestrator
+    # to resolve their own children. Top-level callers pass
+    # ``desc.sections``; container blocks pass their nested
+    # ``SectionSpec`` lists via ``ctx.extra["report_service"]``.
+    # ------------------------------------------------------------------
+
+    # Hard cap on container-block nesting depth. ADR-03 S6 addendum:
+    # depth=1 is the only level supported — a layout block's children
+    # cannot themselves be layout blocks. Caps live here (not on the
+    # block) so the orchestrator owns the contract.
+    MAX_RECURSION_DEPTH: int = 1
+
+    async def _render_sections(
         self,
-        desc: ReportDescriptor,
+        sections: List[SectionSpec],
         ctx: RenderContext,
     ) -> List[RenderedSection]:
         """Resolve + run each section sequentially.
@@ -418,9 +438,31 @@ class ReportService:
         ``collect()`` is async (chart/table blocks await ChartService /
         MVRepository); ``render_<fmt>()`` is sync but CPU-bound, so it
         runs in a worker thread to keep the event loop free.
+
+        Recursion depth (S6 addendum):
+            Container blocks call this method again to resolve their
+            children. Each re-entry bumps ``ctx.recursion_depth``;
+            depth > ``MAX_RECURSION_DEPTH`` is rejected with a clear
+            ``ValueError`` — the layout primitive is not reentrant.
+            The depth counter is restored after the nested call so
+            sibling container blocks at the same level each see the
+            same starting depth.
         """
+        # Note: the depth bump only fires on RE-ENTRY (when a container
+        # block has already pushed past the top level). The initial
+        # caller — ReportService.render() — passes ctx with depth==0 and
+        # we run that level normally, exactly as the legacy code did.
+        if ctx.recursion_depth > self.MAX_RECURSION_DEPTH:
+            raise ValueError(
+                f"_render_sections: recursion depth "
+                f"{ctx.recursion_depth} exceeds cap "
+                f"{self.MAX_RECURSION_DEPTH}; container blocks like "
+                f"'two_column_layout' may not nest inside each other "
+                f"(ADR-03 S6 addendum)"
+            )
+
         rendered: List[RenderedSection] = []
-        for section in desc.sections:
+        for section in sections:
             if not self._section_visible(section, ctx.fmt):
                 logger.debug(
                     "ReportService: skipping section %s (visible_in=%s, fmt=%s)",
@@ -429,6 +471,24 @@ class ReportService:
                 continue
             rendered.append(await self._render_section(section, ctx))
         return rendered
+
+    async def _build_sections(
+        self,
+        desc: ReportDescriptor,
+        ctx: RenderContext,
+    ) -> List[RenderedSection]:
+        """Backwards-compat alias for the pre-S6 ``_build_sections`` name.
+
+        S4.5 callers (and any external tests) that drove section assembly
+        through the private ``_build_sections`` keep working unchanged.
+        New code should call :meth:`_render_sections` directly with an
+        explicit ``list[SectionSpec]``.
+        """
+        logger.debug(
+            "ReportService._build_sections is a S6 backward-compat "
+            "alias; prefer _render_sections(desc.sections, ctx) directly."
+        )
+        return await self._render_sections(desc.sections, ctx)
 
     @staticmethod
     def _section_visible(section: SectionSpec, fmt: str) -> bool:
