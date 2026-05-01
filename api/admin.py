@@ -654,11 +654,25 @@ def _make_progress_cb(history_id: int, step_label: str, global_pct_start: int,
 
 
 def _sanitize_error(exc: Exception) -> str:
-    """Sanitize error message to avoid leaking internal details."""
+    """Sanitize error message to avoid leaking internal details.
+
+    Strips:
+      - postgresql://… connection URLs
+      - Source file paths (`/foo/bar.py`)
+      - libpq-style key/value secrets in psycopg2 errors
+        (`host=…`, `password=…`, `user=…`, `dbname=…`, etc.)
+    """
     import re
     msg = str(exc)
-    # Remove connection strings
+    # Remove URI-style connection strings.
     msg = re.sub(r'postgresql://[^\s"\']+', 'postgresql://***', msg)
+    # Remove libpq key=value secrets that psycopg2 sometimes embeds in errors.
+    msg = re.sub(
+        r"\b(host|hostaddr|password|user|dbname|port|sslmode|sslcert|sslkey)\s*=\s*\S+",
+        r"\1=***",
+        msg,
+        flags=re.IGNORECASE,
+    )
     # Remove file paths
     msg = re.sub(r'/[^\s"\']*\.py', '<file>', msg)
     # Truncate
@@ -2991,12 +3005,97 @@ def _run_pipeline_upload(uploaded_path: str, kind: str, history_id: int) -> None
             pass
 
 
+# Tables touched by export.py that we sanity-check after the export step.
+# If NONE of these grew (and no rows existed before), the export silently
+# no-op'd — most likely the runtime user is missing USAGE on bma_med (which
+# returns empty `information_schema.columns` and lets export.py exit 0 with
+# zero rows inserted instead of raising InsufficientPrivilege).
+_POST_EXPORT_GROWTH_TABLES = (
+    "bma_med.patient",
+    "bma_med.app1_patient",
+    "bma_med.app2_patient",
+    "bma_med.portal_patient",
+)
+
+
+def _table_row_counts(conn: object, tables: tuple) -> Dict[str, Optional[int]]:
+    """Return {table: count or None on error} using its own cursor.
+
+    A `None` value means the count failed (e.g. permission denied / missing
+    table) — treated by the sanity check as "not grown".
+    """
+    out: Dict[str, Optional[int]] = {}
+    for t in tables:
+        try:
+            cur = conn.cursor()  # type: ignore[attr-defined]
+            try:
+                cur.execute(f"SELECT COUNT(*) FROM {t}")
+                row = cur.fetchone()
+                out[t] = int(row[0]) if row else 0
+            finally:
+                cur.close()
+        except Exception:
+            out[t] = None
+            # The failed COUNT may have aborted a transaction — roll back so
+            # the next COUNT runs cleanly.
+            try:
+                conn.rollback()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+    return out
+
+
+def _post_export_sanity_check(history_id: int, conn: object) -> Optional[str]:
+    """Compare expected vs actual row growth in bma_med.* tables.
+
+    Mark history_id as status='error' with a clear message if the
+    growth is zero across all targeted tables.
+
+    Returns None on success (at least one table has rows), or an error
+    message (also written to import_history) when every targeted table is
+    empty / inaccessible. Caller must `return` after a non-None reply.
+    """
+    counts = _table_row_counts(conn, _POST_EXPORT_GROWTH_TABLES)
+    total = sum((v or 0) for v in counts.values())
+    if total > 0:
+        return None
+    summary = ", ".join(
+        f"{t}={'?' if v is None else v}" for t, v in counts.items()
+    )
+    msg = (
+        "post-flight sanity check failed: export reported success but no "
+        "bma_med target table contains any rows. This usually means the "
+        "runtime DB user lacks USAGE/INSERT on the bma_med schema "
+        f"(observed counts: {summary})."
+    )
+    _set_history_error(history_id, "export sanity check failed", detail=msg)
+    _audit(history_id, "error",
+           reason="post_export_sanity_check_failed",
+           counts={k: v for k, v in counts.items()})
+    return msg
+
+
 def _resume_pipeline_export(tmpdir: str, kind: str, history_id: int,
                             *, env_raw_root: Optional[str] = None) -> None:
     """Run export → MV refresh → flush caches → mark success.
 
     Used both by the inline rc=0 path and by the /confirm endpoint when the
     operator approves a 'pending_confirm' upload.
+
+    Silent-failure guard
+    --------------------
+    Historically the export step was treated as successful whenever
+    `export.py` exited rc=0. That allowed a class of permission bugs to ship
+    "success" with `rows_imported=0`: when the runtime DB user (e.g.
+    `etl_user`) lacks USAGE on the `bma_med` schema, `information_schema.
+    columns` legitimately returns empty rows, so export.py skips every
+    target table, exits 0, and the dashboard then shows zero rows with no
+    indication that anything is wrong. The post-flight sanity check below
+    closes that gap by counting rows in the canonical target tables and
+    flipping the history row to `status='error'` when none of them grew.
+    Any unhandled `psycopg2.Error` (e.g. `InsufficientPrivilege`) raised
+    while running the check is also caught and recorded with a sanitised
+    message — never silently swallowed.
     """
     import subprocess
     from pathlib import Path as _Path
@@ -3038,6 +3137,35 @@ def _resume_pipeline_export(tmpdir: str, kind: str, history_id: int,
                         break
         except Exception:
             rows_inserted = 0
+
+        # ─── Post-flight sanity check ──────────────────────────────────
+        # export.py exits 0 even when the runtime user lacks USAGE on
+        # bma_med (information_schema returns empty → every target table
+        # is silently "skipped"). Verify at least one bma_med table grew
+        # before flipping the history row to success.
+        sanity_conn = None
+        try:
+            sanity_conn = psycopg2.connect(DATABASE_URL_WRITER)
+            sanity_conn.autocommit = True
+            if _post_export_sanity_check(history_id, sanity_conn) is not None:
+                # _post_export_sanity_check already wrote status='error'
+                # and emitted an audit event; abort before the success path.
+                return
+        except psycopg2.Error as exc:
+            _set_history_error(
+                history_id, "post-flight sanity check failed",
+                detail=_sanitize_error(exc),
+            )
+            _audit(history_id, "error",
+                   reason="post_export_sanity_check_db_error",
+                   message=_sanitize_error(exc))
+            return
+        finally:
+            if sanity_conn is not None:
+                try:
+                    sanity_conn.close()
+                except Exception:
+                    pass
 
         # ─── Refresh hot MVs ───────────────────────────────────────────
         _update_progress(history_id, "refresh hot MVs", 92)
