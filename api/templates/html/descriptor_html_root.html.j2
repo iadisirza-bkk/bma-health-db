@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+{# ===========================================================================
+   descriptor_html_root.html.j2 — top-level HTML report template (ADR-03 §4).
+
+   Receives:
+     desc        ReportDescriptor (Pydantic)
+     sections    list[RenderedSection] (already-rendered HTML markup per block)
+     ctx         RenderContext
+     style       StyleSpec (alias of desc.style)
+     lang        ISO code, e.g. "th"
+     lang_dir    "ltr" or "rtl" (renderer flips for ar/he)
+     generated_at datetime in UTC, ISO-8601
+     data_hash   short hash string used for cache invalidation
+     app_version str, e.g. "BMA Health Database v2.1"
+     logo_data_uri  data: URI for the brand logo, or None
+     font_face_css  raw CSS @font-face rules (Sarabun + fallbacks), or empty
+
+   Self-contained per ADR-03 §4: no external <link> stylesheets, no remote
+   <script src>, every asset baked in via data: URIs or inline.
+=========================================================================== #}
+<html lang="{{ lang }}" dir="{{ lang_dir }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="generator" content="{{ app_version }}">
+  <meta name="data-hash" content="{{ data_hash }}">
+  <title>{% if lang == "en" and desc.title_en %}{{ desc.title_en }}{% else %}{{ desc.title_th }}{% endif %}</title>
+  <style>
+    {{ font_face_css | safe }}
+
+    :root {
+      --primary: {{ style.primary_color }};
+      --primary-ink: #ffffff;
+      --bg: #ffffff;
+      --fg: #1a1a1a;
+      --muted: #6b6b6b;
+      --rule: #e3e3e3;
+      --section-bg: #fafafa;
+      --link: {{ style.primary_color }};
+      --max-width: 880px;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #15171a;
+        --fg: #ececec;
+        --muted: #9aa0a6;
+        --rule: #2a2d31;
+        --section-bg: #1c1f23;
+        --link: #7fd5b3;
+      }
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: "{{ style.font_family }}", "Sarabun", "Noto Sans Thai",
+                   "Helvetica Neue", Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.55;
+    }
+
+    body { max-width: var(--max-width); margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+
+    h1, h2, h3, h4 { font-weight: 600; line-height: 1.25; margin: 1.5em 0 0.5em; }
+    h1 { font-size: 2rem; color: var(--primary); }
+    h2 { font-size: 1.5rem; border-bottom: 2px solid var(--rule); padding-bottom: 0.25em; }
+    h3 { font-size: 1.2rem; }
+
+    a { color: var(--link); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      margin: 1em 0;
+      font-size: 0.95em;
+    }
+    th, td {
+      border: 1px solid var(--rule);
+      padding: 0.5em 0.75em;
+      text-align: start;
+    }
+    th { background: var(--section-bg); font-weight: 600; }
+
+    figure { margin: 1em 0; text-align: center; }
+    figure svg, figure img { max-width: 100%; height: auto; }
+    figcaption { color: var(--muted); font-size: 0.9em; margin-top: 0.4em; }
+
+    .report-header {
+      border-bottom: 4px solid var(--primary);
+      padding-bottom: 1rem;
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    .report-header img.logo { max-height: 64px; width: auto; }
+    .report-header .meta { color: var(--muted); font-size: 0.9rem; }
+
+    nav.toc {
+      background: var(--section-bg);
+      border: 1px solid var(--rule);
+      border-radius: 6px;
+      padding: 1rem 1.25rem;
+      margin: 1.5rem 0 2rem;
+    }
+    nav.toc h2 {
+      margin: 0 0 0.5em;
+      font-size: 1.05rem;
+      border-bottom: none;
+      padding-bottom: 0;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    nav.toc ol { margin: 0; padding-inline-start: 1.25rem; }
+    nav.toc li { margin: 0.2em 0; }
+
+    main section {
+      margin: 2rem 0;
+      padding-top: 0.5rem;
+    }
+    main section + section { border-top: 1px solid var(--rule); }
+
+    footer.report-footer {
+      margin-top: 3rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--rule);
+      color: var(--muted);
+      font-size: 0.85rem;
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+    }
+    footer.report-footer code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.9em;
+    }
+
+    /* "Print to PDF" support — A4 portrait, conservative margins, no
+       chrome-coloured backgrounds bleeding into ink. */
+    @media print {
+      :root { --bg: #ffffff; --fg: #000000; --section-bg: #ffffff; }
+      @page { size: A4; margin: 18mm 16mm; }
+      body { max-width: none; padding: 0; }
+      nav.toc { page-break-after: always; }
+      main section { page-break-inside: avoid; }
+      a { color: inherit; text-decoration: none; }
+      footer.report-footer { color: #555; }
+    }
+  </style>
+</head>
+<body>
+  <header class="report-header">
+    {% if logo_data_uri %}
+      <img class="logo" src="{{ logo_data_uri }}" alt="logo">
+    {% endif %}
+    <div>
+      <h1>{% if lang == "en" and desc.title_en %}{{ desc.title_en }}{% else %}{{ desc.title_th }}{% endif %}</h1>
+      <div class="meta">
+        <span>{{ generated_at }}</span>
+        {% if desc.title_en and lang != "en" %}<span> · {{ desc.title_en }}</span>{% endif %}
+      </div>
+    </div>
+  </header>
+
+  <nav class="toc" aria-label="Table of contents">
+    <h2>{{ "Contents" if lang == "en" else "สารบัญ" }}</h2>
+    <ol>
+      {% for s in sections %}
+        <li><a href="#{{ s.section_id }}">{{ section_titles[s.section_id] }}</a></li>
+      {% endfor %}
+    </ol>
+  </nav>
+
+  <main>
+    {% for s in sections %}
+      <section id="{{ s.section_id }}">
+        {{ s.markup | safe }}
+      </section>
+    {% endfor %}
+  </main>
+
+  <footer class="report-footer">
+    <span>{{ app_version }}</span>
+    <span>{{ generated_at }}</span>
+    <span>data_hash: <code>{{ data_hash }}</code></span>
+  </footer>
+</body>
+</html>

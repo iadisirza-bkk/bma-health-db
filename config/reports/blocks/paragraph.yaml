@@ -1,0 +1,5 @@
+block_id: paragraph
+class_path: services.reports.blocks.paragraph:ParagraphBlock
+description_th: "ย่อหน้าข้อความสองภาษา รองรับ {var} จาก data_collector"
+description_en: "Bilingual paragraph with {var} substitution from the data collector"
+enabled: true

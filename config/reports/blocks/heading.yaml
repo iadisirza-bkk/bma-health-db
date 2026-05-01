@@ -1,0 +1,5 @@
+block_id: heading
+class_path: services.reports.blocks.heading:HeadingBlock
+description_th: "หัวเรื่องระดับ 1/2/3 (\\section / \\subsection / \\subsubsection)"
+description_en: "Section heading at level 1, 2, or 3"
+enabled: true

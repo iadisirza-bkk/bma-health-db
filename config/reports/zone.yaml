@@ -1,0 +1,48 @@
+# =============================================================================
+# Report descriptor: zone
+# -----------------------------------------------------------------------------
+# Replaces the legacy Beamer template `templates/latex/report_zone.tex.j2` and
+# the per-zone flow in `services.zone_report_generator.generate_zone_report`.
+#
+# Parameterized by `zone_code` (one of 8 Bangkok health zones). The
+# orchestrator (ReportService.render) substitutes `{zone_code}` into every
+# string field via `.format(**params)` after loading this descriptor — see
+# `metadata.parameterized_by` and ReportService.render() docstring.
+#
+# Languages: th + en for now. Other locales gated until the legacy beamer
+# preamble has been ported to language-aware fonts (matches the whitepaper
+# polyglossia setup).
+# =============================================================================
+report_id: zone
+title_th: "รายงานเขตสุขภาพ {zone_code}"
+formats: [latex, html]
+languages: [th, en]
+audience: [public, clinician, admin]
+sections:
+  - id: cover
+    block: cover_page
+    params: { subtitle_th: "เขตสุขภาพ {zone_code}" }
+  - id: zone_pop_h
+    block: heading
+    params: { text_th: "ประชากรในเขต", level: 1 }
+  - id: pyramid
+    block: chart
+    params: { spec_id: age_pyramid, filters: { zone: "{zone_code}" } }
+  - id: zone_screen_h
+    block: heading
+    params: { text_th: "อัตราการคัดกรอง", level: 1 }
+  - id: screen_chart
+    block: chart
+    params: { spec_id: screening_coverage, filters: { zone: "{zone_code}" } }
+  - id: zone_risk_h
+    block: heading
+    params: { text_th: "ปัจจัยเสี่ยง NCD", level: 1 }
+  - id: risk_chart
+    block: chart
+    params: { spec_id: risk_factor_profile, filters: { zone: "{zone_code}" } }
+  - id: methodology
+    block: appendix_methodology
+    params: {}
+metadata:
+  parameterized_by: zone_code
+  legacy_module: "services.zone_report_generator"

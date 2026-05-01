@@ -1,0 +1,5 @@
+block_id: appendix_methodology
+class_path: services.reports.blocks.appendix_methodology:AppendixMethodologyBlock
+description_th: "ภาคผนวก: ระเบียบวิธี (แหล่งข้อมูล, k-anonymity, non-imputation, MSD)"
+description_en: "Methodology appendix (data sources, k-anonymity, non-imputation, MSD criteria)"
+enabled: true

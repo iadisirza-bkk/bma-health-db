@@ -1,0 +1,47 @@
+<# ============================================================
+   descriptor_latex_root.tex.j2
+   --
+   Top-level template consumed by ``LaTeXRenderer`` (ADR-03 §4).
+   The renderer pre-renders each ``SectionSpec`` to a LaTeX string
+   via the block's ``render_latex`` and passes the list as
+   ``sections`` (each with a ``markup`` attr that's already escaped).
+
+   Variables passed in:
+     * desc            — :class:`ReportDescriptor`
+     * sections        — list of :class:`RenderedSection`
+     * style           — :class:`StyleSpec` (desc.style)
+     * lang            — language code, e.g. "th" / "en"
+     * generated_date  — UTC ISO date string
+     * report_class    — LaTeX documentclass to use ("article" by default)
+
+   Jinja2 delimiters: ``<<...>>`` for vars, ``<%...%>`` for blocks
+   (matches the legacy ReportGenerator env so `bma_*.tex` partials
+   can be reused unchanged).
+
+   Beamer (slides) is intentionally NOT handled here — descriptors
+   that set ``style.layout = "slides"`` will use a separate root
+   template introduced in a follow-up ticket.
+   ============================================================ #>
+\input{bma_article_preamble}
+\begin{document}
+
+\begin{titlepage}
+\centering
+\vspace*{3cm}
+{\Huge\bfseries << desc.title_th | latex_safe >> \par}
+<% if desc.title_en %>
+\vspace{0.5cm}
+{\Large << desc.title_en | latex_safe >> \par}
+<% endif %>
+\vspace{2cm}
+{\large << generated_date >> \par}
+\vfill
+{\small \texttt{<< desc.report_id | latex_escape >>} \quad lang=<< lang | latex_escape >>}
+\end{titlepage}
+
+<% for s in sections %>
+<< s.markup >>
+
+<% endfor %>
+
+\end{document}

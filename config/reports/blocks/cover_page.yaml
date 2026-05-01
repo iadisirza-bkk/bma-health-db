@@ -1,0 +1,5 @@
+block_id: cover_page
+class_path: services.reports.blocks.cover_page:CoverPageBlock
+description_th: "หน้าปก: ชื่อเรื่อง, โลโก้, วันที่"
+description_en: "Cover page: title, logo, generation date"
+enabled: true

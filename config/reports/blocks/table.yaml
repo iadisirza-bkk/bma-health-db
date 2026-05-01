@@ -1,0 +1,5 @@
+block_id: table
+class_path: services.reports.blocks.table:TableBlock
+description_th: "ตารางข้อมูลแบบยาว — รัน MV query และจัดคอลัมน์ + ตัด max_rows"
+description_en: "Long-format data table — runs an MV query, projects columns, truncates by max_rows"
+enabled: true

@@ -1,0 +1,5 @@
+block_id: chart
+class_path: services.reports.blocks.chart:ChartBlock
+description_th: "ฝัง chart spec จาก ADR-01 ผ่าน ChartService (HTML SVG / TikZ)"
+description_en: "Embed an ADR-01 chart spec via ChartService (HTML SVG / LaTeX TikZ)"
+enabled: true

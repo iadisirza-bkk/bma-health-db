@@ -1,0 +1,69 @@
+# =============================================================================
+# Report descriptor: whitepaper
+# -----------------------------------------------------------------------------
+# Replaces the legacy XeLaTeX template `templates/latex/report_whitepaper.tex.j2`
+# and the monolithic flow in `report_generator.ReportGenerator.generate(lang,
+# 'whitepaper')`. Per ADR-03 §1, every section here is a reference to a
+# registered ContentBlock — adding/removing/reordering content is a YAML edit,
+# not a code change.
+#
+# Multilingual: each declared language MUST have matching i18n strings supplied
+# at render time by the orchestrator (heading text_th + auto-fallback to
+# title_en / title_th for other locales).
+#
+# Cache: `data_hash`-keyed — the orchestrator reuses the artefact whenever the
+# upstream collector reports an unchanged data hash for (report_id, fmt, lang).
+# =============================================================================
+report_id: whitepaper
+title_th: "รายงานสุขภาพประชากร กทม."
+title_en: "BMA Population Health Whitepaper"
+formats: [latex, html]
+languages: [th, en, zh, ja, ko, ru, my, hi, vi, fr]
+audience: [public, clinician]
+sections:
+  - id: cover
+    block: cover_page
+    params: { logo_path: "templates/latex/assets/bma_logo.png" }
+  - id: exec_summary_h
+    block: heading
+    params: { text_th: "บทสรุปผู้บริหาร", level: 1 }
+  - id: exec_kpis
+    block: kpi_grid
+    params:
+      metrics:
+        - { label_th: "ผู้คัดกรองทั้งหมด", source_path: "summary.total_screened", format: int }
+        - { label_th: "เขตที่ครอบคลุม", source_path: "summary.districts_covered", format: int }
+        - { label_th: "ผู้พบโรค NCD", source_path: "summary.found_ncd", format: int }
+  - id: risk_section_h
+    block: heading
+    params: { text_th: "ปัจจัยเสี่ยง NCD", level: 1 }
+  - id: risk_chart
+    block: chart
+    params: { spec_id: risk_factor_profile, caption_th: "ร้อยละผู้คัดกรองที่มีปัจจัยเสี่ยง" }
+  - id: coverage_h
+    block: heading
+    params: { text_th: "อัตราการคัดกรองรายเขต", level: 1 }
+  - id: coverage_chart
+    block: chart
+    params: { spec_id: screening_coverage }
+  - id: coverage_table
+    block: table
+    params:
+      query_id: screening_coverage
+      columns:
+        - { key: district_name, header_th: "เขต", format: str }
+        - { key: total_screened, header_th: "ผู้คัดกรอง", format: int }
+        - { key: pct_coverage, header_th: "อัตรา %", format: pct2 }
+  - id: methodology
+    block: appendix_methodology
+    params: {}
+style:
+  font_family: "Sarabun"
+  primary_color: "#00744B"
+  logo_path: "templates/latex/assets/bma_logo.png"
+cache:
+  enabled: true
+  invalidate_on: [data_hash]
+metadata:
+  legacy_template: "report_whitepaper.tex.j2"
+  ports_from: "report_generator.ReportGenerator.generate(lang, 'whitepaper')"

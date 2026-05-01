@@ -21,6 +21,14 @@ from typing import Any
 import jinja2
 
 import config
+from services.reports.renderers._latex_filters import (
+    latex_escape as _latex_escape,
+    latex_safe as _latex_safe,
+    number_format as _number_format,
+    pct2_format as _pct2_format,
+    pct_format as _pct_format,
+    significance_stars as _significance_stars,
+)
 from services.report_data_collector import (
     collect_report_data,
     compute_data_hash,
@@ -833,95 +841,11 @@ class ReportGenerator:
 
 
 # ---------------------------------------------------------------------------
-# Jinja2 filter functions
+# Jinja2 filter functions are now imported from
+# ``services.reports.renderers._latex_filters`` (see import at top of file).
+# Both the legacy ReportGenerator and the new LaTeXRenderer share that
+# single source of truth — DO NOT redefine them here.
 # ---------------------------------------------------------------------------
-
-def _number_format(value: Any) -> str:
-    try:
-        return f"{int(value):,}"
-    except (ValueError, TypeError):
-        return str(value)
-
-
-def _pct_format(value: Any) -> str:
-    try:
-        return f"{float(value):.1f}"
-    except (ValueError, TypeError):
-        return str(value)
-
-
-# LaTeX special characters that need escaping in user-supplied strings.
-# Order matters: escape backslash first, then everything else.
-_LATEX_ESCAPES = (
-    ("\\", r"\textbackslash{}"),
-    ("&", r"\&"),
-    ("%", r"\%"),
-    ("$", r"\$"),
-    ("#", r"\#"),
-    ("_", r"\_"),
-    ("{", r"\{"),
-    ("}", r"\}"),
-    ("~", r"\textasciitilde{}"),
-    ("^", r"\textasciicircum{}"),
-    # Jinja2 delimiter conflict — protect against `<<` / `>>` in user content
-    ("<<", r"<\,<"),
-    (">>", r">\,>"),
-)
-
-
-def _latex_safe(value: Any) -> str:
-    """Escape LaTeX special chars in a user-supplied string.
-
-    Use `<< value | latex_safe >>` in templates whenever the value comes
-    from user input or external data (not from our own code constants),
-    so a `&`/`$`/`%`/`<<` in the value can't break the LaTeX compile.
-    """
-    if value is None:
-        return ""
-    s = str(value)
-    for src, repl in _LATEX_ESCAPES:
-        s = s.replace(src, repl)
-    return s
-
-
-def _pct2_format(value: Any) -> str:
-    try:
-        return f"{float(value):.2f}"
-    except (ValueError, TypeError):
-        return str(value)
-
-
-def _significance_stars(p_value: Any) -> str:
-    try:
-        p = float(p_value)
-    except (ValueError, TypeError):
-        return ""
-    if p < 0.001:
-        return "***"
-    elif p < 0.01:
-        return "**"
-    elif p < 0.05:
-        return "*"
-    return "n.s."
-
-
-def _latex_escape(text: Any) -> str:
-    s = str(text)
-    replacements = [
-        ("\\", "\\textbackslash{}"),
-        ("&", "\\&"),
-        ("%", "\\%"),
-        ("$", "\\$"),
-        ("#", "\\#"),
-        ("_", "\\_"),
-        ("{", "\\{"),
-        ("}", "\\}"),
-        ("~", "\\textasciitilde{}"),
-        ("^", "\\textasciicircum{}"),
-    ]
-    for old, new in replacements:
-        s = s.replace(old, new)
-    return s
 
 
 # ---------------------------------------------------------------------------

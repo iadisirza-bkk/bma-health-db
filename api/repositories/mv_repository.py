@@ -323,19 +323,29 @@ class MVRepository(Repository):
     async def age_pyramid(
         self,
         district: Optional[str] = None,
+        zone: Optional[str] = None,
     ) -> list[AgePyramidRow]:
-        """Sex × age-band breakdown for a district (or citywide if NULL)."""
+        """Sex × age-band breakdown for a district / zone (or citywide if NULL).
+
+        Zone is implemented as a JOIN to ``ref_districts.zone_code`` so the
+        filter only requires the chart YAML to declare ``zone`` in
+        ``accepts`` — the SQL handles the lookup.
+        """
         clauses: list[str] = []
         params: list[Any] = []
         if district is not None:
-            clauses.append("district_code = %s")
+            clauses.append("d.district_code = %s")
             params.append(district)
+        if zone is not None:
+            clauses.append("rd.zone_code = %s")
+            params.append(zone)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = f"""
-            SELECT district_code, source_code, sex_code, age_band, persons
-              FROM public.mv_demographics
+            SELECT d.district_code, d.source_code, d.sex_code, d.age_band, d.persons
+              FROM public.mv_demographics d
+              LEFT JOIN public.ref_districts rd ON rd.dcode = d.district_code
               {where}
-             ORDER BY district_code, source_code, sex_code, age_band
+             ORDER BY d.district_code, d.source_code, d.sex_code, d.age_band
              LIMIT {_LIMIT}
         """
         rows = await self.fetch_all(sql, params)
@@ -345,15 +355,21 @@ class MVRepository(Repository):
     async def screening_coverage(
         self,
         district: Optional[str] = None,
+        zone: Optional[str] = None,
     ) -> list[ScreeningCoverageRow]:
         """Screening coverage per district = total_screened / population.
 
-        Joins `mv_summary_districts` to `ref_districts.population`."""
+        Joins `mv_summary_districts` to `ref_districts.population`.
+        Optional ``zone`` filter restricts to districts in that zone (the
+        ref_districts join provides ``zone_code``)."""
         clauses: list[str] = []
         params: list[Any] = []
         if district is not None:
             clauses.append("s.district_code = %s")
             params.append(district)
+        if zone is not None:
+            clauses.append("rd.zone_code = %s")
+            params.append(zone)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = f"""
             SELECT s.district_code,

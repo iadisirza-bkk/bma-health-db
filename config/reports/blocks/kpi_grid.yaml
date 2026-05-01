@@ -1,0 +1,5 @@
+block_id: kpi_grid
+class_path: services.reports.blocks.kpi_grid:KPIGridBlock
+description_th: "ตารางตัวเลขสรุป (KPI tile) — int/pct/pct2/ratio"
+description_en: "Grid of headline-number KPI tiles with int/pct/pct2/ratio formatting"
+enabled: true

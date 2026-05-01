@@ -93,6 +93,11 @@ try:
 except ImportError:
     pass
 try:
+    from routers.reports_v2 import router as reports_v2_router
+    _new_routers.append(reports_v2_router)
+except ImportError:
+    pass
+try:
     from routers.chat_v2 import router as chat_v2_router
     _new_routers.append(chat_v2_router)
 except ImportError:
