@@ -78,7 +78,7 @@ CACHE_TTL_STATIC: int = int(os.getenv("CACHE_TTL_STATIC", "3600"))
 # Pattern matches: env var unset → falls through to one of these strings →
 # we either fail (production) or log loudly (dev/test).
 _INSECURE_DEFAULTS = {
-    "API_KEY": {"changeme-dev-key"},
+    "API_KEY": {"changeme-dev-key", "dev-api-key", "test", "key"},
     "ADMIN_PASSWORD": {"admin", "password", "changeme"},
     "SECRET_KEY": {
         "change-me-in-production-use-random-secret",
