@@ -50,6 +50,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from services.latex_utils import latex_escape
 from services.reports.blocks.base import ContentBlock
+from services.reports.blocks._render_helpers import (
+    safe_label_part,
+    wrap_table_html,
+    wrap_table_latex,
+)
 from services.reports.spec import RenderContext
 
 logger = logging.getLogger("api.services.reports.blocks.statistical_test_results")
@@ -120,6 +125,21 @@ class StatTestParams(BaseModel):
     sig_threshold: float = 0.05
     """p-value cutoff for the ``\\textbf{...}`` / ``class="significant"``
     highlight. Strictly less-than: a row with p == 0.05 renders normal."""
+
+    caption_th: Optional[str] = None
+    caption_en: Optional[str] = None
+    """Optional block-level caption. When set, EACH per-test-type table
+    is wrapped in a ``\\begin{table}`` float (LaTeX) / gets a ``<caption>``
+    first child (HTML) so the caption appears ABOVE the rows per Phase 0
+    convention. Per-table caption is composed as
+    ``f"{caption} — {test_type_title}"`` so each table gets a distinct
+    entry in ``\\listoftables``. When omitted, the legacy bare-tabular
+    output is preserved."""
+
+    label: Optional[str] = None
+    """Optional label prefix (e.g. ``"tab:zone03:tests"``). Each per-type
+    table appends ``:{test_type}`` so labels stay unique within a single
+    block render. When omitted, derived from ``source_path``."""
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +431,25 @@ class StatisticalTestResultsBlock(ContentBlock):
         for tt in by_type:
             by_type[tt].sort(key=_pkey)
 
-        return {"by_type": by_type, "sig_threshold": params.sig_threshold}
+        # Caption + label resolution (Phase 0 convention: caption ABOVE).
+        # Empty string means "no caption" — downstream renderers fall back
+        # to the legacy bare-tabular / un-captioned-table output.
+        caption = ""
+        if ctx.lang == "en" and params.caption_en:
+            caption = params.caption_en
+        elif params.caption_th:
+            caption = params.caption_th
+        # When caller doesn't supply a label prefix, derive from source_path
+        # so two stat-test blocks in the same descriptor get distinct labels.
+        label_prefix = params.label or (
+            "tab:stattest:" + safe_label_part(params.source_path)
+        )
+        return {
+            "by_type": by_type,
+            "sig_threshold": params.sig_threshold,
+            "caption": caption,
+            "label_prefix": label_prefix,
+        }
 
     # ------------------------------------------------------------------
     # LaTeX
@@ -429,6 +467,8 @@ class StatisticalTestResultsBlock(ContentBlock):
         if not by_type:
             return r"\textit{ไม่มีผลการทดสอบทางสถิติในรายงานนี้}" + "\n"
 
+        block_caption = data.get("caption") or ""
+        label_prefix = data.get("label_prefix") or "tab:stattest"
         out: List[str] = []
         for test_type in _TYPE_ORDER:
             rows = by_type.get(test_type)
@@ -459,14 +499,26 @@ class StatisticalTestResultsBlock(ContentBlock):
                     escaped = [r"\textbf{" + c + "}" for c in escaped]
                 body_lines.append(" & ".join(escaped) + r" \\ \hline")
             body = "\n".join(body_lines)
-            out.append(
-                r"\begin{tabular}{" + col_spec + "}"
-            )
-            out.append(r"\hline")
-            out.append(head_line + r" \\ \hline")
+            tabular_parts = [
+                r"\begin{tabular}{" + col_spec + "}",
+                r"\hline",
+                head_line + r" \\ \hline",
+            ]
             if body:
-                out.append(body)
-            out.append(r"\end{tabular}")
+                tabular_parts.append(body)
+            tabular_parts.append(r"\end{tabular}")
+            tabular = "\n".join(tabular_parts) + "\n"
+            # Caption ABOVE convention: per-test-type caption combines the
+            # block-level caption with the test-type title so each table
+            # gets a distinct entry in ``\listoftables``.
+            if block_caption:
+                per_table_caption = f"{block_caption} — {title}"
+                per_table_label = f"{label_prefix}:{test_type}"
+                out.append(
+                    wrap_table_latex(tabular, per_table_caption, per_table_label)
+                )
+            else:
+                out.append(tabular)
             out.append("")  # blank line between subsections
         return "\n".join(out) + "\n"
 
@@ -489,6 +541,8 @@ class StatisticalTestResultsBlock(ContentBlock):
                 "ไม่มีผลการทดสอบทางสถิติในรายงานนี้</em></p>"
             )
 
+        block_caption = data.get("caption") or ""
+        label_prefix = data.get("label_prefix") or "tab:stattest"
         parts: List[str] = []
         for test_type in _TYPE_ORDER:
             rows = by_type.get(test_type)
@@ -514,8 +568,25 @@ class StatisticalTestResultsBlock(ContentBlock):
                 cls = ' class="significant"' if _is_significant(row, threshold) else ""
                 body_rows.append(f"<tr{cls}>{tds}</tr>")
             tbody = "<tbody>" + "".join(body_rows) + "</tbody>"
-            parts.append(
-                f'<table class="stat-test stat-{test_type}">'
-                f"{thead}{tbody}</table>"
-            )
+            # Caption ABOVE convention: when a block-level caption is set,
+            # inject ``<caption>`` as the first child of each per-test-type
+            # ``<table>`` (HTML spec: caption MUST be first child). Use
+            # ``css_class="stat-test stat-{test_type}"`` to preserve the
+            # existing stylesheet hooks.
+            if block_caption:
+                per_table_caption = f"{block_caption} — {title}"
+                per_table_label = f"{label_prefix}:{test_type}"
+                parts.append(
+                    wrap_table_html(
+                        thead + tbody,
+                        per_table_caption,
+                        label=per_table_label,
+                        css_class=f"stat-test stat-{test_type}",
+                    )
+                )
+            else:
+                parts.append(
+                    f'<table class="stat-test stat-{test_type}">'
+                    f"{thead}{tbody}</table>"
+                )
         return "\n".join(parts)

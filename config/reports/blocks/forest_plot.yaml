@@ -1,0 +1,5 @@
+block_id: forest_plot
+class_path: services.reports.blocks.forest_plot:ForestPlotBlock
+description_th: "ภาพกราฟ Forest plot — ค่าประมาณ (OR/RR/Mean Difference) พร้อมช่วงความเชื่อมั่น 95% CI สำหรับนักวิจัย (S11)"
+description_en: "Forest plot — coefficient with 95% CI for OR / RR / mean difference, researcher audience (S11)"
+enabled: true

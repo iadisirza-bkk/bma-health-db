@@ -50,6 +50,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from services.latex_utils import latex_escape
 from services.reports.blocks.base import ContentBlock
+from services.reports.polish import maybe_polish
 from services.reports.spec import RenderContext
 
 logger = logging.getLogger("api.services.reports.blocks.ai_insight")
@@ -319,8 +320,20 @@ class AiInsightBlock(ContentBlock):
 
         # 4. Cache + return.
         cache[ckey] = {"text": text, "source": source}
+        # S9: optional Gemma polish — runs only when ``polish_prose``
+        # feature flag is on AND a polish_service is wired up. Polishing
+        # the LLM-generated text is the highest-value case (it cleans
+        # up Thai grammar from the chat completion); the polish service's
+        # own content-hash cache keeps repeated renders deterministic.
+        polished_text = await maybe_polish(
+            ctx,
+            self.block_id,
+            text,
+            context_hint="ai_insight prose summary",
+            lang=ctx.lang,
+        )
         return {
-            "text": text,
+            "text": polished_text,
             "source": source,
             "prompt_used": prompt,
         }

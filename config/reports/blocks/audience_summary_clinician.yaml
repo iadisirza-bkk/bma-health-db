@@ -1,0 +1,5 @@
+block_id: audience_summary_clinician
+class_path: services.reports.blocks.audience_summary_clinician:AudienceSummaryClinicianBlock
+description_th: "บทสรุปสำหรับบุคลากรการแพทย์ — การกระจายค่าวัด, อัตราผิดปกติ, ICD-10, ความครบถ้วนของชุดคัดกรอง (S8)"
+description_en: "Clinician-facing summary — vital distributions, abnormal rates, ICD-10 prevalence, screening adherence (S8)"
+enabled: true

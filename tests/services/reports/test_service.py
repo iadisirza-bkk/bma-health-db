@@ -456,14 +456,20 @@ async def test_list_returns_catalog_shape(
         descriptor_registry, block_registry_with_blocks, fake_data, tmp_path
     )
     items = await svc.list()
+    # S7: ``latex`` is canonicalised to ``pdf`` on the catalog surface.
+    # ``description_th``, ``description_en``, ``parameters`` are also
+    # exposed (S7 task A + D — typed FE dropdowns).
     assert items == [
         {
             "report_id": "hello_report",
             "title_th": "สวัสดี",
             "title_en": "Hello",
-            "formats": ["latex"],
+            "description_th": None,
+            "description_en": None,
+            "formats": ["pdf"],
             "languages": ["th", "en"],
             "audience": ["public"],
+            "parameters": [],
         }
     ]
 
@@ -511,3 +517,101 @@ def test_data_collector_caches_within_ttl() -> None:
 def test_data_collector_hash_fn_pluggable() -> None:
     c = ReportDataCollector(hash_fn=lambda: "abc123")
     assert c.data_hash() == "abc123"
+
+
+# ---------------------------------------------------------------------------
+# S7 — `latex` → `pdf` canonicalisation on the catalog surface
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_list_canonicalises_legacy_latex_format_to_pdf(
+    block_registry_with_blocks: BlockRegistry,
+    fake_data: ReportDataCollector,
+    tmp_path: Path,
+) -> None:
+    """A descriptor declaring legacy ``latex`` is reported as ``pdf`` to
+    the catalog so the FE only ever sees the canonical name. Backward-compat
+    alias remains accepted on render requests — see
+    ``test_render_legacy_latex_format_alias_routes_to_pdf_renderer``.
+    """
+    legacy_desc = ReportDescriptor(
+        report_id="legacy_report",
+        title_th="legacy",
+        formats=["latex", "html"],
+        languages=["th"],
+        sections=[
+            SectionSpec(
+                id="greet",
+                block="hello",
+                params={"salutation": "Hi"},
+            ),
+        ],
+    )
+    registry = ReportRegistry({legacy_desc.report_id: legacy_desc})
+    svc, _ = _make_service(
+        registry, block_registry_with_blocks, fake_data, tmp_path
+    )
+
+    catalog = await svc.list()
+    assert len(catalog) == 1
+    item = catalog[0]
+    # ``latex`` is collapsed to ``pdf`` on the FE surface; ``html`` passes
+    # through. De-dup preserves order so ``pdf`` lands first.
+    assert item["formats"] == ["pdf", "html"]
+    # The S7 typed-parameter / description fields are also present even
+    # when the descriptor doesn't set them — they default to ``None`` /
+    # ``[]`` so the FE renderer doesn't have to special-case absence.
+    assert item["description_th"] is None
+    assert item["description_en"] is None
+    assert item["parameters"] == []
+
+
+@pytest.mark.anyio
+async def test_render_legacy_latex_format_alias_routes_to_pdf_renderer(
+    descriptor_registry: ReportRegistry,
+    block_registry_with_blocks: BlockRegistry,
+    fake_data: ReportDataCollector,
+    tmp_path: Path,
+) -> None:
+    """S7: a renderer registered with ``fmt = "latex"`` is also reachable
+    under ``pdf``, and vice-versa. Lets the orchestrator accept either
+    name on the render path while the rename ages out.
+    """
+    rec = _RecordingRenderer()  # fmt = "latex" per the existing fixture
+    rreg = RendererRegistry()
+    rreg.register(rec)
+    # Under S7, registering under ``latex`` ALSO populates the ``pdf`` slot.
+    assert "pdf" in rreg
+    assert "latex" in rreg
+    assert rreg.get("pdf") is rreg.get("latex")
+
+    # Build a descriptor whose declared format is the new canonical
+    # ``pdf`` and verify the existing ``latex``-keyed renderer still
+    # services the request.
+    pdf_desc = ReportDescriptor(
+        report_id="pdf_first_report",
+        title_th="pdf-first",
+        formats=["pdf"],
+        languages=["th"],
+        sections=[
+            SectionSpec(
+                id="greet",
+                block="hello",
+                params={"salutation": "Hi"},
+            ),
+        ],
+    )
+    svc = ReportService(
+        descriptors=ReportRegistry({pdf_desc.report_id: pdf_desc}),
+        blocks=block_registry_with_blocks,
+        renderers=rreg,
+        data=fake_data,
+        out_dir=tmp_path,
+    )
+    out = await svc.render("pdf_first_report", "pdf", "th")
+    assert out.exists()
+    # The recording renderer was invoked once even though it was
+    # registered as ``latex`` — alias resolution worked end-to-end.
+    assert len(rec.calls) == 1
+    assert rec.calls[0]["fmt"] == "pdf"

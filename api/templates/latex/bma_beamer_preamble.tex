@@ -37,6 +37,29 @@
 \usepackage{fontspec}
 \usepackage{polyglossia}
 \setbeamertemplate{caption}[numbered]
+\usepackage{float}
+
+% --- Caption-convention helpers (Phase 0) ---
+% Same contract as bma_article_preamble.tex — figures get caption BELOW,
+% tables get caption ABOVE. Mirrors Python helpers in
+% ``services/reports/blocks/_render_helpers.py``.
+%
+%   \bmafig[width]{path}{caption}{label}  -- figure, caption below
+%   \bmatab{caption}{label}{tabular_body} -- table, caption above
+\newcommand{\bmafig}[4][0.85\textwidth]{%
+  \begin{figure}[H]%
+    \centering
+    \includegraphics[width=#1]{#2}%
+    \caption{#3}\label{#4}%
+  \end{figure}%
+}
+\newcommand{\bmatab}[3]{%
+  \begin{table}[H]%
+    \centering
+    \caption{#1}\label{#2}%
+    #3%
+  \end{table}%
+}
 
 % --- Thai line breaking ---
 \XeTeXlinebreaklocale "th"

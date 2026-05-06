@@ -112,6 +112,67 @@ class ReportDataCollector:
         self._cache_at = 0.0
         logger.debug("ReportDataCollector cache invalidated")
 
+    async def fetch(
+        self,
+        spec_id: str,
+        filters: Optional[Dict[str, Any]] = None,
+    ) -> Any:
+        """Return raw rows for a chart spec_id (S11+ contract).
+
+        Delegates to ``MVRepository.run_query(spec_id, filters)`` if the
+        spec maps to a registered query. Raises ``LookupError`` (subclass
+        of KeyError) when the spec isn't registered — the caller (block)
+        is expected to fall back to ``data()[spec_id]`` or graceful
+        skip.
+
+        Parameters
+        ----------
+        spec_id : str
+            Either a chart_spec_id (resolves via ChartService → MVRepo)
+            OR a direct MVRepository query_id.
+        filters : dict, optional
+            Forwarded as kwargs to the query method.
+
+        Returns
+        -------
+        list[dict] | list[Pydantic]
+            Whatever ``MVRepository.run_query`` returned. Pydantic
+            models will satisfy block code that does ``r.get(field)``
+            via the ``model_dump()`` round-trip when needed.
+        """
+        # Lazy import — keeps data_collector decoupled from the DB
+        # layer when it's only used in fast unit tests with a stub
+        # ``collector_fn``.
+        from repositories.mv_repository import MVRepository, _QUERY_REGISTRY
+
+        if spec_id not in _QUERY_REGISTRY:
+            # Try chart_spec_id → query_id resolution via chart_registry.
+            try:
+                from services.charts.registry import chart_registry
+                spec = chart_registry().get(spec_id)
+                query_id = spec.query_id
+            except Exception:
+                raise LookupError(
+                    f"fetch(): spec_id {spec_id!r} not in MVRepository "
+                    f"registry and not resolvable via chart_registry"
+                )
+        else:
+            query_id = spec_id
+
+        repo = MVRepository()
+        rows = await repo.run_query(query_id, filters or {})
+        # Convert Pydantic models to dicts so downstream block code
+        # can use ``.get(field)`` uniformly without isinstance checks.
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            if hasattr(r, "model_dump"):
+                out.append(r.model_dump())
+            elif isinstance(r, dict):
+                out.append(r)
+            else:
+                out.append(dict(r))
+        return out
+
     # ------------------------------------------------------------------
     # Diagnostics
     # ------------------------------------------------------------------

@@ -1,0 +1,222 @@
+report_id: whitepaper_phd
+title_th: "รายงานสุขภาพประชากรกรุงเทพมหานคร — ฉบับวิชาการ"
+title_en: "BMA Population Health Whitepaper — Academic Edition"
+description_th: >
+  รายงานวิชาการระดับวิทยานิพนธ์ — สถิติเชิงอนุมาน, multivariable
+  logistic regression, spatial autocorrelation, lab phenotyping (PCA +
+  k-means), ปัจจัยเสี่ยงร่วม (comorbidity UpSet), ทุกตัวเลขมี 95% CI
+  และผ่าน multiple-comparison correction (Benjamini–Hochberg FDR).
+description_en: >
+  PhD-grade companion to the general whitepaper — inferential stats,
+  multivariable logistic regression, spatial autocorrelation, lab
+  phenotyping via PCA + k-means, comorbidity UpSet, all estimates
+  reported with 95% CIs and FDR-corrected p-values.
+formats: [pdf, html]
+languages: [th, en]
+audience: [clinician, admin]   # descriptor-level audience tag (not block-level AudienceTarget enum)
+metadata:
+  doi_placeholder: "10.xxxx/bma-med-phd-2026"
+  citation_th: >
+    สำนักการแพทย์ กรุงเทพมหานคร (2569). รายงานสุขภาพประชากรกรุงเทพมหานคร
+    ฉบับวิชาการ. รุ่น {data_version}.
+
+sections:
+  # =======================================================================
+  # FRONT MATTER
+  # =======================================================================
+  - id: cover
+    block: cover_page
+    params:
+      logo_path: "assets/bma_logo.png"
+
+  # =======================================================================
+  # CHAPTER 1 — BACKGROUND
+  # =======================================================================
+  - id: ch1_h
+    block: heading
+    params: { text_th: "บทที่ 1 บทนำและเหตุผล", text_en: "Chapter 1 — Background", level: 1 }
+  - id: ch1_p1
+    block: paragraph
+    params:
+      text_th: >
+        โรคไม่ติดต่อเรื้อรัง (NCDs) เป็นภาระทางสาธารณสุขสำคัญที่สุดของประเทศไทย
+        และของกรุงเทพมหานคร โดยคิดเป็นกว่า 75% ของการตายทั้งหมด (WHO 2024).
+        รายงานฉบับนี้วิเคราะห์ข้อมูลจากโครงการคัดกรองสุขภาพประชากรของสำนักการแพทย์
+        กทม. ซึ่งครอบคลุม 50 เขต / 8 เขตสุขภาพ ในช่วงปี 2567–2569.
+  - id: ch1_questions
+    block: heading
+    params: { text_th: "1.1 คำถามวิจัย", text_en: "Research Questions", level: 2 }
+  - id: ch1_q
+    block: paragraph
+    params:
+      text_th: >
+        Q1 — ความชุกและการกระจายตัวของปัจจัยเสี่ยง NCD ในประชากรที่ได้รับการคัดกรอง.
+        Q2 — การกระจุกตัวเชิงพื้นที่ (spatial clustering) ของความชุกโรคในกรุงเทพ.
+        Q3 — การจำแนกกลุ่มย่อย (phenotypes) ตามรูปแบบ lab markers.
+        Q4 — ความสัมพันธ์ระหว่างพฤติกรรมเสี่ยงและการเกิดโรค หลังควบคุมอายุ–เพศ.
+
+  # =======================================================================
+  # CHAPTER 2 — METHODS
+  # =======================================================================
+  - id: ch2_h
+    block: heading
+    params: { text_th: "บทที่ 2 ระเบียบวิธีวิจัย", text_en: "Chapter 2 — Methods", level: 1 }
+  - id: ch2_design
+    block: paragraph
+    params:
+      text_th: >
+        การออกแบบการศึกษา — Cross-sectional, opportunistic screening cohort
+        ครอบคลุม 50 เขตของ กทม. ระยะเวลา ก.ค. 2567 – เม.ย. 2569.
+        แหล่งข้อมูล — ระบบคัดกรอง 3 ระบบ (HHC/CMU/HPMA) รวบรวมและทำความสะอาดผ่าน
+        pipeline ใน /Users/dev/bma-med (ดู MED-FACTSHEET.md และ ADR-01..03).
+        นิยามตัวแปร — เกณฑ์ Asia-Pacific BMI (≥23 น้ำหนักเกิน, ≥25 อ้วน, ≥30 อ้วนรุนแรง),
+        JNC-8 ความดันโลหิตสูง (SBP≥140 หรือ DBP≥90 หรือ self-reported), ATP-III dyslipidemia.
+        วิธีการทางสถิติ — เปอร์เซ็นต์ทั้งหมดรายงานพร้อม 95% Wilson CI;
+        การเปรียบเทียบกลุ่ม χ² หรือ Fisher exact;
+        effect size ผ่าน Cohen's h (สัดส่วน) และ Cliff's δ (ต่อเนื่อง);
+        Multivariable analysis ผ่าน logistic regression;
+        Multiple comparisons — Benjamini–Hochberg FDR ที่ q=0.05;
+        Spatial autocorrelation — Moran's I + LISA (n_perm=999).
+        ทุกการคำนวณรองรับ k-anonymity n≥5 ผ่าน MV layer.
+  - id: ch2_bias
+    block: callout
+    params:
+      kind: warn
+      text_th: >
+        ข้อจำกัดการคัดเลือกตัวอย่าง (selection bias) — ข้อมูลคัดกรองไม่ใช่
+        probability sample ของประชากร กทม. ผู้เข้ารับการคัดกรองมีลักษณะ
+        ต่างจากผู้ไม่เข้าคัดกรอง (อายุ, พฤติกรรม, co-morbidity). ผลที่นำเสนอ
+        เป็นการพรรณนาประชากรที่คัดกรอง ห้ามนำไปใช้ extrapolate ประชากรกรุงเทพ
+        ทั้งหมดโดยไม่ผ่านขั้นตอน reweighting (เช่น post-stratification กับ
+        ทะเบียนราษฎร์).
+
+  # =======================================================================
+  # CHAPTER 3 — RESULTS
+  # =======================================================================
+  - id: ch3_h
+    block: heading
+    params: { text_th: "บทที่ 3 ผลการวิเคราะห์", text_en: "Chapter 3 — Results", level: 1 }
+
+  # 3.1 — Descriptive
+  - id: ch3_1_h
+    block: heading
+    params: { text_th: "3.1 ลักษณะของกลุ่มตัวอย่าง", text_en: "Cohort Characteristics", level: 2 }
+  - id: pyramid
+    block: chart
+    params:
+      spec_id: age_pyramid
+      caption_th: "ปิรามิดประชากรในการคัดกรอง จำแนกตามอายุและเพศ"
+
+  # 3.2 — Prevalence with CIs
+  - id: ch3_2_h
+    block: heading
+    params: { text_th: "3.2 ความชุกของโรคและปัจจัยเสี่ยง พร้อม 95% CI", text_en: "Disease Prevalence with 95% CIs", level: 2 }
+  - id: prev_chart
+    block: chart
+    params:
+      spec_id: risk_factor_profile
+      caption_th: "อัตราความชุก (prevalence) แต่ละโรค พร้อม Wilson 95% CI"
+
+  # 3.3 — BMI distribution by age
+  - id: ch3_3_h
+    block: heading
+    params: { text_th: "3.3 การกระจายตัวของ BMI ตามช่วงอายุ", text_en: "BMI Distribution by Age", level: 2 }
+  - id: bmi_density
+    block: density_plot
+    params:
+      column: bmi_calc
+      stratify_by: age_group
+      reference_ranges:
+        - [23.0, 25.0, "น้ำหนักเกิน"]
+        - [25.0, 30.0, "อ้วน"]
+        - [30.0, 50.0, "อ้วนรุนแรง"]
+      caption_th: "Kernel density ของ BMI จำแนกตามกลุ่มอายุ พร้อมเกณฑ์ Asia-Pacific"
+
+  # 3.4 — Multivariable
+  - id: ch3_4_h
+    block: heading
+    params: { text_th: "3.4 การวิเคราะห์หลายตัวแปร (Multivariable Logistic Regression)", text_en: "Multivariable Logistic Regression", level: 2 }
+  - id: logreg_dm
+    block: logistic_regression
+    params:
+      outcome_spec_id: "msd_dm_outcome"
+      predictors: ["age", "sex", "bmi_calc", "smoke", "alcohol", "exercise"]
+      caption_th: "Adjusted Odds Ratios สำหรับเบาหวาน (Type 2 DM)"
+
+  # 3.5 — Spatial
+  - id: ch3_5_h
+    block: heading
+    params: { text_th: "3.5 ระบาดวิทยาเชิงพื้นที่ (Spatial Epidemiology)", text_en: "Spatial Epidemiology", level: 2 }
+  - id: choropleth_dm
+    block: choropleth
+    params:
+      outcome_spec_id: "zone_dm_prevalence"
+      geographic_unit: "zone"
+      color_scheme: "Reds"
+      caption_th: "ความชุกเบาหวาน รายเขตสุขภาพ (8 เขต)"
+  - id: morans_i
+    block: spatial_autocorr
+    params:
+      outcome_spec_id: "zone_dm_prevalence"
+      geographic_unit: "zone"
+      n_perm: 999
+
+  # 3.6 — Phenotyping
+  - id: ch3_6_h
+    block: heading
+    params: { text_th: "3.6 การจำแนกกลุ่มย่อยทางคลินิก (Lab Phenotyping)", text_en: "Lab Phenotyping via PCA + k-means", level: 2 }
+  - id: phenotype
+    block: phenotype_clusters
+    params:
+      lab_columns: ["fbs", "ldl", "hdl", "trigly", "egfr", "sgot"]
+      pca_components: 2
+      caption_th: "PCA biplot และ k-means clustering ของผลตรวจห้องปฏิบัติการมาตรฐาน"
+
+  # 3.7 — Comorbidity
+  - id: ch3_7_h
+    block: heading
+    params: { text_th: "3.7 โรคร่วม (Comorbidity Overlap)", text_en: "Comorbidity Overlap", level: 2 }
+  - id: upset
+    block: upset_plot
+    params:
+      sets_spec_id: "ncd_comorbidity"
+      max_intersections: 15
+      caption_th: "UpSet plot — การซ้อนทับของกลุ่มผู้ป่วยตาม 6 โรคหลัก (DM, HT, CVD, dyslipid, obesity, stroke)"
+
+  # =======================================================================
+  # CHAPTER 4 — DISCUSSION
+  # =======================================================================
+  - id: ch4_h
+    block: heading
+    params: { text_th: "บทที่ 4 การอภิปราย", text_en: "Chapter 4 — Discussion", level: 1 }
+  - id: ch4_p
+    block: paragraph
+    params:
+      text_th: >
+        ผลการศึกษาฉบับนี้สอดคล้องกับ Thai NHES VI ในเรื่องการเพิ่มขึ้นของความชุก
+        เบาหวานและความดันสูงตามอายุ; แตกต่างในแง่ของ selection bias ที่ทำให้
+        ตัวเลขสูงกว่า population estimate (NCD-RisC). การกระจุกตัวเชิงพื้นที่
+        ของเบาหวานในเขตสุขภาพชั้นใน (Moran's I บวก) ชี้ให้เห็นว่าการจัดสรร
+        ทรัพยากรคัดกรองเชิงรุกควรเน้น HH cluster zones. กลุ่มย่อยจาก lab
+        phenotyping (k=4 phenotypes) เปิดโอกาสสำหรับการวิจัย intervention
+        แบบ phenotype-targeted ในอนาคต.
+
+  # =======================================================================
+  # CLOSING
+  # =======================================================================
+  - id: closing
+    block: closing_page
+    params:
+      acknowledgments_th: >
+        ขอขอบคุณบุคลากรทางการแพทย์และสาธารณสุขทุกท่านในสำนักการแพทย์
+        กรุงเทพมหานคร ที่ดำเนินโครงการคัดกรองสุขภาพประชากรและรวบรวมข้อมูล
+        ให้รายงานวิชาการฉบับนี้.
+      contact_th: "สำนักการแพทย์ กรุงเทพมหานคร — แผนกวิจัยและพัฒนา"
+      contact_email: "med-research@bangkok.go.th"
+      references:
+        - "WHO Global NCD Action Plan 2013–2030"
+        - "Anselin L (1995). Local indicators of spatial association — LISA. Geographical Analysis 27:93–115."
+        - "Benjamini Y, Hochberg Y (1995). Controlling the false discovery rate. JRSS B 57:289–300."
+        - "Wilson EB (1927). Probable inference, the law of succession, and statistical inference. JASA 22:209–212."
+        - "MED-FACTSHEET.md — โครงการคัดกรองสุขภาพ 1,000,000 คน, สำนักการแพทย์ กทม."
+        - "MSD Best-Practice Guidelines (2024)."

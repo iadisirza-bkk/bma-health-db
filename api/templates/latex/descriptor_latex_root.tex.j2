@@ -22,25 +22,72 @@
    that set ``style.layout = "slides"`` will use a separate root
    template introduced in a follow-up ticket.
    ============================================================ #>
+<# S7 fix: descriptor_latex_root.tex.j2 was missing \documentclass AND
+   the per-language \setmainfont selection that report_whitepaper.tex.j2
+   uses (lines 1-50 of that file). Without these:
+     1. tectonic errors "\usepackage before \documentclass" because the
+        preamble file leads with \usepackage{...};
+     2. Thai (and every non-Latin) char renders blank because fontspec's
+        default font lacks the glyphs.
+   Mirror the legacy whitepaper template's preamble + lang switch.       #>
+\documentclass[11pt,a4paper]{article}
+
+\newcommand{\bmaheaderleft}{<< desc.title_th | latex_safe >>}
+\newcommand{\bmaversion}{<< desc.report_id | latex_escape >>}
 \input{bma_article_preamble}
+
+% --- Language-specific font (mirrors report_whitepaper.tex.j2) ---
+<% if lang == 'th' %>
+\setmainfont{GoogleSans-Regular.ttf}[
+  Path=assets/,
+  BoldFont=GoogleSans-Bold.ttf,
+]
+\setsansfont{GoogleSans-Regular.ttf}[
+  Path=assets/,
+  BoldFont=GoogleSans-Bold.ttf,
+]
+\setdefaultlanguage{english}
+<% elif lang == 'zh' %>
+\setmainfont{STHeiti Light}
+\setdefaultlanguage{english}
+<% elif lang == 'ja' %>
+\setmainfont{Hiragino Sans GB}
+\setdefaultlanguage{english}
+<% elif lang == 'ko' %>
+\setmainfont{Apple SD Gothic Neo}
+\setdefaultlanguage{english}
+<% elif lang == 'hi' %>
+\setmainfont{Devanagari Sangam MN}
+\setdefaultlanguage{hindi}
+<% elif lang == 'ru' %>
+\setmainfont{Times New Roman}
+\setdefaultlanguage{russian}
+<% elif lang == 'my' %>
+\setmainfont{Myanmar MN}
+\setdefaultlanguage{english}
+<% elif lang == 'vi' %>
+\setmainfont{Times New Roman}
+\setdefaultlanguage{english}
+<% elif lang == 'fr' %>
+\setmainfont{Times New Roman}
+\setdefaultlanguage{french}
+<% else %>
+\setmainfont{Times New Roman}
+\setdefaultlanguage{english}
+<% endif %>
+
 \begin{document}
 
-\begin{titlepage}
-\centering
-\vspace*{3cm}
-{\Huge\bfseries << desc.title_th | latex_safe >> \par}
-<% if desc.title_en %>
-\vspace{0.5cm}
-{\Large << desc.title_en | latex_safe >> \par}
-<% endif %>
-\vspace{2cm}
-{\large << generated_date >> \par}
-\vfill
-{\small \texttt{<< desc.report_id | latex_escape >>} \quad lang=<< lang | latex_escape >>}
-\end{titlepage}
-
+<# S10: cover/titlepage is now owned by the ``cover_page`` block (first
+   section of every descriptor). The block emits its own
+   ``\begin{titlepage}...\end{titlepage}`` with logos, ``ข้อมูล ณ`` stamp,
+   and dates — no duplicate cover, no debug string.                       #>
 <% for s in sections %>
 << s.markup >>
+<% if loop.first %>
+\tableofcontents
+\newpage
+<% endif %>
 
 <% endfor %>
 

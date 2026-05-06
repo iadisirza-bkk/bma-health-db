@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Optional, List, Dict, Literal
 
+import asyncio
 import hashlib
 import hmac
 import importlib.util
@@ -3313,11 +3314,17 @@ def _resume_pipeline_export(tmpdir: str, kind: str, history_id: int,
     pre_truncate_counts: Dict[str, int] = {}
 
     try:
-        # ─── load_mode=replace: TRUNCATE bma_med.* CASCADE in a txn ────
+        # ─── load_mode=replace: TRUNCATE bma_med.* CASCADE then COMMIT ──
         # Runs BEFORE export so the export subprocess sees an empty target
-        # set. The transaction is held open; export.py runs inside the same
-        # logical "replace operation" and we COMMIT on success or ROLLBACK
-        # on any failure.
+        # set. CRITICAL: we MUST commit the TRUNCATE before launching the
+        # export subprocess. TRUNCATE takes ACCESS EXCLUSIVE locks on every
+        # target table — holding the transaction open while the export
+        # subprocess tries to INSERT into those same tables produces a
+        # cross-process deadlock (subprocess waits for locks the parent
+        # transaction never releases). The S6 ADR caveat called this out;
+        # the original "rollback on export failure" semantics is therefore
+        # downgraded to best-effort: if export fails, the prior data IS
+        # gone and recovery requires re-uploading.
         if load_mode == "replace":
             _update_progress(history_id, "truncate", 65)
             try:
@@ -3327,6 +3334,12 @@ def _resume_pipeline_export(tmpdir: str, kind: str, history_id: int,
                     truncate_conn, history_id,
                     log_prefix="load_mode=replace",
                 )
+                # COMMIT immediately so the ACCESS EXCLUSIVE locks release
+                # before the subprocess starts. Without this, export.py
+                # blocks on every INSERT and the pipeline hangs forever.
+                truncate_conn.commit()
+                truncate_conn.close()
+                truncate_conn = None
                 # Persist the pre-truncate counts + mode for audit visibility.
                 detail_payload = {
                     "load_mode": "replace",
@@ -3364,8 +3377,10 @@ def _resume_pipeline_export(tmpdir: str, kind: str, history_id: int,
                 if truncate_conn is not None:
                     try:
                         truncate_conn.rollback()
+                        truncate_conn.close()
                     except Exception:
                         pass
+                    truncate_conn = None
                 _set_history_error(history_id, "TRUNCATE failed",
                                    detail=_sanitize_error(exc))
                 _audit(history_id, "error", reason="truncate_failed",
@@ -3389,34 +3404,18 @@ def _resume_pipeline_export(tmpdir: str, kind: str, history_id: int,
             timeout=PIPELINE_TIMEOUT_EXPORT,
         )
         if r.returncode != 0:
-            # Roll back the open TRUNCATE transaction so the prior data set
-            # is preserved on a failed replace. (No-op for append mode.)
-            if truncate_conn is not None:
-                try:
-                    truncate_conn.rollback()
-                except Exception:
-                    pass
+            # TRUNCATE was already committed (replace mode) — prior data
+            # is gone. Operator must re-upload to recover. We still flag
+            # this as a hard error so the UI surfaces it loudly.
             _set_history_error(history_id, "export failed",
                                detail=(r.stderr or r.stdout or "")[-4000:])
             _audit(history_id, "error", reason="export_failed",
                    rc=r.returncode)
             return
 
-        # Export subprocess returned rc=0 — commit the TRUNCATE so it's
-        # durable. In append mode this is a no-op (truncate_conn is None).
-        if truncate_conn is not None:
-            try:
-                truncate_conn.commit()
-            except Exception as exc:
-                # Commit shouldn't fail in practice but be defensive.
-                _set_history_error(
-                    history_id, "TRUNCATE commit failed",
-                    detail=_sanitize_error(exc),
-                )
-                _audit(history_id, "error",
-                       reason="truncate_commit_failed",
-                       message=_sanitize_error(exc))
-                return
+        # In replace mode the TRUNCATE was committed before subprocess.
+        # In append mode truncate_conn is None. Either way, no commit
+        # work to do here.
 
         # Best-effort row count from export stdout — never load-bearing.
         try:
@@ -3495,6 +3494,40 @@ def _resume_pipeline_export(tmpdir: str, kind: str, history_id: int,
         )
         _audit(history_id, "success",
                rows_inserted=rows_inserted, view_status=view_status)
+
+        # ─── S9 — Bulk pre-build report cache ──────────────────────────
+        # Fire-and-forget the popular-set rebuild for every descriptor.
+        # The build worker is idempotent (cache hits skip) so re-firing
+        # after a no-op data refresh is cheap. Failures are swallowed —
+        # users can fall back to live-compile next request.
+        try:
+            from services.reports.build_worker import get_build_worker
+            from services.reports.registry import report_registry as _registry
+            _worker = get_build_worker()
+            for _rid in _registry().list_ids():
+                _worker.enqueue_popular_set(_rid)
+            try:
+                _loop = asyncio.get_event_loop()
+                if _loop.is_running():
+                    asyncio.create_task(_worker.run_pending())
+                else:
+                    threading.Thread(
+                        target=lambda: asyncio.run(_worker.run_pending()),
+                        daemon=True,
+                        name="bma-bulk-prebuild",
+                    ).start()
+            except RuntimeError:
+                # No running loop in this thread — drain in a daemon thread.
+                threading.Thread(
+                    target=lambda: asyncio.run(_worker.run_pending()),
+                    daemon=True,
+                    name="bma-bulk-prebuild",
+                ).start()
+        except Exception:
+            logger.warning(
+                "S9 bulk pre-build hook failed (non-fatal)",
+                exc_info=True,
+            )
     except Exception as exc:
         # Roll back the truncate transaction if it's still open so the prior
         # data set is preserved on any unhandled error after truncate.

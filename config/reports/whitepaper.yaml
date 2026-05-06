@@ -27,7 +27,9 @@
 report_id: whitepaper
 title_th: "รายงานสุขภาพประชากร กทม."
 title_en: "BMA Population Health Whitepaper"
-formats: [latex, html]
+description_th: "รายงานสุขภาพฉบับเต็มของประชากรกรุงเทพมหานคร ประกอบด้วยบทสรุปผู้บริหาร สถิติเชิงพรรณนาแยกรายเขต × รายโรค การวิเคราะห์ปัจจัยเสี่ยง สถิติเชิงอนุมาน แนวโน้มตามช่วงเวลา และข้อสังเกตจาก AI"
+description_en: "Full population-health whitepaper for Bangkok — executive summary, district × disease descriptive stats, risk-factor analysis, inferential statistics, time-series trends, and AI-generated insights."
+formats: [pdf, html]
 languages: [th, en, zh, ja, ko, ru, my, hi, vi, fr]
 audience: [public, clinician]
 sections:
@@ -38,7 +40,28 @@ sections:
     block: cover_page
     params:
       mode: title
-      logo_path: "templates/latex/assets/bma_logo.png"
+      logo_path: "assets/bma_logo.png"
+
+  # -------------------------------------------------------------------------
+  # S8 — Audience-segmented summary sections.
+  # Each block sets `audience_target` (people / executive / clinician /
+  # researcher); the orchestrator filters by `?audience=...` at render
+  # time. With NO audience filter, all four render in the listed order.
+  # Sandwiched between cover and the original §1 below so the audience
+  # gets their bespoke view BEFORE the deep-dive whitepaper body.
+  # -------------------------------------------------------------------------
+  - id: section_people
+    block: audience_summary_people
+    params: {}
+  - id: section_executive
+    block: audience_summary_executive
+    params: {}
+  - id: section_clinician
+    block: audience_summary_clinician
+    params: {}
+  - id: section_researcher
+    block: audience_summary_researcher
+    params: {}
 
   # -------------------------------------------------------------------------
   # Section 1 — Executive summary (KPIs)
@@ -254,19 +277,27 @@ sections:
       numbered: true
 
   # -------------------------------------------------------------------------
-  # Closing
+  # Closing — acknowledgments, references, contact (S10 template-first)
   # -------------------------------------------------------------------------
   - id: closing
-    block: cover_page
+    block: closing_page
     params:
-      mode: closing
-      subtitle_th: "ขอบคุณ"
-      logo_path: "templates/latex/assets/bma_logo.png"
+      heading_th: "ภาคผนวก / กิตติกรรมประกาศ"
+      acknowledgments_th: |
+        ขอขอบคุณบุคลากรทางการแพทย์และสาธารณสุข สำนักการแพทย์ กรุงเทพมหานคร
+        ที่ดำเนินโครงการคัดกรองสุขภาพประชากรและรวบรวมข้อมูลให้รายงานนี้
+        รวมถึงทีมพัฒนาระบบ BMA-MED ที่จัดเตรียมข้อมูลและเครื่องมือวิเคราะห์
+      contact_th: "สำนักการแพทย์ กรุงเทพมหานคร"
+      contact_email: "med-info@bangkok.go.th"
+      references:
+        - "WHO Global NCD Action Plan 2013-2030"
+        - "MSD Best-Practice Guidelines (2024)"
+        - "MED-FACTSHEET.md (โครงการคัดกรองสุขภาพ 1,000,000 คน)"
 
 style:
   font_family: "Sarabun"
   primary_color: "#00744B"
-  logo_path: "templates/latex/assets/bma_logo.png"
+  logo_path: "assets/bma_logo.png"
 cache:
   enabled: true
   invalidate_on: [data_hash]

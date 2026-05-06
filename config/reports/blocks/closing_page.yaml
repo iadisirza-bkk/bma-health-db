@@ -1,0 +1,5 @@
+block_id: closing_page
+class_path: services.reports.blocks.closing_page:ClosingPageBlock
+description_th: "หน้าปิดท้าย: กิตติกรรมประกาศ, รายการอ้างอิง, ข้อมูลติดต่อ"
+description_en: "Closing page: acknowledgments, references list, contact info"
+enabled: true

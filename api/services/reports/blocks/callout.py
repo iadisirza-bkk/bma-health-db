@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict
 
 from services.latex_utils import latex_escape
 from services.reports.blocks.base import ContentBlock
+from services.reports.polish import maybe_polish
 from services.reports.spec import RenderContext
 
 
@@ -86,6 +87,17 @@ class CalloutBlock(ContentBlock):
             text = params.text_en
         else:
             text = params.text_th
+        # S9: optional Gemma polish — runs only when ``polish_prose``
+        # feature flag is on AND a polish_service is wired up. Title text
+        # is left alone (it's typically too short to benefit + grammar
+        # rules differ for headings).
+        text = await maybe_polish(
+            ctx,
+            self.block_id,
+            text,
+            context_hint=f"callout body, kind={params.kind}",
+            lang=ctx.lang,
+        )
         return {
             "kind": params.kind,
             "title": params.title_th,  # title only authored in Thai today

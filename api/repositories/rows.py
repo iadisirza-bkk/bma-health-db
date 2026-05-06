@@ -130,6 +130,19 @@ class ScreeningCoverageRow(_RowBase):
     pct_coverage: Optional[float] = None
 
 
+class ZonePrevalenceRow(_RowBase):
+    """Per-zone disease prevalence — `mv_summary_zones` projected onto a
+    single disease column. Used by ``zone_*_prevalence`` chart specs that
+    feed the choropleth + spatial_autocorr blocks in ``whitepaper_phd``."""
+
+    zone_code: str
+    name_th: Optional[str] = None
+    name_en: Optional[str] = None
+    total_screened: int
+    cases: int
+    pct: Optional[float] = None
+
+
 class RepeatScreeningRow(_RowBase):
     """One row of `mv_kpi_tier1` — distinct persons vs visit count per
     (district × source × bucket). visits/persons ratio = repeat-screening."""

@@ -1,0 +1,5 @@
+block_id: phenotype_clusters
+class_path: services.reports.blocks.phenotype_clusters:PhenotypeClustersBlock
+description_th: "PCA biplot + KMeans phenotype discovery — โปรไฟล์เชิงพหุตัวแปร"
+description_en: "PCA biplot + KMeans phenotype discovery — multivariate phenotype profile"
+enabled: true

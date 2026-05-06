@@ -51,6 +51,8 @@ from routers.kpi import router as kpi_router
 from routers.executive import router as executive_router
 from routers.promotion import router as promotion_router
 from routers.disease_control import router as disease_control_router
+from routers.dm import router as dm_router
+from routers.hpt import router as hpt_router
 from routers.facility import router as facility_router
 from routers.strategy import router as strategy_router
 from routers.research import router as research_router
@@ -115,6 +117,24 @@ try:
     _new_routers.append(chat_v2_router)
 except ImportError:
     pass
+try:
+    from routers.reports_admin import router as reports_admin_router
+    _new_routers.append(reports_admin_router)
+except ImportError:
+    pass
+
+# Pipeline disease routers (DM, HPT, CVD, ...) — auto-registered by
+# scaffold/applier.py. Order: keep these together so the applier's
+# regex anchor lands here.
+from routers.cvd import router as cvd_router
+from routers.ckd import router as ckd_router
+from routers.liver import router as liver_router
+from routers.anemia import router as anemia_router
+from routers.xray import router as xray_router
+from routers.cervical import router as cervical_router
+from routers.colon import router as colon_router
+from routers.obesity import router as obesity_router
+from routers.dyslipidemia import router as dyslipidemia_router
 
 # --------------------------------------------------------------------------- #
 # Audit logging
@@ -240,6 +260,8 @@ _OPENAPI_TAGS = [
     {"name": "Admin", "description": "Admin web UI: CSV upload, ETL, dashboard, history."},
     {"name": "Admin API", "description": "JSON admin endpoints: data status, audit log, Excel upload."},
     {"name": "Monitoring", "description": "Data quality, ETL status, query performance."},
+    {"name": "DM Classification", "description": "DM 4-pattern Venn classification per district/zone/city. k-anon=5 enforced."},
+    {"name": "HPT Classification", "description": "HPT (hypertension) 4-pattern Venn classification per district/zone/city. k-anon=5 enforced."},
 ]
 
 app = FastAPI(
@@ -297,6 +319,8 @@ app.include_router(kpi_router)
 app.include_router(executive_router)
 app.include_router(promotion_router)
 app.include_router(disease_control_router)
+app.include_router(dm_router)
+app.include_router(hpt_router)
 app.include_router(facility_router)
 app.include_router(strategy_router)
 app.include_router(research_router)
@@ -310,6 +334,15 @@ for _r in _new_routers:
 
 # Prometheus metrics — public (no auth), see security._PUBLIC_PATHS.
 app.include_router(prometheus_router)
+app.include_router(cvd_router)
+app.include_router(ckd_router)
+app.include_router(liver_router)
+app.include_router(anemia_router)
+app.include_router(xray_router)
+app.include_router(cervical_router)
+app.include_router(colon_router)
+app.include_router(obesity_router)
+app.include_router(dyslipidemia_router)
 
 # Static files
 _static_dir = os.path.join(os.path.dirname(__file__), "static")

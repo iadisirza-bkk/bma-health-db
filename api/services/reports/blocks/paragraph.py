@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict
 
 from services.latex_utils import latex_escape
 from services.reports.blocks.base import ContentBlock
+from services.reports.polish import maybe_polish
 from services.reports.spec import RenderContext
 
 logger = logging.getLogger("api.services.reports.blocks.paragraph")
@@ -97,6 +98,17 @@ class ParagraphBlock(ContentBlock):
         getter = getattr(ctx.data_collector, "data", None)
         bag: Any = getter() if callable(getter) else (getter or {})
         text = _substitute(raw, bag)
+        # S9: optional Gemma polish — runs only when ``polish_prose``
+        # feature flag is on AND a polish_service is wired up. The polish
+        # is hash-cached so identical (text, hint, lang) returns the same
+        # output forever; same data → same prose.
+        text = await maybe_polish(
+            ctx,
+            self.block_id,
+            text,
+            context_hint="paragraph block prose",
+            lang=ctx.lang,
+        )
         return {"text": text}
 
     def render_latex(

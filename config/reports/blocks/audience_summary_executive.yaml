@@ -1,0 +1,5 @@
+block_id: audience_summary_executive
+class_path: services.reports.blocks.audience_summary_executive:AudienceSummaryExecutiveBlock
+description_th: "สรุปสำหรับผู้บริหาร — KPI 3 ตัว + เขตที่ต้องเร่งดำเนินการ + ข้อเสนอแนะ"
+description_en: "Executive dashboard summary (3 KPI tiles + priority districts + data-driven recommendations)"
+enabled: true

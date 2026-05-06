@@ -377,6 +377,58 @@ async def test_trend_table_render_html_has_class_and_arrows() -> None:
     assert "&#8595;" in html  # down arrow
 
 
+@pytest.mark.anyio
+async def test_trend_table_caption_renders_above_tabular() -> None:
+    """Phase 0 caption convention: when ``caption_th`` is supplied, the
+    LaTeX output wraps the tabular in a ``table`` float with ``\\caption``
+    appearing BEFORE ``\\begin{tabular}`` (= caption above), and the HTML
+    output puts ``<caption>`` as the first child of ``<table class=
+    "trend-table">``. Without a caption, the legacy bare-tabular /
+    un-captioned-table output is preserved.
+    """
+    block = TrendTableBlock()
+    params = block.Parameters(
+        metric_filter="DM at-risk %",
+        caption_th="แนวโน้มอัตราเสี่ยงโรคไม่ติดต่อเรื้อรัง (Mann-Kendall)",
+        caption_en="NCD risk trend (Mann-Kendall)",
+    )
+    ctx = _ctx(_trend_payload())
+    data = await block.collect(ctx, params)
+
+    # Caption resolved per ctx.lang (default "th") + label auto-derived
+    # from source_path + metric_filter so different filters get distinct
+    # ``\label``s on the same source.
+    assert data["caption"] == "แนวโน้มอัตราเสี่ยงโรคไม่ติดต่อเรื้อรัง (Mann-Kendall)"
+    assert data["label"] == "tab:trend:trends__DM_at_risk__"
+
+    # LaTeX: \caption MUST appear BEFORE \begin{tabular} (= above).
+    latex = block.render_latex(data, params, ctx)
+    assert r"\begin{table}" in latex
+    cap_idx = latex.find(r"\caption{")
+    tab_idx = latex.find(r"\begin{tabular}")
+    assert cap_idx != -1 and tab_idx != -1
+    assert cap_idx < tab_idx, "caption must render ABOVE the tabular"
+
+    # HTML: <caption> MUST be the first child of <table class="trend-table">.
+    html = block.render_html(data, params, ctx)
+    assert '<table class="trend-table"' in html
+    assert "<caption>" in html
+    table_open = html.find("<table")
+    table_open_close = html.find(">", table_open)
+    cap_open = html.find("<caption>")
+    assert table_open < cap_open <= table_open_close + 1
+
+    # Back-compat: omitting caption_* keeps the legacy output shape.
+    params_no_cap = block.Parameters()
+    data_no_cap = await block.collect(ctx, params_no_cap)
+    latex_no_cap = block.render_latex(data_no_cap, params_no_cap, ctx)
+    assert r"\begin{table}" not in latex_no_cap
+    assert r"\caption" not in latex_no_cap
+    html_no_cap = block.render_html(data_no_cap, params_no_cap, ctx)
+    assert "<caption>" not in html_no_cap
+    assert html_no_cap.startswith('<table class="trend-table">')
+
+
 # ===========================================================================
 # CoverPageBlock — mode="title" (preserve) and mode="closing" (new)
 # ===========================================================================
@@ -401,9 +453,10 @@ def test_cover_page_params_invalid_mode_rejected() -> None:
 
 @pytest.mark.anyio
 async def test_cover_page_title_mode_preserves_existing_behaviour() -> None:
-    """Regression: ``mode="title"`` (the default) must still emit the
-    same ``\\title``/``\\maketitle`` LaTeX surface that all current
-    descriptors render."""
+    """``mode="title"`` (the default) emits a manual ``\\begin{titlepage}``
+    block (S10 redesign) — replaces the old ``\\title``/``\\maketitle``
+    pair which produced a duplicate cover when the root template also
+    rendered its own titlepage."""
     block = CoverPageBlock()
     params = block.Parameters(
         subtitle_th="สรุปประจำปี",
@@ -413,9 +466,14 @@ async def test_cover_page_title_mode_preserves_existing_behaviour() -> None:
     ctx = _ctx()
     data = await block.collect(ctx, params)
     latex = block.render_latex(data, params, ctx)
-    assert r"\title{" in latex
-    assert r"\maketitle" in latex
+    # New surface: full ``\begin{titlepage}...\end{titlepage}`` env with
+    # logo + title + subtitle + date inside.
+    assert r"\begin{titlepage}" in latex
+    assert r"\end{titlepage}" in latex
     assert r"\includegraphics" in latex
+    assert "/tmp/logo.png" in latex
+    # Title text is rendered directly (no \title{}/\maketitle indirection)
+    assert "รายงานทดสอบ" in latex
     # Closing-mode marker must NOT appear.
     assert "ขอบคุณ" not in latex
     html = block.render_html(data, params, ctx)

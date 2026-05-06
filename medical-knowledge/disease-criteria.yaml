@@ -1,0 +1,120 @@
+# =============================================================================
+# Disease criteria — machine-checked source of truth
+# =============================================================================
+# This file is the AUTHORITATIVE specification for the 11 BMA-MED diseases,
+# derived from the official guideline at:
+#   /Users/dev/bma-med/medical-knowledge/disease-criteria-guideline.jpg
+#
+# It is parsed by `scaffold/lint.py` to verify that:
+#   1. Every disease in `bma-health-db/scaffold/diseases.py` matches its
+#      pipeline classification (ncd vs screening).
+#   2. Every chip / criterion label matches verbatim.
+#   3. No diseases drift in or out without updating this file.
+#
+# When the official guideline updates a threshold or reclassifies a disease:
+#   1. Update this YAML first.
+#   2. Update `scaffold/diseases.py` to match.
+#   3. Run `python -m scaffold.lint` — it MUST pass.
+#   4. Run `python -m scaffold.scaffold <key> --apply`.
+#
+# The scaffolder is gated on `lint` passing. Drift = scaffolder refuses.
+# =============================================================================
+
+version: 1
+guideline_revision: "2026-05-05"
+guideline_image: medical-knowledge/disease-criteria-guideline.jpg
+
+# Pipeline classification:
+#   ncd       — 4-axis pattern (c1=risk, c2=self-report, c3=family, c4=lab)
+#   screening — single-axis abnormal lab/test result
+diseases:
+  # ─── NCD pipeline (rows 1–2 in guideline) ───────────────────────────────
+  - key: dm
+    pipeline: ncd
+    name_th: เบาหวาน
+    name_en: Diabetes
+    criterion:
+      label_th: ผลแลป FPG ≥ 126
+      label_en: "FPG ≥ 126"
+
+  - key: hpt
+    pipeline: ncd
+    name_th: ความดันโลหิตสูง
+    name_en: Hypertension
+    criterion:
+      label_th: ผลวัด BP ≥ 140/90
+      label_en: "BP ≥ 140/90"
+
+  # ─── Screening pipeline (rows 3–11 in guideline) ────────────────────────
+  - key: dyslipidemia
+    pipeline: screening
+    name_th: โรคไขมันในเลือดสูง
+    name_en: Dyslipidemia
+    criterion:
+      label_th: "Cholesterol ≥ 200"
+      label_en: "Cholesterol ≥ 200"
+
+  - key: obesity
+    pipeline: screening
+    name_th: โรคอ้วน
+    name_en: Obesity
+    criterion:
+      label_th: "BMI ≥ 23"
+      label_en: "BMI ≥ 23"
+
+  - key: ckd
+    pipeline: screening
+    name_th: โรคไต
+    name_en: CKD
+    criterion:
+      label_th: "eGFR < 60"
+      label_en: "eGFR < 60"
+
+  - key: liver
+    pipeline: screening
+    name_th: โรคตับ
+    name_en: Liver
+    criterion:
+      label_th: "SGOT/SGPT ≥ 120"
+      label_en: "SGOT/SGPT ≥ 120"
+
+  - key: anemia
+    pipeline: screening
+    name_th: ภาวะโลหิตจาง
+    name_en: Anemia
+    criterion:
+      label_th: "Hb < 13 (ช.) / < 12 (ญ.)"
+      label_en: "Hb < 13 (M) / < 12 (F)"
+
+  - key: cvd
+    pipeline: screening   # Per 2026-05-05 guideline: was NCD c4=Chol≥240,
+                          # now single-axis EKG. See DISEASE-CRITERIA-BASELINE.md.
+    name_th: โรคหัวใจและหลอดเลือด
+    name_en: Cardiovascular
+    criterion:
+      label_th: ผล EKG ผิดปกติ
+      label_en: EKG abnormal
+
+  - key: xray
+    pipeline: screening
+    name_th: X-ray
+    name_en: Chest X-ray
+    criterion:
+      label_th: Chest X-ray ผิดปกติ
+      label_en: Chest X-ray abnormal
+
+  - key: cervical
+    pipeline: screening
+    name_th: มะเร็งปากมดลูก
+    name_en: Cervical cancer
+    criterion:
+      label_th: ผลตรวจมะเร็งปากมดลูก ผิดปกติ
+      label_en: Cervical cancer screen abnormal
+
+  - key: colon
+    pipeline: screening
+    name_th: มะเร็งลำไส้
+    name_en: Colon cancer
+    criterion:
+      label_th: ผลตรวจมะเร็งลำไส้ ผิดปกติ
+      label_en: Colon cancer screen abnormal

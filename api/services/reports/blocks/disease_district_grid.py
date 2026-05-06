@@ -357,8 +357,15 @@ class DiseaseDistrictGridBlock(ContentBlock):
         out: List[str] = []
         # ``l`` for the district name + N right-aligned numeric columns.
         col_spec = "l" + "r" * len(metrics)
+        # S7 carryover (S8 fix): the ``%`` in headers like ``%เสี่ยง`` /
+        # ``%พบโรค`` is LaTeX's comment marker and silently swallowed
+        # the closing brace of ``\textbf{...}``, producing an unterminated
+        # ``\textbf`` and a "File ended while scanning use of \textbf"
+        # compile error. Run every header through ``latex_safe`` so the
+        # ``%`` (and any other future hot character) is properly escaped.
         header_cells = [r"\textbf{เขต}"] + [
-            r"\textbf{" + _METRIC_HEADER_TH.get(m, m) + "}" for m in metrics
+            r"\textbf{" + latex_safe(_METRIC_HEADER_TH.get(m, m)) + "}"
+            for m in metrics
         ]
         header_line = " & ".join(header_cells) + r" \\"
         for tbl in tables:
@@ -381,7 +388,13 @@ class DiseaseDistrictGridBlock(ContentBlock):
                 for r in rows:
                     cells = [latex_safe(r["district_name"])]
                     for m in metrics:
-                        cells.append(_format_metric(r.get(m), m))
+                        # ``_format_metric`` returns strings like "23.0%"
+                        # for pct metrics; the raw ``%`` is a LaTeX
+                        # comment marker and would silently swallow the
+                        # rest of the line. Run every cell through
+                        # ``latex_safe`` so ``%`` (and any future hot
+                        # char) is properly escaped.
+                        cells.append(latex_safe(_format_metric(r.get(m), m)))
                     out.append(" & ".join(cells) + r" \\")
             out.append(r"\bottomrule")
             out.append(r"\end{longtable}")

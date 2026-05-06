@@ -32,6 +32,8 @@ TOOL_KEYWORDS: dict[str, list[str]] = {
         # Lab results
         "lab", "ผลเลือด", "ผลตรวจ", "fbs", "cholesterol", "hemoglobin", "ค่าเลือด",
         "น้ำตาล", "ไขมัน", "creatinine", "egfr", "โลหิตจาง", "ไต",
+        "hba1c", "เอวันซี", "น้ำตาลสะสม", "fpg", "glucose", "ldl", "hdl",
+        "triglyceride", "ไตรกลีเซอไรด์",
         # Cost / budget
         "งบ", "budget", "ต้นทุน", "cost", "ค่าใช้จ่าย", "จัดสรร", "งบประมาณ",
         # Screening tests
@@ -65,6 +67,9 @@ TOOL_KEYWORDS: dict[str, list[str]] = {
         "นัยสำคัญ", "forest", "trend", "แนวโน้ม",
         "สัมพันธ์", "เกี่ยวข้อง", "ปัจจัย", "สาเหตุ",
         "สูบบุหรี่", "ดื่มเหล้า", "ไม่ออกกำลังกาย",
+        # Multi-disease / comorbidity vocab — eval found these missed.
+        # The comorbidity test inside query_statistical_test answers them.
+        "เชื่อมโยง", "โรคร่วม", "หลายโรค", "พร้อมกัน", "ร่วมกัน",
     ],
     "generate_adaptive_report": [
         "รายงาน", "report", "pdf", "slide", "สไลด์", "เอกสาร", "document",

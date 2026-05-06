@@ -1,0 +1,43 @@
+name: lint
+
+# Runs on every push/PR. The criteria-drift check is fast (<1s) and
+# is the project's authoritative gate against shipping a disease whose
+# implementation disagrees with the official guideline.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  criteria-drift:
+    name: Criteria YAML ↔ scaffold/diseases.py
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install lint dependencies
+        run: pip install --quiet pyyaml
+
+      - name: Verify disease-criteria.yaml is reachable
+        run: |
+          # The YAML lives outside this repo (in /Users/dev/bma-med locally).
+          # In CI we either need it checked into this repo OR provided via env.
+          # For now: copy the file into the repo's medical-knowledge/ dir as
+          # part of every PR that updates criteria. The scaffold.lint module
+          # reads from a hard-coded path; CI overrides via BMA_CRITERIA_YAML.
+          if [ -f medical-knowledge/disease-criteria.yaml ]; then
+            echo "BMA_CRITERIA_YAML=$(pwd)/medical-knowledge/disease-criteria.yaml" >> $GITHUB_ENV
+          else
+            echo "::warning::medical-knowledge/disease-criteria.yaml not found in this repo"
+            echo "::warning::CI cannot validate criteria drift without it. Falling back to in-tree guard only."
+          fi
+
+      - name: Run scaffold.lint (refuses if criteria.yaml drifts from diseases.py)
+        run: python -m scaffold.lint

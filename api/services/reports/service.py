@@ -37,6 +37,11 @@ from pydantic import BaseModel
 import config
 from services.reports.blocks import BlockRegistry, ContentBlock, block_registry
 from services.reports.data_collector import ReportDataCollector
+from services.reports.format_alias import (
+    canonicalize as _canonicalize_fmt,
+    format_matches as _format_matches,
+    warn_if_legacy as _warn_legacy_fmt,
+)
 from services.reports.registry import ReportRegistry, report_registry
 from services.reports.renderer import (
     RendererRegistry,
@@ -86,7 +91,10 @@ logger = logging.getLogger("api.services.reports.service")
 # ---------------------------------------------------------------------------
 
 _FMT_EXT = {
+    # ``latex`` and ``pdf`` both produce the same .pdf artefact — see
+    # ``services.reports.format_alias`` for the rename rationale.
     "latex": ".pdf",
+    "pdf": ".pdf",
     "html": ".html",
     "pptx": ".pptx",
 }
@@ -99,8 +107,35 @@ _FMT_EXT = {
 # ---------------------------------------------------------------------------
 
 
+class _SoftFormatter(__import__("string").Formatter):
+    """``str.format``-style formatter that leaves unknown placeholders intact.
+
+    Descriptors mix two substitution layers: descriptor-level params
+    (``{zone_code}`` resolved here) and block-level data references
+    (``{zone.total_screened}`` resolved later by ``ParagraphBlock``).
+    A plain ``str.format`` raises on the second flavour because the root
+    name (``zone``) isn't in ``params``. This subclass intercepts the
+    miss and re-emits ``{path.with.dots}`` so the block sees the original
+    placeholder.
+    """
+
+    def get_field(self, field_name, args, kwargs):  # type: ignore[override]
+        try:
+            return super().get_field(field_name, args, kwargs)
+        except (KeyError, IndexError, AttributeError):
+            return "{" + field_name + "}", field_name
+
+
+_SOFT_FMT = _SoftFormatter()
+
+
 def _substitute(node: Any, params: Mapping[str, Any]) -> Any:
-    """Recursively format string leaves in ``node`` against ``params``."""
+    """Recursively format string leaves in ``node`` against ``params``.
+
+    Unknown placeholders pass through unchanged (see ``_SoftFormatter``)
+    so block-level substitution (``ParagraphBlock``, etc.) still gets a
+    chance to resolve ``{path.like.this}`` against the data collector.
+    """
     if not params:
         return node
     if isinstance(node, str):
@@ -108,7 +143,7 @@ def _substitute(node: Any, params: Mapping[str, Any]) -> Any:
         # — avoids surprises from stray '{' in copy-pasted Thai text.
         if "{" not in node:
             return node
-        return node.format(**params)
+        return _SOFT_FMT.vformat(node, (), dict(params))
     if isinstance(node, dict):
         return {k: _substitute(v, params) for k, v in node.items()}
     if isinstance(node, list):
@@ -188,6 +223,9 @@ class ReportService:
         *,
         params: Optional[Mapping[str, Any]] = None,
         out_path: Optional[Path] = None,
+        audience: Optional[set[str]] = None,
+        feature_flags: Optional[Mapping[str, Any]] = None,
+        polish_service: Optional[Any] = None,
     ) -> Path:
         """Full render pipeline. Returns path to the produced artefact.
 
@@ -200,6 +238,22 @@ class ReportService:
         cache path. Mostly useful for tests / one-off renders that don't
         want to thrash the shared cache directory. When supplied, the
         cache short-circuit is bypassed and no .hash sidecar is written.
+
+        ``audience`` (S8) is the set of requested
+        :class:`AudienceTarget` values (string form). When provided, the
+        orchestrator drops every section whose underlying block declares
+        an ``audience_target`` that is not in the set. Audience-agnostic
+        blocks (``audience_target = None``) ALWAYS render. The default
+        ``None`` means "render every section" (status quo).
+
+        ``feature_flags`` (S9) is forwarded to ``RenderContext`` so blocks
+        can opt into experimental behaviour (e.g. ``polish_prose``). The
+        flag dict is propagated as-is — unknown keys are silently
+        ignored by blocks that don't care.
+
+        ``polish_service`` (S9) is the optional ``TextPolishService``
+        handle wired up by the router when ``?polish=1``. Defaults to
+        ``None`` (no polish).
         """
         # Wrap the full render in a duration histogram + status counter.
         # Cache short-circuits also count as "ok" — they're a successful
@@ -207,7 +261,11 @@ class ReportService:
         with track_duration(report_render_duration, {"report_id": report_id, "fmt": fmt}):
             try:
                 produced = await self._render_inner(
-                    report_id, fmt, lang, params=params, out_path=out_path
+                    report_id, fmt, lang,
+                    params=params, out_path=out_path,
+                    audience=audience,
+                    feature_flags=feature_flags,
+                    polish_service=polish_service,
                 )
             except Exception:
                 if report_render_total is not None:
@@ -229,6 +287,9 @@ class ReportService:
         *,
         params: Optional[Mapping[str, Any]] = None,
         out_path: Optional[Path] = None,
+        audience: Optional[set[str]] = None,
+        feature_flags: Optional[Mapping[str, Any]] = None,
+        polish_service: Optional[Any] = None,
     ) -> Path:
         """Original render pipeline. Split out so the public ``render``
         wrapper can attach metrics without indenting the entire body.
@@ -236,6 +297,13 @@ class ReportService:
         desc = self._descriptors.get(report_id)
         desc = _resolve_descriptor(desc, params)
         self._validate_request(desc, fmt, lang)
+        # S8: filter by audience_target BEFORE we hit the renderer. Done
+        # on a fresh copy of ``desc.sections`` so the registry's stored
+        # descriptor (returned by ``describe()``) is never mutated. The
+        # descriptor's other fields stay intact — only the section list
+        # is shortened.
+        if audience is not None:
+            desc = self._filter_sections_by_audience(desc, audience)
 
         try:
             renderer = self._renderers.get(fmt)
@@ -257,14 +325,16 @@ class ReportService:
         # ------------------------------------------------------------
         # Cache check — short-circuit if we have a fresh artefact whose
         # data-hash matches the live DB. Both files must be present and
-        # the hash must agree; otherwise we re-render. Parameterised or
-        # explicit-out_path renders disable cache (a {zone_code} change
-        # should produce a different cache key, which we'll add in S4.4).
+        # the hash must agree; otherwise we re-render. Parameterised,
+        # audience-filtered, or explicit-out_path renders disable cache
+        # (different audience set = different output file but the same
+        # cache key — bypass instead of risking a stale hit).
         # ------------------------------------------------------------
         if (
             desc.cache.enabled
             and not params
             and not explicit_out_path
+            and audience is None
             and self._is_cache_fresh(out_path)
         ):
             logger.info(
@@ -291,6 +361,8 @@ class ReportService:
             fmt=fmt,
             descriptor=desc,
             requested_at=datetime.now(timezone.utc),
+            feature_flags=dict(feature_flags or {}),
+            polish_service=polish_service,
         )
         # ADR-03 S6 addendum: container blocks (e.g. ``two_column_layout``)
         # need a back-reference to the orchestrator so they can resolve
@@ -317,7 +389,12 @@ class ReportService:
         # NOT leave a fresh-looking hash on disk. Parameterised renders
         # skip the sidecar (see cache check above).
         # ------------------------------------------------------------
-        if desc.cache.enabled and not params and not explicit_out_path:
+        if (
+            desc.cache.enabled
+            and not params
+            and not explicit_out_path
+            and audience is None
+        ):
             try:
                 self._write_hash_sidecar(produced, self._data.data_hash())
             except Exception as exc:  # pragma: no cover - defensive
@@ -332,18 +409,35 @@ class ReportService:
         return produced
 
     async def list(self) -> List[Dict[str, Any]]:
-        """Catalog every registered descriptor, FE-friendly shape."""
+        """Catalog every registered descriptor, FE-friendly shape.
+
+        Formats are canonicalised before they leave the API surface — any
+        descriptor still declaring legacy ``latex`` is reported as
+        ``pdf`` to the catalog (S7 rename). Backward-compat alias remains
+        accepted on render requests; this is just the outward-facing
+        label the FE shows.
+        """
         catalog: List[Dict[str, Any]] = []
         for report_id in self._descriptors.list_ids():
             desc = self._descriptors.get(report_id)
+            # Canonicalise + de-dup while preserving order. ``latex`` and
+            # ``pdf`` collapse to a single ``pdf`` entry.
+            seen: List[str] = []
+            for f in desc.formats:
+                canon = _canonicalize_fmt(f)
+                if canon not in seen:
+                    seen.append(canon)
             catalog.append(
                 {
                     "report_id": desc.report_id,
                     "title_th": desc.title_th,
                     "title_en": desc.title_en,
-                    "formats": list(desc.formats),
+                    "description_th": desc.description_th,
+                    "description_en": desc.description_en,
+                    "formats": seen,
                     "languages": list(desc.languages),
                     "audience": list(desc.audience),
+                    "parameters": [p.model_dump() for p in desc.parameters],
                 }
             )
         return catalog
@@ -360,16 +454,67 @@ class ReportService:
     def _validate_request(
         desc: ReportDescriptor, fmt: str, lang: str
     ) -> None:
-        if fmt not in desc.formats:
+        # S7: fmt comparison is alias-aware so `?fmt=latex` succeeds
+        # against `formats: [pdf, html]` (and vice versa). Logs a
+        # deprecation warning when the legacy `latex` name is used so we
+        # can drop the alias next sprint.
+        if not _format_matches(fmt, desc.formats):
             raise ValueError(
                 f"report {desc.report_id!r} does not declare format "
                 f"{fmt!r}; declared: {list(desc.formats)}"
             )
+        _warn_legacy_fmt(fmt, source="render-request")
         if lang not in desc.languages:
             raise ValueError(
                 f"report {desc.report_id!r} does not declare language "
                 f"{lang!r}; declared: {list(desc.languages)}"
             )
+
+    def _filter_sections_by_audience(
+        self,
+        desc: ReportDescriptor,
+        audience: set[str],
+    ) -> ReportDescriptor:
+        """S8: drop sections whose block has a non-matching ``audience_target``.
+
+        Audience-agnostic blocks (``audience_target = None``) ALWAYS
+        render — they're the structural scaffolding (cover, headings)
+        that has no audience opinion of its own. Blocks tagged with a
+        specific :class:`AudienceTarget` render iff their target's
+        string value is in ``audience``.
+
+        Returns a copy of the descriptor with a filtered ``sections``
+        list. The original (registry-stored) descriptor is untouched.
+        """
+        if not audience:
+            return desc
+        kept = []
+        for section in desc.sections:
+            try:
+                block_cls = self._blocks.get(section.block)
+            except KeyError:
+                # Unknown block — let the rendering pass produce the
+                # same KeyError it would have without audience filter.
+                kept.append(section)
+                continue
+            target = getattr(block_cls, "audience_target", None)
+            if target is None:
+                kept.append(section)
+                continue
+            target_value = (
+                target.value if hasattr(target, "value") else str(target)
+            )
+            if target_value in audience:
+                kept.append(section)
+            else:
+                logger.debug(
+                    "S8 audience filter: dropping section %s "
+                    "(block=%s target=%s requested=%s)",
+                    section.id, section.block, target_value, audience,
+                )
+        # Build a copy with the same field values + filtered sections.
+        # Pydantic v2 ``model_copy(update=...)`` is the right primitive.
+        return desc.model_copy(update={"sections": kept})
 
     def _cache_path(self, report_id: str, fmt: str, lang: str) -> Path:
         """Cache layout: ``<out_dir>/<lang>/<report_id>.<ext>``.
@@ -518,8 +663,22 @@ class ReportService:
             ) from exc
 
         # Format-specific render method, e.g. render_latex / render_html.
+        # S7: ``pdf`` and ``latex`` are aliases — every existing block
+        # ships ``render_latex`` because that pre-dated the rename, so
+        # we fall through to alias resolution before declaring the block
+        # incapable. Block authors can add ``render_pdf`` whenever they
+        # want; the alias keeps the old method name working until they do.
         render_method_name = f"render_{ctx.fmt}"
         render_method = getattr(block, render_method_name, None)
+        if render_method is None:
+            from services.reports.format_alias import aliases_for
+            for alias_fmt in aliases_for(ctx.fmt):
+                if alias_fmt == ctx.fmt:
+                    continue
+                fallback = getattr(block, f"render_{alias_fmt}", None)
+                if fallback is not None:
+                    render_method = fallback
+                    break
         if render_method is None:
             raise ValueError(
                 f"block {section.block!r} has no method {render_method_name!r}"

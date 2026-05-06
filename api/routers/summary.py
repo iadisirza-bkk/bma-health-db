@@ -54,13 +54,57 @@ def overview(sources: Optional[str] = Query(None, description="Comma-separated s
 
         by_disease = []
         ts = total or 1
-        for key in ("diabetes", "hypertension", "cardiovascular", "obesity", "dyslipidemia", "stroke"):
+        # NCD pipeline: keys come from scaffold/templates/summary_global.py
+        # (single source of truth — also drives the MV column projection).
+        try:
+            import sys as _sys
+            from pathlib import Path as _P
+            _root = _P(__file__).resolve().parents[2]
+            if str(_root) not in _sys.path:
+                _sys.path.insert(0, str(_root))
+            from scaffold.templates.summary_global import (  # type: ignore
+                disease_keys_for_overview,
+                screening_keys_for_overview,
+            )
+            ncd_keys = disease_keys_for_overview()
+            screening_keys = screening_keys_for_overview()
+        except Exception:
+            ncd_keys = ["diabetes", "hypertension", "cardiovascular", "obesity", "dyslipidemia"]
+            screening_keys = []
+
+        for key in ncd_keys:
             cnt = int(g.get(key) or 0)
             by_disease.append({
                 "disease_key": key,
                 "total_at_risk": cnt,
                 "pct": round(100.0 * cnt / ts, 2) if ts else 0,
             })
+
+        # Screening-pipeline diseases: aggregated from mv_<key>_screening
+        # rather than mv_summary_global (different denominator — only
+        # patients who had the test performed). One small SELECT per disease.
+        # Skip diseases already counted in the NCD list to avoid duplicates
+        # (obesity + dyslipidemia appear in both registries).
+        ncd_seen = set(ncd_keys)
+        for skey in screening_keys:
+            if skey in ncd_seen:
+                continue
+            try:
+                row = execute_query(
+                    f"SELECT SUM(n_total)::bigint AS n, SUM(n_abnormal)::bigint AS k "
+                    f"FROM public.mv_{skey}_screening"
+                ) or [{}]
+                rr = row[0]
+                n = int(rr.get("n") or 0)
+                k = int(rr.get("k") or 0)
+                by_disease.append({
+                    "disease_key": skey,
+                    "total_at_risk": k,
+                    "pct": round(100.0 * k / n, 2) if n > 0 else 0.0,
+                    "screening_total": n,  # tested-cohort denominator (≠ total_screened)
+                })
+            except Exception:
+                continue
 
         zone_count = execute_scalar("SELECT COUNT(*) FROM ref_health_zones") or 0
         district_count = execute_scalar("SELECT COUNT(*) FROM ref_districts") or 0
@@ -199,6 +243,9 @@ def overview(sources: Optional[str] = Query(None, description="Comma-separated s
     # by_disease aggregates over ALL records so prevalence pct matches the
     # ALL-buckets headline denominator. Frontend already has a separate
     # /non-bangkok-overview if a BKK-only view is needed.
+    # Obesity uses `found_obesity` (= msd_obese, measured BMI ≥ 23 per
+    # Asia-Pacific NHES) — not `risk_bmi` (self-reported). Stroke removed
+    # from the dashboard list per user request 2026-05-05.
     disease_rows = execute_query(cte + """
         SELECT
           (SELECT COUNT(DISTINCT patient_id) FROM unified)        AS total_screened,
@@ -206,15 +253,14 @@ def overview(sources: Optional[str] = Query(None, description="Comma-separated s
           COUNT(DISTINCT patient_id) FILTER (WHERE risk_dm)            AS diabetes,
           COUNT(DISTINCT patient_id) FILTER (WHERE risk_hpt)           AS hypertension,
           COUNT(DISTINCT patient_id) FILTER (WHERE risk_cvd)           AS cardiovascular,
-          COUNT(DISTINCT patient_id) FILTER (WHERE risk_bmi)           AS obesity,
-          COUNT(DISTINCT patient_id) FILTER (WHERE found_dyslipidemia) AS dyslipidemia,
-          COUNT(DISTINCT patient_id) FILTER (WHERE found_stroke)       AS stroke
+          COUNT(DISTINCT patient_id) FILTER (WHERE found_obesity)      AS obesity,
+          COUNT(DISTINCT patient_id) FILTER (WHERE found_dyslipidemia) AS dyslipidemia
         FROM unified
     """)
     d = disease_rows[0] if disease_rows else {}
     ts = d.get("total_screened") or 1
     by_disease = []
-    for key in ("diabetes", "hypertension", "cardiovascular", "obesity", "dyslipidemia", "stroke"):
+    for key in ("diabetes", "hypertension", "cardiovascular", "obesity", "dyslipidemia"):
         cnt = d.get(key) or 0
         by_disease.append({
             "disease_key": key,

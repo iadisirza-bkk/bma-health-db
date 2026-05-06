@@ -272,6 +272,46 @@ async def test_disease_district_grid_render_latex_has_longtable_and_thai_heading
 
 
 @pytest.mark.anyio
+async def test_disease_district_grid_latex_escapes_percent_in_headers() -> None:
+    """S7 carryover regression (S8 fix): the column-header strings
+    ``%เสี่ยง`` and ``%พบโรค`` contain a literal ``%`` which is the
+    LaTeX comment marker. Without escaping it, ``\\textbf{%เสี่ยง}``
+    causes LaTeX to swallow the closing brace and eventually halt with
+    "File ended while scanning use of \\textbf". The fix escapes the
+    header through ``latex_safe`` before emission.
+
+    This test pins the wire format: every ``\\textbf{`` in the output
+    must be balanced (no raw ``%`` immediately after the opening brace).
+    """
+    block = DiseaseDistrictGridBlock()
+    params = DiseaseDistrictGridParams(
+        diseases=["dm"],
+        metrics=["risk_count", "risk_pct", "found_count", "found_pct"],
+    )
+    ctx = _ctx(extra={"mv_repository": _fake_repo()})
+    data = await block.collect(ctx, params)
+    out = block.render_latex(data, params, ctx)
+    # The hot characters are present, but each ``%`` is escaped.
+    assert r"\textbf{\%เสี่ยง}" in out
+    assert r"\textbf{\%พบโรค}" in out
+    # No raw ``\textbf{%`` (which would have been the broken output).
+    assert r"\textbf{%" not in out
+    # Brace tally — every ``\textbf{`` is closed within the same line.
+    for line in out.splitlines():
+        opens = line.count(r"\textbf{")
+        # ``}`` count is just a sanity check; we don't require strict
+        # equality because line may legitimately have other ``{`` /
+        # ``}`` from cell separators. The minimal invariant: opens
+        # require at least the same number of close braces somewhere on
+        # the same line — not on a later line, because LaTeX argument
+        # consumption isn't line-aware but unmatched braces ARE the
+        # bug we're guarding against.
+        assert line.count("}") >= opens, (
+            f"unbalanced \\textbf braces on line: {line!r}"
+        )
+
+
+@pytest.mark.anyio
 async def test_disease_district_grid_render_html_has_table_class_and_h3_per_disease() -> None:
     block = DiseaseDistrictGridBlock()
     params = DiseaseDistrictGridParams(diseases=["dm", "hpt", "cvd"])
@@ -450,6 +490,69 @@ async def test_crosstab_render_html_total_row_and_column() -> None:
     assert "<tfoot>" in html
     # Grand total cell.
     assert "148" in html
+
+
+@pytest.mark.anyio
+async def test_crosstab_caption_renders_above_tabular() -> None:
+    """Phase 0 caption convention: when ``caption_th`` is supplied, the
+    LaTeX output wraps the tabular in a ``table`` float with ``\\caption``
+    appearing BEFORE ``\\begin{tabular}`` (= caption above), and the HTML
+    output puts ``<caption>`` as the first child of ``<table class=
+    "crosstab">``. Without a caption, the legacy bare-tabular /
+    un-captioned-table output is preserved.
+    """
+    block = CrosstabBlock()
+    params = CrosstabParams(
+        source_path="factors.smoking",
+        row_field="factor",
+        col_field="disease",
+        value_field="count",
+        cell_format="int",
+        include_total=False,
+        caption_th="ตารางไขว้พฤติกรรมสูบบุหรี่ × โรค NCD",
+        caption_en="Smoking behavior × NCD cross-tab",
+    )
+    ctx = _ctx(payload=_crosstab_payload())
+    data = await block.collect(ctx, params)
+
+    # Caption resolved per ctx.lang (default "th") + label auto-derived
+    # from source_path + row × col so distinct pivots get distinct labels.
+    assert data["caption"] == "ตารางไขว้พฤติกรรมสูบบุหรี่ × โรค NCD"
+    assert data["label"] == "tab:factors_smoking__factor_x_disease"
+
+    # LaTeX: \caption MUST appear BEFORE \begin{tabular} (= above).
+    latex = block.render_latex(data, params, ctx)
+    assert r"\begin{table}" in latex
+    cap_idx = latex.find(r"\caption{")
+    tab_idx = latex.find(r"\begin{tabular}")
+    assert cap_idx != -1 and tab_idx != -1
+    assert cap_idx < tab_idx, "caption must render ABOVE the tabular"
+
+    # HTML: <caption> MUST be the first child of <table class="crosstab">.
+    html = block.render_html(data, params, ctx)
+    assert '<table class="crosstab"' in html
+    assert "<caption>" in html
+    table_open = html.find("<table")
+    table_open_close = html.find(">", table_open)
+    cap_open = html.find("<caption>")
+    assert table_open < cap_open <= table_open_close + 1
+
+    # Back-compat: omitting caption_* keeps the legacy output shape.
+    params_no_cap = CrosstabParams(
+        source_path="factors.smoking",
+        row_field="factor",
+        col_field="disease",
+        value_field="count",
+        cell_format="int",
+        include_total=False,
+    )
+    data_no_cap = await block.collect(ctx, params_no_cap)
+    latex_no_cap = block.render_latex(data_no_cap, params_no_cap, ctx)
+    assert r"\begin{table}" not in latex_no_cap
+    assert r"\caption" not in latex_no_cap
+    html_no_cap = block.render_html(data_no_cap, params_no_cap, ctx)
+    assert "<caption>" not in html_no_cap
+    assert html_no_cap.startswith('<table class="crosstab">')
 
 
 @pytest.mark.anyio

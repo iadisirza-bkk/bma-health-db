@@ -1,48 +1,347 @@
 # =============================================================================
-# Report descriptor: zone
+# Report descriptor: zone (Phase B — descriptor-driven, article-style)
 # -----------------------------------------------------------------------------
 # Replaces the legacy Beamer template `templates/latex/report_zone.tex.j2` and
 # the per-zone flow in `services.zone_report_generator.generate_zone_report`.
+# Earlier this descriptor shipped a thin slide deck (3 charts + cover/closing);
+# Phase B turns it into a full article-style report with BOTH descriptive AND
+# inferential statistics, with caption-equipped figures (below) and tables
+# (above) per the Phase 0 caption convention.
 #
-# Parameterized by `zone_code` (one of 8 Bangkok health zones). The
-# orchestrator (ReportService.render) substitutes `{zone_code}` into every
-# string field via `.format(**params)` after loading this descriptor — see
-# `metadata.parameterized_by` and ReportService.render() docstring.
+# Layout: ARTICLE (not Beamer slides). Renders through descriptor_latex_root
+# .tex.j2 → bma_article_preamble.tex. Figures use \bmafig (caption below);
+# tables use \bmatab (caption above) — both auto-numbered + listed in
+# \listoffigures / \listoftables.
 #
-# Languages: th + en for now. Other locales gated until the legacy beamer
-# preamble has been ported to language-aware fonts (matches the whitepaper
-# polyglossia setup).
+# Parameterised by `zone_code` (one of 8 Bangkok health zones, 2-digit
+# string "01"-"08"). The orchestrator (ReportService.render) substitutes
+# `{zone_code}` into every string field via `.format(**params)` before
+# block dispatch — see `metadata.parameterized_by` and the `_substitute`
+# helper in services/reports/service.py.
+#
+# Languages: th + en. Other locales gated until the language-aware font
+# selection in descriptor_latex_root.tex.j2 covers this descriptor too.
 # =============================================================================
 report_id: zone
 title_th: "รายงานเขตสุขภาพ {zone_code}"
-formats: [latex, html]
+title_en: "Health Zone Report — {zone_code}"
+description_th: "รายงานสุขภาพระดับเขตสุขภาพของกรุงเทพมหานคร — โครงสร้างประชากร อัตราการคัดกรอง โปรไฟล์ปัจจัยเสี่ยง NCD สถิติเชิงพรรณนา (Descriptive) สถิติเชิงอนุมาน (Inferential) และข้อเสนอแนะเชิงนโยบาย"
+description_en: "Per-zone health report for Bangkok — demographics, screening coverage, NCD risk profile, descriptive + inferential statistics, and policy recommendations."
+formats: [pdf, html]
 languages: [th, en]
 audience: [public, clinician, admin]
+
+parameters:
+  - key: zone_code
+    type: enum
+    label_th: เขตสุขภาพ
+    label_en: Health Zone
+    required: true
+    options:
+      - { value: "01", label_th: "เขตสุขภาพ 1 (ทวีวัฒนา/ตลิ่งชัน/บางแค/ภาษีเจริญ/หนองแขม/บางบอน)" }
+      - { value: "02", label_th: "เขตสุขภาพ 2 (ธนบุรี/บางกอกใหญ่/บางกอกน้อย/คลองสาน/บางขุนเทียน/จอมทอง)" }
+      - { value: "03", label_th: "เขตสุขภาพ 3 (ปทุมวัน/บางรัก/สาทร/ยานนาวา/บางคอแหลม/พระโขนง/บางนา/คลองเตย/วัฒนา/สวนหลวง)" }
+      - { value: "04", label_th: "เขตสุขภาพ 4 (พระนคร/ดุสิต/ป้อมปราบฯ/สัมพันธวงศ์)" }
+      - { value: "05", label_th: "เขตสุขภาพ 5 (พญาไท/ราชเทวี/ห้วยขวาง/ดินแดง/วังทองหลาง/บางซื่อ/จตุจักร)" }
+      - { value: "06", label_th: "เขตสุขภาพ 6 (บางเขน/ลาดพร้าว/บึงกุ่ม/บางกะปิ/สะพานสูง/คันนายาว/ดอนเมือง/หลักสี่/สายไหม)" }
+      - { value: "07", label_th: "เขตสุขภาพ 7 (มีนบุรี/คลองสามวา/ลาดกระบัง/ประเวศ)" }
+      - { value: "08", label_th: "เขตสุขภาพ 8 (หนองจอก/ทุ่งครุ/บางขุนเทียน/ราษฎร์บูรณะ/บางพลัด)" }
+
 sections:
+  # ===========================================================================
+  # Cover
+  # ===========================================================================
   - id: cover
     block: cover_page
-    params: { subtitle_th: "เขตสุขภาพ {zone_code}" }
-  - id: zone_pop_h
+    params:
+      mode: title
+      subtitle_th: "เขตสุขภาพ {zone_code}"
+      subtitle_en: "Health Zone {zone_code}"
+      logo_path: "assets/bma_logo.png"
+
+  # ===========================================================================
+  # 1. ภาพรวมเขต — KPIs + narrative
+  # NOTE: KPIs / paragraph reference per-zone summary fields that the
+  # report data collector still needs to surface as a top-level
+  # ``zone.<field>`` shortcut (the data is already populated under
+  # ``zones.{zone_code}.*`` for sections 3-5). Until that lands the KPI
+  # cells render as "—" and the paragraph keeps the literal placeholders
+  # — both degrade gracefully and don't break compilation.
+  # ===========================================================================
+  - id: overview_h
     block: heading
-    params: { text_th: "ประชากรในเขต", level: 1 }
-  - id: pyramid
-    block: chart
-    params: { spec_id: age_pyramid, filters: { zone: "{zone_code}" } }
-  - id: zone_screen_h
+    params:
+      text_th: "1. ภาพรวมเขตสุขภาพ {zone_code}"
+      text_en: "1. Zone Overview — {zone_code}"
+      level: 1
+
+  - id: overview_kpis
+    block: kpi_grid
+    params:
+      metrics:
+        - { label_th: "ผู้คัดกรองในเขต", label_en: "Screened",
+            source_path: "zone.total_screened", format: int }
+        - { label_th: "เขตที่ครอบคลุม", label_en: "Districts",
+            source_path: "zone.district_count", format: int }
+        - { label_th: "% เสี่ยง NCD", label_en: "% at NCD risk",
+            source_path: "zone.pct_ncd_risk", format: pct }
+
+  - id: overview_paragraph
+    block: paragraph
+    params:
+      text_th: |
+        เขตสุขภาพ {zone_code} มีผู้เข้ารับการคัดกรองรวม
+        {zone.total_screened} คน ครอบคลุม {zone.district_count} เขต
+        พบผู้มีความเสี่ยงโรคไม่ติดต่อเรื้อรัง (Non-Communicable Disease: NCD)
+        คิดเป็น {zone.pct_ncd_risk} ของจำนวนผู้คัดกรอง
+      text_en: |
+        Health Zone {zone_code} screened a total of {zone.total_screened}
+        residents across {zone.district_count} districts. Of these,
+        {zone.pct_ncd_risk} were identified as at risk for one or more
+        Non-Communicable Diseases (NCDs).
+
+  # ===========================================================================
+  # 2. โครงสร้างประชากร — figure (age pyramid) + table (districts)
+  # ===========================================================================
+  - id: demo_h
     block: heading
-    params: { text_th: "อัตราการคัดกรอง", level: 1 }
-  - id: screen_chart
+    params:
+      text_th: "2. โครงสร้างประชากร"
+      text_en: "2. Population Structure"
+      level: 1
+
+  - id: age_pyramid
     block: chart
-    params: { spec_id: screening_coverage, filters: { zone: "{zone_code}" } }
-  - id: zone_risk_h
+    params:
+      spec_id: age_pyramid
+      filters: { zone: "{zone_code}" }
+      caption_th: "ปิรามิดประชากรเขตสุขภาพ {zone_code} จำแนกตามอายุและเพศ"
+      caption_en: "Population pyramid — Zone {zone_code} by age and sex"
+
+  - id: districts_table
+    block: table
+    params:
+      query_id: district_disease_counts
+      columns:
+        - { key: district_code, header_th: "รหัสเขต", header_en: "District code", format: str }
+        - { key: total_screened, header_th: "จำนวนคัดกรอง", header_en: "Screened", format: int }
+        - { key: pct_risk_dm, header_th: "% เสี่ยงเบาหวาน", header_en: "% DM-risk", format: pct }
+      filters: { zone: "{zone_code}" }
+      caption_th: "เขตในเขตสุขภาพ {zone_code} พร้อมจำนวนผู้คัดกรองและสัดส่วนผู้มีความเสี่ยงเบาหวาน"
+      caption_en: "Districts in Zone {zone_code} — screening totals and DM-risk percentage"
+
+  # ===========================================================================
+  # 3. ภาพรวมความเสี่ยง NCD 8 โรค — chart + crosstab
+  # ===========================================================================
+  - id: ncd_h
     block: heading
-    params: { text_th: "ปัจจัยเสี่ยง NCD", level: 1 }
-  - id: risk_chart
+    params:
+      text_th: "3. ภาพรวมความเสี่ยงโรค NCD 8 โรค"
+      text_en: "3. NCD Risk Profile (8 Diseases)"
+      level: 1
+
+  - id: ncd_overview_chart
     block: chart
-    params: { spec_id: risk_factor_profile, filters: { zone: "{zone_code}" } }
+    params:
+      spec_id: zone_dm_prevalence
+      filters: {}
+      caption_th: "ความชุกเบาหวานรายเขตสุขภาพ (Diabetes Mellitus: DM Prevalence) ทั้ง 8 เขตสุขภาพ — เน้นเขต {zone_code}"
+      caption_en: "Diabetes prevalence by health zone (all 8 zones) — Zone {zone_code} highlighted"
+
+  - id: disease_district_crosstab
+    block: crosstab
+    params:
+      source_path: "zones.{zone_code}.disease_by_district"
+      row_field: disease
+      col_field: district_name
+      value_field: pct_at_risk
+      cell_format: pct
+      include_total: false
+      caption_th: "ตารางไขว้: ความชุกโรค NCD 8 โรค (%) จำแนกตามเขตในเขตสุขภาพ {zone_code}"
+      caption_en: "Cross-tab: NCD 8-disease prevalence (%) by district — Zone {zone_code}"
+
+  # ===========================================================================
+  # 4. สถิติเชิงพรรณนา — Descriptive Statistics
+  # density plots: HbA1c, systolic BP distribution by district
+  # NOTE: density blocks degrade to "ไม่มีข้อมูล" until the collector
+  # surfaces per-zone HbA1c / SBP value lists via ctx.extra["density_rows"]
+  # or ``data().<column>``. Caption + reference ranges are wired today.
+  # ===========================================================================
+  - id: descr_h
+    block: heading
+    params:
+      text_th: "4. สถิติเชิงพรรณนา (Descriptive Statistics)"
+      text_en: "4. Descriptive Statistics"
+      level: 1
+
+  - id: descr_paragraph
+    block: paragraph
+    params:
+      text_th: |
+        ส่วนนี้แสดงการกระจายของค่าตรวจทางห้องปฏิบัติการ (Lab Markers) สำคัญ
+        ในประชากรเขตสุขภาพ {zone_code} จำแนกตามเขต พร้อมเส้นแบ่งค่าตามเกณฑ์
+        ทางการแพทย์ (Reference Ranges) เพื่อให้เห็นสัดส่วนของผู้ที่ค่าตรวจ
+        อยู่ในช่วงปกติ ช่วงเสี่ยง และช่วงผิดปกติ
+      text_en: |
+        This section shows the distribution of key lab markers across
+        districts in Zone {zone_code}, with clinical reference ranges
+        overlaid so readers can see the share of residents in normal, at-risk,
+        and abnormal bands.
+
+  - id: hba1c_density
+    block: density_plot
+    params:
+      column: hba1c
+      stratify_by: district
+      filters: { zone: "{zone_code}" }
+      caption_th: "การกระจายค่า HbA1c (Glycated Hemoglobin) จำแนกตามเขตในเขตสุขภาพ {zone_code} (เกณฑ์: ปกติ <5.7%, เสี่ยง 5.7–6.4%, เบาหวาน ≥6.5%)"
+      caption_en: "Distribution of HbA1c by district — Zone {zone_code} (cut-offs: normal <5.7%, at-risk 5.7–6.4%, diabetes ≥6.5%)"
+      reference_ranges:
+        - [0, 5.7, "ปกติ"]
+        - [5.7, 6.5, "เสี่ยง"]
+        - [6.5, 15, "เบาหวาน"]
+
+  - id: bp_density
+    block: density_plot
+    params:
+      column: systolic_bp
+      stratify_by: district
+      filters: { zone: "{zone_code}" }
+      caption_th: "การกระจายความดันโลหิตซิสโตลิก (Systolic Blood Pressure: SBP) จำแนกตามเขตในเขตสุขภาพ {zone_code} (เกณฑ์: ปกติ <120, เสี่ยง 120–139, ความดันสูง ≥140 mmHg)"
+      caption_en: "Distribution of systolic BP by district — Zone {zone_code} (cut-offs: normal <120, at-risk 120–139, hypertensive ≥140 mmHg)"
+      reference_ranges:
+        - [60, 120, "ปกติ"]
+        - [120, 140, "เสี่ยง"]
+        - [140, 250, "ความดันสูง"]
+
+  # ===========================================================================
+  # 5. สถิติเชิงอนุมาน — Inferential Statistics
+  # zone vs city baseline (chi-square + forest plot of OR with 95% CI).
+  # Wired via report_data_collector._collect_zone_specific_data().
+  # ===========================================================================
+  - id: infer_h
+    block: heading
+    params:
+      text_th: "5. สถิติเชิงอนุมาน (Inferential Statistics)"
+      text_en: "5. Inferential Statistics"
+      level: 1
+
+  - id: infer_paragraph
+    block: paragraph
+    params:
+      text_th: |
+        ส่วนนี้เปรียบเทียบความชุกโรค NCD 8 โรคระหว่างเขตสุขภาพ {zone_code}
+        กับค่าเฉลี่ยกรุงเทพมหานคร โดยใช้การทดสอบไคสแควร์ (Chi-square Test)
+        และคำนวณค่าอัตราส่วนออดส์ (Odds Ratio: OR) พร้อมช่วงความเชื่อมั่น 95%
+        (95% Confidence Interval: 95% CI) เพื่อระบุโรคที่มีนัยสำคัญทางสถิติ
+        ของความเสี่ยงในเขตสูง/ต่ำกว่าค่าเฉลี่ยเมือง
+      text_en: |
+        This section compares NCD 8-disease prevalence between Zone {zone_code}
+        and the Bangkok city average using chi-square tests, and reports
+        odds ratios (OR) with 95% confidence intervals (95% CI) to flag
+        diseases with statistically significant elevated or reduced risk
+        relative to the city baseline.
+
+  - id: zone_vs_city_test
+    block: statistical_test_results
+    params:
+      source_path: "zones.{zone_code}.tests.zone_vs_city"
+      caption_th: "การทดสอบไคสแควร์ (Chi-square Test): ความชุกโรค NCD 8 โรค เขตสุขภาพ {zone_code} เทียบค่าเฉลี่ย กทม."
+      caption_en: "Chi-square test: NCD 8-disease prevalence — Zone {zone_code} vs Bangkok average"
+
+  - id: zone_forest_plot
+    block: forest_plot
+    params:
+      source_path: "zones.{zone_code}.forest_or_zone_vs_city"
+      metric_name: "Odds Ratio"
+      log_scale: true
+      null_value: 1.0
+      caption_th: "Forest Plot: ค่าอัตราส่วนออดส์ (Odds Ratio) พร้อมช่วงความเชื่อมั่น 95% — โรค NCD 8 โรค เขตสุขภาพ {zone_code} เทียบ กทม."
+      caption_en: "Forest plot: Odds Ratios with 95% CI — NCD 8 diseases, Zone {zone_code} vs Bangkok"
+
+  # ===========================================================================
+  # 6. ปัจจัยเสี่ยงและพฤติกรรม
+  # ===========================================================================
+  - id: factor_h
+    block: heading
+    params:
+      text_th: "6. ปัจจัยเสี่ยงและพฤติกรรมสุขภาพ"
+      text_en: "6. Risk Factors and Health Behaviors"
+      level: 1
+
+  - id: risk_factor_chart
+    block: chart
+    params:
+      spec_id: risk_factor_profile
+      filters: { zone: "{zone_code}" }
+      caption_th: "โปรไฟล์ปัจจัยเสี่ยง NCD ในเขตสุขภาพ {zone_code}"
+      caption_en: "NCD risk-factor profile — Zone {zone_code}"
+
+  # Behavior×disease chart was skipped here pending a fix to the
+  # ``stacked_bar`` pgfplots renderer (legend style ``at={...}``
+  # collides with the ``/pgf/number format/`` keypath set by the
+  # yticklabel formatter, raising a pgfkeys error during XeLaTeX
+  # compilation). Re-introduce once that's resolved upstream OR a
+  # ``zone_behavior_disease`` chart spec is added for per-zone
+  # filtering.
+
+  # ===========================================================================
+  # 7. ข้อเสนอแนะ
+  # ===========================================================================
+  - id: rec_h
+    block: heading
+    params:
+      text_th: "7. ข้อเสนอแนะเชิงนโยบาย"
+      text_en: "7. Policy Recommendations"
+      level: 1
+
+  - id: priority_callout
+    block: callout
+    params:
+      kind: warn
+      title_th: "ข้อเสนอแนะเร่งด่วนสำหรับเขตสุขภาพ {zone_code}"
+      text_th: |
+        จากผลการวิเคราะห์ในรายงานนี้ คณะผู้จัดทำเสนอให้เขตสุขภาพ {zone_code}
+        มุ่งเน้นการคัดกรองและจัดการกลุ่มโรคที่มีค่า OR > 1 อย่างมีนัยสำคัญ
+        (ดูรายละเอียดในหัวข้อที่ 5) ผ่านการประชาสัมพันธ์ การเพิ่มความถี่
+        ของการคัดกรองในเขตเสี่ยง และการเชื่อมต่อกับหน่วยบริการปฐมภูมิในพื้นที่
+      text_en: |
+        Based on the analysis above, Zone {zone_code} should prioritize
+        screening and management of diseases with statistically significant
+        elevated odds ratios (see Section 5), through targeted outreach,
+        increased screening frequency in high-risk districts, and stronger
+        linkage to primary care.
+
+  # ===========================================================================
+  # Methodology + Closing
+  # ===========================================================================
   - id: methodology
     block: appendix_methodology
     params: {}
+
+  - id: closing
+    block: closing_page
+    params:
+      heading_th: "ภาคผนวก / กิตติกรรมประกาศ"
+      heading_en: "Appendix / Acknowledgments"
+      acknowledgments_th: |
+        ขอขอบคุณบุคลากรทางการแพทย์และสาธารณสุขในเขตสุขภาพ {zone_code}
+        สำนักการแพทย์ กรุงเทพมหานคร ที่ดำเนินโครงการคัดกรองสุขภาพประชากร
+        และรวบรวมข้อมูลให้รายงานเขตฉบับนี้
+      acknowledgments_en: |
+        We thank the medical and public-health staff of Zone {zone_code}
+        and the Medical Service Department of Bangkok Metropolitan
+        Administration for delivering the population screening program and
+        compiling the data underlying this report.
+      contact_th: "สำนักการแพทย์ กรุงเทพมหานคร"
+      contact_en: "Medical Service Department, BMA"
+      contact_email: "med-info@bangkok.go.th"
+      references:
+        - "WHO Global NCD Action Plan 2013-2030"
+        - "MSD Best-Practice Guidelines (2024)"
+        - "MED-FACTSHEET.md (โครงการคัดกรองสุขภาพ 1,000,000 คน)"
+
 metadata:
   parameterized_by: zone_code
   legacy_module: "services.zone_report_generator"
+  caption_convention: "figures: caption below (\\bmafig); tables: caption above (\\bmatab)"

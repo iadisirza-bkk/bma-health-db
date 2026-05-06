@@ -35,6 +35,13 @@
 \tolerance=9999
 \usepackage{lastpage}
 
+% S7 fix: ChartBlock.render_latex emits raw \begin{tikzpicture}/pgfplots
+% but no upstream preamble loaded the packages. Adding here so descriptor-
+% driven reports compile when they include any chart block.
+\usepackage{tikz}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+
 % --- Colors (BMA Green palette) ---
 \definecolor{bmagreen}{HTML}{00744B}
 \definecolor{bmagreenlight}{HTML}{4CAF50}
@@ -47,17 +54,21 @@
 \definecolor{tablegray}{gray}{0.97}
 
 % --- Header/Footer ---
+% S10: ``\pageref{LastPage}`` requires ``\usepackage{lastpage}`` (loaded
+% above on line 36). Footer reads ``1 / 12`` so readers can see total pages.
 \pagestyle{fancy}
 \fancyhf{}
 \fancyhead[L]{\small\color{bmagreen}\bmafont\textbf{\bmaheaderleft}}
 \fancyhead[R]{\small\color{gray}\bmaversion}
-\fancyfoot[C]{\small\thepage}
-\renewcommand{\headrulewidth}{0.8pt}
+\fancyfoot[C]{\small\thepage\ / \pageref{LastPage}}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.0pt}
 \renewcommand{\headrule}{\hbox to\headwidth{\color{bmagreen}\leaders\hrule height \headrulewidth\hfill}}
 
+% Plain pages (titlepage / chapter starts) get nothing — keeps the cover
+% clean of fancy header/footer chrome.
 \fancypagestyle{plain}{%
   \fancyhf{}%
-  \fancyfoot[C]{\small\thepage}%
   \renewcommand{\headrulewidth}{0pt}%
 }
 
@@ -77,12 +88,46 @@
 % --- Caption style ---
 \captionsetup{font=small, labelfont={bf,color=bmagreen}}
 
-% --- Hyperref colors ---
+% --- Caption-convention helpers (Phase 0) ---
+% Always use these so figures get caption BELOW, tables get caption ABOVE
+% (academic / scientific convention). Mirrors helpers in
+% ``services/reports/blocks/_render_helpers.py``.
+%
+%   \bmafig[width]{path}{caption}{label}  -- figure, caption below
+%   \bmatab{caption}{label}{tabular_body} -- table, caption above
+%
+% Default width 0.85\textwidth keeps figures readable without bleeding
+% into the margin. Override with \bmafig[\textwidth]{...}{...}{...} for
+% full-page figures.
+\newcommand{\bmafig}[4][0.85\textwidth]{%
+  \begin{figure}[H]%
+    \centering
+    \includegraphics[width=#1]{#2}%
+    \caption{#3}\label{#4}%
+  \end{figure}%
+}
+\newcommand{\bmatab}[3]{%
+  \begin{table}[H]%
+    \centering
+    \caption{#1}\label{#2}%
+    #3%
+  \end{table}%
+}
+
+% --- Hyperref: colors + PDF metadata + bookmark tree (S10) ---
+% PDF readers (Preview, Acrobat) show the metadata in their info panel
+% and the bookmark tree as a navigable side panel matching the TOC.
 \hypersetup{
+  pdftitle={\bmaheaderleft},
+  pdfauthor={BMA Medical Service Department},
+  pdfsubject={Bangkok population health screening report},
+  pdfkeywords={NCDs, screening, Bangkok, BMA, health zone},
   colorlinks=true,
   linkcolor=bmagreen,
   urlcolor=bmagreen!70!black,
-  citecolor=bmagreen
+  citecolor=bmagreen,
+  bookmarksopen=true,
+  bookmarksnumbered=true
 }
 
 % --- Font: Google Sans (official, Thai+Latin) ---

@@ -337,6 +337,12 @@ FROM all_visits_ranked av
 LEFT JOIN bma_med.patient p     ON p.patient_id  = av.patient_id
 LEFT JOIN home_district   hd    ON hd.patient_id = av.patient_id
 LEFT JOIN self_history_all sh   ON sh.patient_id = av.patient_id
+-- Keep only the canonical row per (patient, source, visit_date::date).
+-- clean.py's dup_pid_vstdate dedupes on (pid, vstdate AT TIME), but visit_uid
+-- collapses to the calendar date — we'd otherwise get duplicate visit_uid
+-- rows when a patient logs multiple same-day visits with different times,
+-- which violates uq_mv_visit_resolved.
+WHERE av.rn = 1
 WITH NO DATA;
 
 -- Indexes (matching the old EAV-backed MV — see migration 104)

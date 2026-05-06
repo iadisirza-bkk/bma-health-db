@@ -338,6 +338,10 @@ async def test_cover_page_includes_logo_when_set() -> None:
 
 @pytest.mark.anyio
 async def test_cover_page_omits_logo_when_unset() -> None:
+    # S10: when no ``logo_path`` is supplied, the LaTeX cover defaults to
+    # the canonical BMA + MSD branded pair (mirrors legacy whitepaper
+    # template). HTML still omits the logo when unset to keep dashboard
+    # surface unchanged for callers that don't ship branded SVG.
     block = CoverPageBlock()
     params = block.Parameters()
     ctx = _ctx()
@@ -345,7 +349,9 @@ async def test_cover_page_omits_logo_when_unset() -> None:
     html = block.render_html(data, params, ctx)
     assert "<img" not in html
     latex = block.render_latex(data, params, ctx)
-    assert r"\includegraphics" not in latex
+    # Default BMA + MSD logos appear when caller omits ``logo_path``.
+    assert "assets/bma_logo.png" in latex
+    assert "assets/msd_logo.png" in latex
 
 
 @pytest.mark.anyio
@@ -379,7 +385,10 @@ async def test_chart_block_latex_uses_tikz_for_bar() -> None:
 
 
 @pytest.mark.anyio
-async def test_chart_block_latex_placeholder_for_unknown_kind() -> None:
+async def test_chart_block_latex_empty_data_shows_no_data_message() -> None:
+    """S10: empty rows produce a 'ไม่มีข้อมูล' caption inside a figure
+    rather than a placeholder string. The legacy 'rendering not available'
+    text MUST NOT appear in real PDF output anymore."""
     block = ChartBlock()
     params = block.Parameters(spec_id="heatmap_demo")
 
@@ -403,7 +412,9 @@ async def test_chart_block_latex_placeholder_for_unknown_kind() -> None:
     ctx = _ctx(extra={"chart_service": fake})
     data = await block.collect(ctx, params)
     latex = block.render_latex(data, params, ctx)
-    assert "rendering not available in LaTeX" in latex
+    assert "ไม่มีข้อมูล" in latex
+    assert "rendering not available" not in latex
+    assert r"\begin{figure}" in latex
 
 
 @pytest.mark.anyio
@@ -436,6 +447,66 @@ async def test_table_block_truncation_marks_flag() -> None:
     data = await block.collect(ctx, params)
     assert data["truncated"] is True
     assert data["n_rows"] == 3
+
+
+@pytest.mark.anyio
+async def test_table_block_caption_renders_above_tabular() -> None:
+    """Phase 0 caption convention: when ``caption_th`` is supplied, the
+    LaTeX output wraps the tabular in a ``table`` float with ``\\caption``
+    appearing BEFORE ``\\begin{tabular}`` (academic convention: caption
+    above table). HTML mirrors this via ``<caption>`` as the first child
+    of ``<table>``.
+
+    Also pins the back-compat behavior: omitting both caption fields
+    returns a bare tabular (LaTeX) and an un-captioned ``<table>`` (HTML),
+    so descriptors that pre-date the convention keep working unchanged.
+    """
+    block = TableBlock()
+    params = block.Parameters(
+        query_id="zone_dm_prevalence",
+        columns=[
+            ColSpec(key="zone", header_th="โซน", format="str"),
+            ColSpec(key="pct", header_th="% เสี่ยง", format="pct"),
+        ],
+        caption_th="ความชุกเบาหวานรายโซนสุขภาพ",
+        caption_en="Diabetes prevalence by health zone",
+    )
+    fake = AsyncMock()
+    fake.run_query.return_value = [{"zone": "Z1", "pct": 12.3}]
+    ctx = _ctx(extra={"mv_repository": fake})
+    data = await block.collect(ctx, params)
+
+    # Caption resolution honors ctx.lang (default "th" via _ctx fixture).
+    assert data["caption"] == "ความชุกเบาหวานรายโซนสุขภาพ"
+    assert data["label"] == "tab:zone_dm_prevalence"
+
+    # LaTeX: \caption MUST appear BEFORE \begin{tabular} (= above).
+    latex = block.render_latex(data, params, ctx)
+    assert r"\begin{table}" in latex
+    cap_idx = latex.find(r"\caption{")
+    tab_idx = latex.find(r"\begin{tabular}")
+    assert cap_idx != -1 and tab_idx != -1
+    assert cap_idx < tab_idx, "caption must render ABOVE the tabular"
+
+    # HTML: <caption> MUST be the first child of <table> (HTML spec).
+    html = block.render_html(data, params, ctx)
+    assert "<caption>" in html
+    table_open = html.find("<table")
+    table_open_close = html.find(">", table_open)
+    cap_open = html.find("<caption>")
+    assert table_open < cap_open < table_open_close + 1 + len("<caption>")
+
+    # Back-compat: omitting caption_* yields the legacy bare-tabular output.
+    params_no_cap = block.Parameters(
+        query_id="zone_dm_prevalence",
+        columns=[ColSpec(key="zone", header_th="โซน", format="str")],
+    )
+    data_no_cap = await block.collect(ctx, params_no_cap)
+    latex_no_cap = block.render_latex(data_no_cap, params_no_cap, ctx)
+    assert r"\begin{table}" not in latex_no_cap
+    assert r"\caption" not in latex_no_cap
+    html_no_cap = block.render_html(data_no_cap, params_no_cap, ctx)
+    assert "<caption>" not in html_no_cap
 
 
 @pytest.mark.anyio

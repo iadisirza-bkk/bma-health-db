@@ -1,0 +1,5 @@
+block_id: choropleth
+class_path: services.reports.blocks.choropleth_block:ChoroplethBlock
+description_th: "แผนที่เทียม (Tile choropleth) ระดับเขตสุขภาพหรือเขต (S11)"
+description_en: "Tile choropleth (zone or district) — colour-coded grid PNG (S11)"
+enabled: true

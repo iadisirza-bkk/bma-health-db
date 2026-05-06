@@ -104,3 +104,89 @@ def start_scheduler():
     thread = threading.Thread(target=_schedule_loop, daemon=True, name="report-scheduler")
     thread.start()
     logger.info("Report scheduler started -- next run at %s", _scheduler_state["next_run"])
+
+    # S9 — nightly safety-net for the bulk pre-build cache. Re-enqueues the
+    # popular set of every descriptor at 00:00 Bangkok time. The worker
+    # skips cache hits so this is mostly a no-op when nothing has changed.
+    try:
+        _start_nightly_safety_net()
+    except Exception:
+        logger.warning("S9 nightly safety net failed to start", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# S9 — nightly bulk-prebuild safety net
+# ---------------------------------------------------------------------------
+
+# Bangkok timezone (UTC+7 — no DST). Hard-coded so we don't depend on the
+# host's TZ database being installed.
+_BKK_TZ = timezone(timedelta(hours=7))
+
+
+def _bkk_now() -> datetime:
+    return datetime.now(_BKK_TZ)
+
+
+def _seconds_until_next_midnight_bkk() -> float:
+    """Seconds from now until the next 00:00 in Bangkok local time."""
+    now = _bkk_now()
+    midnight = (now + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0,
+    )
+    return (midnight - now).total_seconds()
+
+
+def _run_nightly_prebuild_sync() -> None:
+    """Run the bulk-prebuild worker once. Safe to call from any thread."""
+    try:
+        import asyncio as _asyncio
+        from services.reports.build_worker import get_build_worker
+        from services.reports.registry import report_registry as _registry
+
+        worker = get_build_worker()
+        for rid in _registry().list_ids():
+            worker.enqueue_popular_set(rid)
+        try:
+            stats = _asyncio.run(worker.run_pending())
+            logger.info("S9 nightly prebuild done: %s", stats)
+        except RuntimeError:
+            # An event loop is already running (rare in this thread, but
+            # be defensive). Fire-and-forget on the existing loop.
+            loop = _asyncio.get_event_loop()
+            loop.create_task(worker.run_pending())
+    except Exception:
+        logger.exception("S9 nightly prebuild failed")
+
+
+def _nightly_loop() -> None:
+    """Sleep until the next 00:00 Bangkok, run the prebuild, repeat.
+
+    Pure stdlib (no APScheduler dep). Cleaner solutions are S10's problem.
+    """
+    while True:
+        try:
+            sleep_s = _seconds_until_next_midnight_bkk()
+            # Wake up at most every hour so we re-check the clock; this
+            # makes us robust to system suspend/resume drift.
+            time.sleep(min(sleep_s, 3600))
+            now = _bkk_now()
+            if now.hour == 0 and now.minute < 5:
+                _run_nightly_prebuild_sync()
+                # Don't re-fire if we sleep through the same minute again.
+                time.sleep(360)
+        except Exception:
+            logger.exception("nightly loop iteration failed; will retry")
+            time.sleep(60)
+
+
+def _start_nightly_safety_net() -> None:
+    thread = threading.Thread(
+        target=_nightly_loop,
+        daemon=True,
+        name="reports-nightly-prebuild",
+    )
+    thread.start()
+    logger.info(
+        "S9 nightly prebuild safety net started -- next 00:00 Bangkok in %.0fs",
+        _seconds_until_next_midnight_bkk(),
+    )

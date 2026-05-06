@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
 from agents.adapters.base import LLMAdapter, AdapterConfig
 from agents.core.agent import Agent, AgentConfig
@@ -137,6 +137,60 @@ def _is_obviously_off_topic(message: str) -> bool:
     """
     lower = message.lower()
     return any(phrase in lower for phrase in _HARD_OFF_TOPIC)
+
+
+# --------------------------------------------------------------------------- #
+# Forced-tool selection — used when the LLM ignores tools entirely.
+# --------------------------------------------------------------------------- #
+
+# Phrases that signal "this is a relationship/stats question, not a count" —
+# when the LLM skips tools we should fall back to query_statistical_test, not
+# the generic query_health_data. Keep the list short and uncontroversial.
+_STAT_FORCE_PHRASES = (
+    "สัมพันธ์", "เชื่อมโยง", "เกี่ยวข้อง", "สาเหตุ", "ปัจจัย",
+    "โรคร่วม", "หลายโรค", "พร้อมกัน", "ร่วมกัน", "comorbid",
+    "odds", "chi", "correlation", "ความเสี่ยง", "เพิ่มความเสี่ยง",
+)
+
+
+def _pick_forced_tool(message: str, selected_tools: list[str]) -> str:
+    """Choose which tool to force when the LLM emits no tool_calls.
+
+    Default: the keyword router's top pick. Override: if the message contains
+    a statistical-relationship phrase AND query_statistical_test is in the
+    candidate list, prefer it. This stops the orchestrator from forcing
+    query_health_data on questions like "สูบบุหรี่กับ HT สัมพันธ์ไหม" — which
+    would always give a useless prevalence donut instead of the requested
+    relationship answer.
+    """
+    msg_lower = message.lower()
+    if "query_statistical_test" in selected_tools and any(
+        p in msg_lower for p in _STAT_FORCE_PHRASES
+    ):
+        return "query_statistical_test"
+    return selected_tools[0] if selected_tools else "query_health_data"
+
+
+def _default_stat_args(message: str) -> dict[str, Any]:
+    """Pick the right `query_statistical_test.test` based on the question.
+
+    Maps phrasing -> test enum. Falls back to `comorbidity` because that test
+    needs no disease/factor args and answers the most common stat question
+    ("how many people have multiple diseases").
+    """
+    msg = message.lower()
+    if any(p in msg for p in ("comorbid", "โรคร่วม", "หลายโรค", "พร้อมกัน", "ร่วมกัน")):
+        return {"test": "comorbidity"}
+    if any(p in msg for p in ("odds", "เพิ่มความเสี่ยง", "เท่า", "ปัจจัยเสี่ยง")):
+        # odds_ratio needs disease + factor + exposed; without those it
+        # falls back inside the tool. Provide a sensible disease guess.
+        return {"test": "odds_ratio"}
+    if "trend" in msg or "แนวโน้ม" in msg:
+        return {"test": "mann_kendall"}
+    if "correlation" in msg or "สหสัมพันธ์" in msg:
+        return {"test": "correlation"}
+    # Default: comorbidity — works without extra args.
+    return {"test": "comorbidity"}
 
 
 class OpenMultiAgent:
@@ -337,14 +391,22 @@ class OpenMultiAgent:
                 return
             yield format_sse({"type": "agent_done", "agent": "analyst"})
 
-            # No tools -> FORCE the top-priority tool from router
+            # No tools -> FORCE the top-priority tool from router.
+            # Pick smarter than first-in-list: if the question clearly asks
+            # for a relationship/comorbidity/cross-disease answer, prefer
+            # query_statistical_test even when query_health_data ranks higher.
             if not response.tool_calls:
-                forced = selected_tools[0] if selected_tools else "query_health_data"
+                forced = _pick_forced_tool(user_message, selected_tools)
                 logger.warning("LLM skipped tools — forcing %s", forced)
-                # Build sensible default args per tool
+                # Build sensible default args per tool. Note: the statistical
+                # tool's parameter is `test` (enum: chi_square / odds_ratio /
+                # comorbidity / ...), NOT `test_type` and there is no
+                # `cross_tabulation` value — using comorbidity as the safe
+                # default since it requires no disease/factor and answers
+                # "how many people have multiple conditions" cleanly.
                 _default_args = {
                     "query_health_data": {"group_by": "disease", "chart_type": "donut"},
-                    "query_statistical_test": {"test_type": "cross_tabulation"},
+                    "query_statistical_test": _default_stat_args(user_message),
                     "query_api": {"endpoint": "headline_kpi"},
                 }
                 response.tool_calls = [{
@@ -394,6 +456,17 @@ class OpenMultiAgent:
                 from agents.tools.helpers import DISEASE_NAMES
                 label = DISEASE_NAMES.get(fn_args.get("disease", ""), "ข้อมูล")
                 yield format_sse({"type": "agent_start", "agent": "data", "label": f"กำลังดึงข้อมูล ({label})...", "icon": "database"})
+                # Surface the tool invocation in the wire stream. Previously
+                # only `agent_start` was emitted (which v2 translation drops),
+                # so text-only tools like query_api with comorbidity_matrix
+                # returned correct answers but the wire showed no tool_call.
+                # This made it impossible for clients (and our LLM eval) to
+                # verify that a tool actually ran.
+                yield format_sse({
+                    "type": "tool_call",
+                    "name": fn_name,
+                    "args": fn_args if not args_malformed else {},
+                })
 
                 try:
                     tool_timeout = 300 if 'report' in fn_name else 90

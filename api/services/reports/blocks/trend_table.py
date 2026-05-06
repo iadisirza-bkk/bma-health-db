@@ -26,19 +26,36 @@ from pydantic import BaseModel, ConfigDict
 
 from services.latex_utils import latex_escape
 from services.reports.blocks.base import ContentBlock
+from services.reports.blocks._render_helpers import (
+    safe_label_part,
+    wrap_table_html,
+    wrap_table_latex,
+)
 from services.reports.spec import RenderContext
 
 logger = logging.getLogger("api.services.reports.blocks.trend_table")
 
 
 class _TrendTableParams(BaseModel):
-    """Parameters for the ``trend_table`` block."""
+    """Parameters for the ``trend_table`` block.
+
+    Caption fields are optional for back-compat with descriptors that
+    pre-date the caption convention. When supplied, the table renders
+    with caption ABOVE — both LaTeX (``\\begin{table}`` float) and HTML
+    (``<caption>`` as first child of ``<table>``). When omitted, the
+    renderer falls back to the bare-tabular / un-captioned-table output
+    so existing tests stay green. New descriptors SHOULD always set
+    ``caption_th``.
+    """
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
     source_path: str = "trends"
     metric_filter: Optional[str] = None
     max_rows: int = 30
+    caption_th: Optional[str] = None
+    caption_en: Optional[str] = None
+    label: Optional[str] = None  # auto-derived from source_path + filter when None
 
 
 # Direction → (LaTeX cell expression, HTML span). Matches the legacy
@@ -121,11 +138,30 @@ class TrendTableBlock(ContentBlock):
             ]
         truncated = len(rows) > params.max_rows
         rows = rows[: params.max_rows]
+        # Caption + label resolution (Phase 0 convention: caption ABOVE).
+        # Empty string means "no caption" — downstream renderers fall
+        # back to the legacy bare-tabular / un-captioned-table output.
+        caption = ""
+        if ctx.lang == "en" and params.caption_en:
+            caption = params.caption_en
+        elif params.caption_th:
+            caption = params.caption_th
+        # Auto-derive a label from source_path (and metric_filter when
+        # set) so two trend tables over the same source with different
+        # filters get distinct ``\label``s.
+        derived_parts = [params.source_path]
+        if params.metric_filter:
+            derived_parts.append(params.metric_filter)
+        label = params.label or (
+            "tab:trend:" + safe_label_part("__".join(derived_parts))
+        )
         return {
             "rows": rows,
             "n_rows": len(rows),
             "truncated": truncated,
             "source_path": params.source_path,
+            "caption": caption,
+            "label": label,
         }
 
     def render_latex(
@@ -157,7 +193,7 @@ class TrendTableBlock(ContentBlock):
                 + r"\\ \hline"
             )
         body = "\n".join(body_lines)
-        out = (
+        tabular = (
             r"\begin{tabular}{" + col_spec + "}\n"
             r"\hline" + "\n"
             + header + r" \\ \hline" + "\n"
@@ -165,12 +201,18 @@ class TrendTableBlock(ContentBlock):
             + r"\end{tabular}" + "\n"
         )
         if data.get("truncated"):
-            out += (
+            tabular += (
                 r"\textit{(แสดง "
                 + str(data["n_rows"])
                 + r" แถวแรกจากผลลัพธ์ทั้งหมด)}" + "\n"
             )
-        return out
+        # Caption ABOVE convention: wrap in a ``table`` float when the
+        # descriptor supplied a caption. Without caption: bare tabular
+        # (back-compat with descriptors that pre-date the field).
+        caption = data.get("caption") or ""
+        if not caption:
+            return tabular
+        return wrap_table_latex(tabular, caption, data["label"])
 
     def render_html(
         self,
@@ -205,4 +247,18 @@ class TrendTableBlock(ContentBlock):
                 f'<p class="table-note">Showing first '
                 f'{data["n_rows"]} rows.</p>'
             )
-        return f'<table class="trend-table">{thead}{tbody}</table>{note}'
+        # ``<caption>`` MUST be the first child of ``<table>`` (HTML spec)
+        # which renders it above the rows by default. Skip the wrapper
+        # when no caption was supplied so the output stays identical to
+        # the pre-caption release. ``css_class="trend-table"`` preserves
+        # the existing stylesheet hook.
+        caption = data.get("caption") or ""
+        if not caption:
+            return f'<table class="trend-table">{thead}{tbody}</table>{note}'
+        table_html = wrap_table_html(
+            thead + tbody,
+            caption,
+            label=data.get("label"),
+            css_class="trend-table",
+        )
+        return table_html + note

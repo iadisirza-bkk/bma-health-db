@@ -1,0 +1,5 @@
+block_id: density_plot
+class_path: services.reports.blocks.density_plot:DensityPlotBlock
+description_th: "Density plot — KDE / ridge ของการกระจายตัวแปร"
+description_en: "Density plot — KDE/ridge curves of a continuous distribution"
+enabled: true

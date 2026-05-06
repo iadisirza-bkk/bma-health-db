@@ -1,0 +1,5 @@
+block_id: audience_summary_people
+class_path: services.reports.blocks.audience_summary_people:AudienceSummaryPeopleBlock
+description_th: "สรุปสำหรับประชาชนทั่วไป — การ์ดสีแบบสัญญาณไฟจราจร 3 โรค + รายการสิ่งที่ควรทำ"
+description_en: "Plain-language traffic-light summary for general public (3 disease cards + action checklist)"
+enabled: true

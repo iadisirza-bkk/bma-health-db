@@ -390,6 +390,43 @@ class MVRepository(Repository):
         rows = await self.fetch_all(sql, params)
         return [ScreeningCoverageRow(**r) for r in rows]
 
+    @_register("zone_dm_prevalence")
+    async def zone_dm_prevalence(self) -> list:
+        """Per-zone DM prevalence from `mv_summary_zones`. Used by the
+        ``zone_dm_prevalence`` chart spec → choropleth + spatial_autocorr
+        in ``whitepaper_phd``. Sister queries (``zone_hpt_prevalence``,
+        etc.) follow the same pattern; add as needed."""
+        from repositories.rows import ZonePrevalenceRow
+        sql = f"""
+            SELECT zone_code, name_th, name_en, total_screened,
+                   diabetes::int AS cases,
+                   CASE WHEN total_screened > 0
+                        THEN ROUND(100.0 * diabetes / total_screened, 2)
+                        ELSE NULL END AS pct
+              FROM public.mv_summary_zones
+             ORDER BY zone_code
+             LIMIT {_LIMIT}
+        """
+        rows = await self.fetch_all(sql, [])
+        return [ZonePrevalenceRow(**r) for r in rows]
+
+    @_register("zone_hpt_prevalence")
+    async def zone_hpt_prevalence(self) -> list:
+        """Per-zone hypertension prevalence; same shape as zone_dm_prevalence."""
+        from repositories.rows import ZonePrevalenceRow
+        sql = f"""
+            SELECT zone_code, name_th, name_en, total_screened,
+                   hypertension::int AS cases,
+                   CASE WHEN total_screened > 0
+                        THEN ROUND(100.0 * hypertension / total_screened, 2)
+                        ELSE NULL END AS pct
+              FROM public.mv_summary_zones
+             ORDER BY zone_code
+             LIMIT {_LIMIT}
+        """
+        rows = await self.fetch_all(sql, [])
+        return [ZonePrevalenceRow(**r) for r in rows]
+
     @_register("repeat_screening")
     async def repeat_screening(
         self,

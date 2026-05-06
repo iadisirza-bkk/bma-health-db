@@ -15,6 +15,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from services.latex_utils import latex_escape
 from services.reports.blocks.base import ContentBlock
+from services.reports.blocks._render_helpers import (
+    safe_label_part,
+    wrap_table_html,
+    wrap_table_latex,
+)
 from services.reports.spec import RenderContext
 
 logger = logging.getLogger("api.services.reports.blocks.table")
@@ -32,7 +37,15 @@ class ColSpec(BaseModel):
 
 
 class _TableParams(BaseModel):
-    """Parameters for the ``table`` block."""
+    """Parameters for the ``table`` block.
+
+    Caption fields are optional for back-compat with descriptors that
+    pre-date the caption convention. When supplied, the table renders
+    with caption ABOVE the tabular (academic convention) — both LaTeX
+    and HTML. When omitted, the renderer falls back to a bare tabular
+    (LaTeX) / un-captioned ``<table>`` (HTML) so existing tests stay
+    green. New descriptors SHOULD always set ``caption_th``.
+    """
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
@@ -40,6 +53,9 @@ class _TableParams(BaseModel):
     columns: List[ColSpec]
     filters: Dict[str, Any] = Field(default_factory=dict)
     max_rows: int = 200
+    caption_th: Optional[str] = None
+    caption_en: Optional[str] = None
+    label: Optional[str] = None  # auto-derived from query_id when None
 
 
 def _html_escape(text: str) -> str:
@@ -130,12 +146,24 @@ class TableBlock(ContentBlock):
                     for col in params.columns
                 ]
             )
+        # Resolve caption + label per ctx.lang. ``caption`` may be ""
+        # which downstream renderers treat as "no caption" — same as
+        # None, so back-compat callers that omit both fields get the
+        # legacy bare-tabular output unchanged.
+        caption = ""
+        if ctx.lang == "en" and params.caption_en:
+            caption = params.caption_en
+        elif params.caption_th:
+            caption = params.caption_th
+        label = params.label or ("tab:" + safe_label_part(params.query_id))
         return {
             "headers": headers,
             "rows": projected,
             "n_rows": len(rows),
             "truncated": truncated,
             "query_id": params.query_id,
+            "caption": caption,
+            "label": label,
         }
 
     def render_latex(
@@ -154,7 +182,7 @@ class TableBlock(ContentBlock):
             " & ".join(latex_escape(c) for c in r) + r" \\ \hline"
             for r in rows
         )
-        out = (
+        tabular = (
             r"\begin{tabular}{" + col_spec + "}\n"
             r"\hline" + "\n"
             + head_line + r" \\ \hline" + "\n"
@@ -162,12 +190,19 @@ class TableBlock(ContentBlock):
             + r"\end{tabular}" + "\n"
         )
         if data.get("truncated"):
-            out += (
+            tabular += (
                 r"\textit{(แสดง "
                 + str(data["n_rows"])
                 + r" แถวแรกจากผลลัพธ์ทั้งหมด)}\n"
             )
-        return out
+        # Caption ABOVE convention: when a caption is supplied, wrap the
+        # tabular in a ``table`` float with ``\caption`` emitted before
+        # the body. When omitted, return the bare tabular for back-compat
+        # with descriptors that don't yet declare ``caption_th``.
+        caption = data.get("caption") or ""
+        if not caption:
+            return tabular
+        return wrap_table_latex(tabular, caption, data["label"])
 
     def render_html(
         self,
@@ -193,4 +228,16 @@ class TableBlock(ContentBlock):
                 f'<p class="table-note">Showing first '
                 f'{data["n_rows"]} rows.</p>'
             )
-        return f'<table class="data-table">{thead}{tbody}</table>{note}'
+        # ``<caption>`` MUST be the first child of ``<table>`` per HTML
+        # spec, which renders it above the rows in every mainstream
+        # browser. Skip the wrapper when no caption was supplied so the
+        # output stays identical to the pre-caption release.
+        caption = data.get("caption") or ""
+        if not caption:
+            return f'<table class="data-table">{thead}{tbody}</table>{note}'
+        table_html = wrap_table_html(
+            thead + tbody,
+            caption,
+            label=data.get("label"),
+        )
+        return table_html + note

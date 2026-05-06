@@ -87,6 +87,12 @@ class RendererRegistry:
         Fails loud on missing / blank ``fmt``. Replaces silently if a
         renderer for the same ``fmt`` is already registered (re-import
         during tests is normal).
+
+        S7 alias: a renderer registered under ``latex`` is ALSO registered
+        under ``pdf`` (and vice versa). The descriptor format ``latex``
+        was renamed to ``pdf`` in S7; the alias keeps the old key working
+        for one sprint. See ``services.reports.format_alias`` for the
+        rationale.
         """
         fmt = getattr(renderer, "fmt", None)
         if not fmt or not isinstance(fmt, str):
@@ -95,7 +101,15 @@ class RendererRegistry:
                 f"``fmt``"
             )
         self._renderers[fmt] = renderer
-        logger.debug("Registered renderer: %s", fmt)
+        # Lazy import to avoid a top-level cycle (format_alias imports
+        # nothing from this module, but keeping the imports flat lets
+        # tests stub the alias map without touching renderer.py).
+        from services.reports.format_alias import aliases_for
+
+        for alias in aliases_for(fmt):
+            if alias != fmt:
+                self._renderers[alias] = renderer
+        logger.debug("Registered renderer: %s (aliases=%s)", fmt, sorted(aliases_for(fmt)))
 
     def get(self, fmt: str) -> "ReportRenderer":
         """Return the renderer or raise ``KeyError`` if unknown."""

@@ -1,0 +1,5 @@
+block_id: audience_summary_researcher
+class_path: services.reports.blocks.audience_summary_researcher:AudienceSummaryResearcherBlock
+description_th: "บทสรุปสำหรับนักวิจัย — Wilson 95% CI, χ² + OR, แนวโน้มตามอายุ พร้อมข้อจำกัดเชิงระเบียบวิธี (S8)"
+description_en: "Researcher-facing summary — Wilson 95% CI, χ² + OR, age trend, with selection-bias disclaimer (S8)"
+enabled: true

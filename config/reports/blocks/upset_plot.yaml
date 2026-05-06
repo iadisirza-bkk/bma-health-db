@@ -1,0 +1,5 @@
+block_id: upset_plot
+class_path: services.reports.blocks.upset_plot:UpSetPlotBlock
+description_th: "UpSet plot — การซ้อนทับของหลายชุด (เช่น โรคร่วม)"
+description_en: "UpSet plot — multi-set overlap (e.g. comorbidity intersections)"
+enabled: true

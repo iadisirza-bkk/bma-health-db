@@ -26,7 +26,17 @@ CoverMode = Literal["title", "closing"]
 
 
 class _CoverPageParams(BaseModel):
-    """Parameters for the ``cover_page`` block."""
+    """Parameters for the ``cover_page`` block.
+
+    ``data_as_of`` (S9) is the data-freshness stamp — a short
+    human-readable date string ("2026-05-01" or "1 พฤษภาคม 2569") that
+    the cover renders as ``ข้อมูล ณ {data_as_of}`` directly under the
+    title. Most callers leave this ``None`` and let the orchestrator
+    compute it dynamically from ``MAX(bma_med.ingestion_batch.finished_at)``
+    via ``ctx.feature_flags["data_as_of"]`` (a tiny piece of plumbing in
+    ``routers/reports_v2.py``); descriptor authors can also override
+    explicitly via the YAML.
+    """
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
@@ -35,6 +45,7 @@ class _CoverPageParams(BaseModel):
     generation_date: Optional[str] = None
     logo_path: Optional[str] = None
     mode: CoverMode = "title"
+    data_as_of: Optional[str] = None
 
 
 def _html_escape(text: str) -> str:
@@ -76,6 +87,14 @@ class CoverPageBlock(ContentBlock):
         date_str = params.generation_date or ctx.requested_at.strftime(
             "%Y-%m-%d"
         )
+        # S9 freshness stamp: descriptor-supplied value wins; otherwise
+        # fall back to the orchestrator's value plumbed through
+        # ``ctx.feature_flags`` from the v2 router. ``None`` means "skip
+        # the stamp" — older descriptors without S9 wiring keep
+        # rendering byte-for-byte the same.
+        data_as_of = params.data_as_of
+        if not data_as_of and isinstance(ctx.feature_flags, dict):
+            data_as_of = ctx.feature_flags.get("data_as_of")
         return {
             "title_th": ctx.descriptor.title_th,
             "title_en": ctx.descriptor.title_en,
@@ -85,6 +104,7 @@ class CoverPageBlock(ContentBlock):
             "logo_path": params.logo_path,
             "lang": ctx.lang,
             "mode": params.mode,
+            "data_as_of": data_as_of or None,
         }
 
     def render_latex(
@@ -98,32 +118,77 @@ class CoverPageBlock(ContentBlock):
         return self._render_latex_title(data)
 
     def _render_latex_title(self, data: Dict[str, Any]) -> str:
-        # ``\title{...}`` + ``\maketitle`` is the conventional LaTeX cover.
-        # We assemble each piece separately so a missing subtitle / logo
-        # simply omits its line instead of producing ``\subtitle{}``.
-        parts: list[str] = []
-        if data.get("logo_path"):
-            # ``\includegraphics`` references a file path — escape only
-            # for safety; LaTeX accepts most filename chars verbatim.
+        # S10 — full cover layout now lives in the block (was duplicated
+        # between the block and ``descriptor_latex_root.tex.j2`` titlepage,
+        # producing two covers + a debug ``lang=th`` stamp). The root
+        # template strips its own titlepage; we render a complete
+        # ``\begin{titlepage}...\end{titlepage}`` with:
+        #   * BMA + MSD logos at top (or caller-supplied ``logo_path``)
+        #   * Huge title + Large English subtitle (when present)
+        #   * Caller subtitle (e.g. "เขตสุขภาพ 01")
+        #   * "ข้อมูล ณ <data_as_of>" freshness stamp
+        #   * generation_date
+        # Mirrors ``report_whitepaper.tex.j2`` lines 55-76 layout.
+        parts: list[str] = [r"\begin{titlepage}", r"\centering", r"\vspace*{1cm}"]
+
+        # --- Logos: caller-supplied path wins; otherwise default to the
+        # BMA + MSD pair that the renderer's ``_stage_assets`` copies into
+        # ``assets/`` for every build.
+        logo_path = data.get("logo_path")
+        if logo_path:
             parts.append(
-                r"\begin{center}"
-                r"\includegraphics[width=0.4\textwidth]{"
-                + data["logo_path"]
-                + "}"
-                + r"\end{center}"
+                r"\includegraphics[height=2.5cm]{" + str(logo_path) + r"}"
             )
-        parts.append(r"\title{" + latex_escape(str(data["title"])) + "}")
-        if data.get("subtitle"):
-            # Subtitle goes into the ``\author`` slot — LaTeX article
-            # class doesn't have a first-class subtitle command and
-            # adding a custom one is overkill for one block.
+        else:
             parts.append(
-                r"\author{" + latex_escape(str(data["subtitle"])) + "}"
+                r"\includegraphics[height=2.5cm]{assets/bma_logo.png}"
+                r"\hspace{2cm}"
+                r"\includegraphics[height=2.5cm]{assets/msd_logo.png}"
             )
+        parts.append(r"\vspace{1.5cm}")
+        parts.append("")
+
+        # --- Title block (Huge, BMA-green) + optional title_en ---
+        title_th = latex_escape(str(data["title_th"] or data.get("title", "")))
         parts.append(
-            r"\date{" + latex_escape(str(data["generation_date_str"])) + "}"
+            r"{\Huge\bmafont\bfseries\color{bmagreen} "
+            + title_th
+            + r" \par}"
         )
-        parts.append(r"\maketitle")
+        title_en = data.get("title_en")
+        if title_en:
+            parts.append(r"\vspace{0.5cm}")
+            parts.append(
+                r"{\Large\bmafont\color{bmadark} "
+                + latex_escape(str(title_en))
+                + r" \par}"
+            )
+
+        # --- Caller subtitle (e.g. "เขตสุขภาพ 01") ---
+        subtitle = data.get("subtitle")
+        if subtitle:
+            parts.append(r"\vspace{0.5cm}")
+            parts.append(
+                r"{\large " + latex_escape(str(subtitle)) + r" \par}"
+            )
+
+        parts.append(r"\vfill")
+
+        # --- Freshness stamp (S9) ---
+        if data.get("data_as_of"):
+            stamp = "ข้อมูล ณ " + str(data["data_as_of"])
+            parts.append(
+                r"{\small " + latex_escape(stamp) + r" \par}"
+            )
+            parts.append(r"\vspace{0.3cm}")
+
+        # --- Generation date ---
+        parts.append(
+            r"{\large "
+            + latex_escape(str(data["generation_date_str"]))
+            + r" \par}"
+        )
+        parts.append(r"\end{titlepage}")
         return "\n".join(parts) + "\n"
 
     def _render_latex_closing(self, data: Dict[str, Any]) -> str:
@@ -170,6 +235,10 @@ class CoverPageBlock(ContentBlock):
             pieces.append(f'<p class="cover-subtitle">{sub}</p>')
         date = _html_escape(str(data["generation_date_str"]))
         pieces.append(f'<p class="cover-date">{date}</p>')
+        # S9 freshness stamp — adjacent to the date line.
+        if data.get("data_as_of"):
+            stamp = _html_escape("ข้อมูล ณ " + str(data["data_as_of"]))
+            pieces.append(f'<p class="cover-data-as-of">{stamp}</p>')
         body = "".join(pieces)
         return f'<header class="cover">{body}</header>'
 

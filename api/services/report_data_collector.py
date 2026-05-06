@@ -204,6 +204,18 @@ class ReportData:
     pm25_lag_analysis: dict[str, float] = field(default_factory=dict)
     gis_layers: list[dict] = field(default_factory=list)
 
+    # === ZONE-SPECIFIC AGGREGATES (zone_v2 descriptor) ===
+    # Keyed by zone_code as a 2-digit string ("01"–"08") to match the
+    # zone_v2.yaml ``options`` enum. Each entry holds:
+    #     disease_by_district  — long-format rows for the crosstab block
+    #         (one row per district × disease, with pct_at_risk)
+    #     tests.zone_vs_city   — chi-square + odds_ratio rows comparing
+    #         the zone against the rest of the city, in the shape the
+    #         ``statistical_test_results`` block expects
+    #     forest_or_zone_vs_city — forest_plot rows (label / estimate /
+    #         ci_lo / ci_hi / p_value / n) derived from the same OR computation
+    zones: dict[str, dict] = field(default_factory=dict)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -241,6 +253,137 @@ def _get_city_disease_rates(data: dict[str, Any]) -> dict[str, float]:
 # Zone mapping alias (report_data_collector in source used statistics.ZONE_MAPPING)
 # ---------------------------------------------------------------------------
 ZONE_MAPPING = DCODE_TO_ZONE
+
+
+def _collect_zone_specific_data(data: dict[str, Any]) -> dict[str, dict]:
+    """Per-zone aggregates for descriptor-driven zone reports (zone_v2).
+
+    Returns a dict keyed by 2-digit zone_code (``"01"``–``"08"`` to match
+    zone_v2.yaml). Each entry has three sub-paths the descriptor reads:
+
+        disease_by_district     — long-format rows for the crosstab block
+        tests.zone_vs_city      — chi-square + odds_ratio per disease,
+                                  comparing the zone against rest-of-city
+        forest_or_zone_vs_city  — forest_plot rows derived from the same OR
+                                  computation (label / estimate / ci_lo /
+                                  ci_hi / p_value / n)
+
+    Counts are reconstructed from ``pct_at_risk × total_screened / 100``;
+    the data source ships percentages, not raw at-risk counts. This is
+    accurate at integer scale and good enough for chi-square / OR which
+    operate on contingency-table magnitudes, not exact tallies.
+    """
+    from services.statistics_utils import chi_square_test, odds_ratio
+
+    # First pass: city-wide at-risk + screened totals per disease (used as
+    # the "rest of city" complement when comparing one zone against the
+    # rest). Skipping districts where the disease isn't present in the
+    # data — same behaviour as the existing rankings loop.
+    city_total: dict[str, dict[str, int]] = {
+        disease: {"at_risk": 0, "screened": 0} for disease in DISEASES
+    }
+    for d in data.values():
+        screened = int(d.get("total_screened", 0) or 0)
+        diseases_dict = d.get("diseases", {}) or {}
+        for disease in DISEASES:
+            dd = diseases_dict.get(disease)
+            if not dd:
+                continue
+            pct = float(dd.get("pct_at_risk", 0) or 0)
+            n_at_risk = int(round(pct * screened / 100))
+            city_total[disease]["at_risk"] += n_at_risk
+            city_total[disease]["screened"] += screened
+
+    zones: dict[str, dict] = {}
+    for zone_code, zinfo in HEALTH_ZONES.items():
+        # zone_v2.yaml uses 2-digit codes ("01"-"08"); HEALTH_ZONES uses
+        # bare digits ("1"-"8"). Normalise here so descriptor source_path
+        # substitution lands on the right key.
+        zone_key = f"{int(zone_code):02d}"
+        dcodes = zinfo.get("dcodes", []) if isinstance(zinfo, dict) else []
+
+        disease_by_district: list[dict] = []
+        zone_at_risk: dict[str, int] = {disease: 0 for disease in DISEASES}
+        zone_screened = 0
+
+        for dc in dcodes:
+            d = data.get(dc)
+            if not d:
+                continue
+            district_screened = int(d.get("total_screened", 0) or 0)
+            zone_screened += district_screened
+            district_name = d.get("name_th", dc)
+            diseases_dict = d.get("diseases", {}) or {}
+            for disease in DISEASES:
+                dd = diseases_dict.get(disease)
+                if not dd:
+                    continue
+                pct = float(dd.get("pct_at_risk", 0) or 0)
+                n_at_risk = int(round(pct * district_screened / 100))
+                zone_at_risk[disease] += n_at_risk
+                disease_by_district.append({
+                    "disease": DISEASE_NAMES_TH.get(disease, disease),
+                    "district_name": district_name,
+                    "pct_at_risk": pct,
+                })
+
+        tests_rows: list[dict] = []
+        forest_rows: list[dict] = []
+        for disease in DISEASES:
+            zone_a = zone_at_risk[disease]
+            zone_b = max(0, zone_screened - zone_a)
+            rest_a = max(0, city_total[disease]["at_risk"] - zone_a)
+            rest_total = max(
+                0, city_total[disease]["screened"] - zone_screened
+            )
+            rest_b = max(0, rest_total - rest_a)
+            # Skip degenerate cases — chi-square / OR are undefined when a
+            # margin is zero (everything in or everything out of one cell).
+            if zone_screened == 0 or rest_total == 0:
+                continue
+            if (zone_a + zone_b) == 0 or (rest_a + rest_b) == 0:
+                continue
+
+            disease_name_th = DISEASE_NAMES_TH.get(disease, disease)
+            chi2_result = chi_square_test([[zone_a, zone_b], [rest_a, rest_b]])
+            or_result = odds_ratio(zone_a, zone_b, rest_a, rest_b)
+            p_value = chi2_result["p_value"]
+
+            tests_rows.append({
+                "test_type": "chi_square",
+                "name": f"{disease}_zone_{zone_key}_vs_rest",
+                "pair": (
+                    f"{disease_name_th} (เขตสุขภาพ {zone_key} vs ส่วนที่เหลือ)"
+                ),
+                "chi2": round(chi2_result["chi2"], 2),
+                "df": chi2_result["df"],
+                "p_value": p_value,
+            })
+            tests_rows.append({
+                "test_type": "odds_ratio",
+                "name": f"{disease}_OR_zone_{zone_key}",
+                "factor": f"{disease_name_th} (เขตสุขภาพ {zone_key})",
+                "or_value": round(or_result["odds_ratio"], 3),
+                "ci_lower": round(or_result["ci_lower"], 3),
+                "ci_upper": round(or_result["ci_upper"], 3),
+                "p_value": p_value,
+            })
+            forest_rows.append({
+                "label": disease_name_th,
+                "estimate": or_result["odds_ratio"],
+                "ci_lo": or_result["ci_lower"],
+                "ci_hi": or_result["ci_upper"],
+                "p_value": p_value,
+                "n": zone_screened,
+            })
+
+        zones[zone_key] = {
+            "disease_by_district": disease_by_district,
+            "tests": {"zone_vs_city": tests_rows},
+            "forest_or_zone_vs_city": forest_rows,
+        }
+
+    return zones
 
 
 # ---------------------------------------------------------------------------
@@ -1154,6 +1297,11 @@ def collect_report_data() -> ReportData:
         (27, "boilers", "กิจการใช้หม้อน้ำ"), (28, "metal_smelting", "กิจการหลอม/หล่อโลหะ"),
     ]
     report.gis_layers = [{"id": gid, "key": key, "name_th": name} for gid, key, name in _gis]
+
+    # ------------------------------------------------------------------
+    # Zone-specific aggregates (for zone_v2 descriptor)
+    # ------------------------------------------------------------------
+    report.zones = _collect_zone_specific_data(data)
 
     logger.info(
         "Report data collected: %d districts, %d diseases, %d zones, %d factor analyses, %d inferential tests, "

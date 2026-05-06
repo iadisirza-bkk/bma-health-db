@@ -161,6 +161,62 @@ class _TwoColumnLayout(_StubBlock):
     block_id = "two_column_layout"
 
 
+# S8 — audience-segmented stubs. The whitepaper descriptor was extended
+# to include all four; the registry just needs a class with the matching
+# ``block_id`` to satisfy cross-registry validation.
+class _AudienceSummaryPeople(_StubBlock):
+    block_id = "audience_summary_people"
+
+
+class _AudienceSummaryExecutive(_StubBlock):
+    block_id = "audience_summary_executive"
+
+
+class _AudienceSummaryClinician(_StubBlock):
+    block_id = "audience_summary_clinician"
+
+
+class _AudienceSummaryResearcher(_StubBlock):
+    block_id = "audience_summary_researcher"
+
+
+# S10 — template-first reports added a ``closing_page`` block that the
+# whitepaper + zone descriptors now reference at the tail.
+class _ClosingPage(_StubBlock):
+    block_id = "closing_page"
+
+
+# S11 — PhD-grade blocks composed into ``whitepaper_phd.yaml``. We only
+# need a stub with the matching ``block_id`` here; the real renderers
+# are tested independently in the per-block test files.
+class _ForestPlot(_StubBlock):
+    block_id = "forest_plot"
+
+
+class _LogisticRegression(_StubBlock):
+    block_id = "logistic_regression"
+
+
+class _SpatialAutocorr(_StubBlock):
+    block_id = "spatial_autocorr"
+
+
+class _Choropleth(_StubBlock):
+    block_id = "choropleth"
+
+
+class _PhenotypeClusters(_StubBlock):
+    block_id = "phenotype_clusters"
+
+
+class _UpSetPlot(_StubBlock):
+    block_id = "upset_plot"
+
+
+class _DensityPlot(_StubBlock):
+    block_id = "density_plot"
+
+
 def _stub_block_registry() -> BlockRegistry:
     """Build a registry with all blocks the two descriptors reference.
 
@@ -186,6 +242,21 @@ def _stub_block_registry() -> BlockRegistry:
         _StatisticalTestResults,
         _AiInsight,
         _TwoColumnLayout,
+        # S8 — audience-segmented summary blocks
+        _AudienceSummaryPeople,
+        _AudienceSummaryExecutive,
+        _AudienceSummaryClinician,
+        _AudienceSummaryResearcher,
+        # S10 — template-first closing page
+        _ClosingPage,
+        # S11 — PhD-grade blocks (whitepaper_phd descriptor)
+        _ForestPlot,
+        _LogisticRegression,
+        _SpatialAutocorr,
+        _Choropleth,
+        _PhenotypeClusters,
+        _UpSetPlot,
+        _DensityPlot,
     ):
         reg.register(cls)
     return reg
@@ -262,7 +333,10 @@ def test_whitepaper_descriptor_shape() -> None:
 
     desc = reg.get("whitepaper")
     assert desc.report_id == "whitepaper"
-    assert "latex" in desc.formats and "html" in desc.formats
+    # S7: ``latex`` was renamed to ``pdf`` in the YAML (the renderer
+    # always returns PDF). Backward-compat alias still resolves at
+    # render time — see services.reports.format_alias.
+    assert "pdf" in desc.formats and "html" in desc.formats
     # 10 ISO codes per ADR-03 / task spec.
     assert set(desc.languages) >= {
         "th", "en", "zh", "ja", "ko", "ru", "my", "hi", "vi", "fr",
@@ -282,10 +356,14 @@ def test_zone_descriptor_shape() -> None:
 
     desc = reg.get("zone")
     assert desc.report_id == "zone"
-    assert desc.formats == ["latex", "html"]
+    # S7 rename: ``latex`` → ``pdf`` in the YAML.
+    assert desc.formats == ["pdf", "html"]
     assert desc.languages == ["th", "en"]
-    # cover + 3 (heading + chart) trios + methodology = 8 sections.
-    assert len(desc.sections) == 8
+    # Phase B reshape (S12+): the legacy 9-section Beamer slide deck was
+    # replaced with an article-style report carrying descriptive +
+    # inferential statistics + per-figure/table captions. Pin the lower
+    # bound only — adding sections is a YAML edit, not a contract change.
+    assert len(desc.sections) >= 9
     assert desc.metadata.get("parameterized_by") == "zone_code"
 
 
@@ -346,6 +424,8 @@ CONFIRMED_CHART_SPEC_IDS = {
     "repeat_screening",
     "risk_factor_profile",
     "screening_coverage",
+    "zone_dm_prevalence",
+    "zone_hpt_prevalence",
 }
 
 
@@ -402,8 +482,9 @@ def test_resolve_descriptor_substitutes_zone_code() -> None:
     # Cover subtitle in params should also be substituted.
     cover = next(s for s in resolved.sections if s.id == "cover")
     assert cover.params["subtitle_th"] == "เขตสุขภาพ 01"
-    # Filters in chart blocks too.
-    pyramid = next(s for s in resolved.sections if s.id == "pyramid")
+    # Filters in chart blocks too — the Phase B reshape renamed the
+    # population pyramid section from ``pyramid`` to ``age_pyramid``.
+    pyramid = next(s for s in resolved.sections if s.id == "age_pyramid")
     assert pyramid.params["filters"]["zone"] == "01"
 
 

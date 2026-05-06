@@ -1,0 +1,5 @@
+block_id: spatial_autocorr
+class_path: services.reports.blocks.spatial_autocorr:SpatialAutocorrBlock
+description_th: "การกระจุกตัวเชิงพื้นที่ — Moran's I + LISA per BMA health zone (S11)"
+description_en: "Spatial autocorrelation — global Moran's I + LISA hotspots per BMA health zone (S11)"
+enabled: true

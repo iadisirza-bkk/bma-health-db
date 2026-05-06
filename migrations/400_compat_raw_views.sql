@@ -75,15 +75,15 @@ CREATE OR REPLACE VIEW public.raw_vitalsigns AS
     v.scr2q1::int                                      AS depression_2q_1,
     v.scr2q2::int                                      AS depression_2q_2,
     -- PHQ-9 (app1 columns are TEXT — cast through NULLIF to handle blanks)
-    NULLIF(v.scn9q1, '')::int                          AS phq9_q1,
-    NULLIF(v.scn9q2, '')::int                          AS phq9_q2,
-    NULLIF(v.scn9q3, '')::int                          AS phq9_q3,
-    NULLIF(v.scn9q4, '')::int                          AS phq9_q4,
-    NULLIF(v.scn9q5, '')::int                          AS phq9_q5,
-    NULLIF(v.scn9q6, '')::int                          AS phq9_q6,
-    NULLIF(v.scn9q7, '')::int                          AS phq9_q7,
-    NULLIF(v.scn9q8, '')::int                          AS phq9_q8,
-    NULLIF(v.scn9q9, '')::int                          AS phq9_q9,
+    NULLIF(v.scn9q1::text, '')::int                          AS phq9_q1,
+    NULLIF(v.scn9q2::text, '')::int                          AS phq9_q2,
+    NULLIF(v.scn9q3::text, '')::int                          AS phq9_q3,
+    NULLIF(v.scn9q4::text, '')::int                          AS phq9_q4,
+    NULLIF(v.scn9q5::text, '')::int                          AS phq9_q5,
+    NULLIF(v.scn9q6::text, '')::int                          AS phq9_q6,
+    NULLIF(v.scn9q7::text, '')::int                          AS phq9_q7,
+    NULLIF(v.scn9q8::text, '')::int                          AS phq9_q8,
+    NULLIF(v.scn9q9::text, '')::int                          AS phq9_q9,
     -- ST-5 stress screening
     v.st501::int                                       AS st5_q1,
     v.st502::int                                       AS st5_q2,
@@ -109,12 +109,13 @@ CREATE OR REPLACE VIEW public.raw_vitalsigns AS
     v.smoke::int                                       AS smoking,
     (v.riskdm    = 1::double precision)                AS risk_dm,
     (v.riskhpt   = 1::double precision)                AS risk_hpt,
-    -- portal stores riskcdvcl / cdvcl / stroke / fat / chltr as TEXT
-    (v.riskcdvcl = '1'::text)                          AS risk_cvd,
-    (v.riskbmi   = 1::double precision)                AS risk_bmi,
-    (v.chltr     = '1'::text)                          AS found_dyslipidemia,
-    (v.fat       = '1'::text)                          AS found_obesity,
-    (v.stroke    = '1'::text)                          AS found_stroke,
+    -- post-load ALTER converted riskcdvcl/chltr/stroke to smallint;
+    -- fat is still text in portal_vitalsignslf (mixed values)
+    (v.riskcdvcl::text = '1')                          AS risk_cvd,
+    (v.riskbmi::text   = '1')                          AS risk_bmi,
+    (v.chltr::text     = '1')                          AS found_dyslipidemia,
+    (v.fat::text       = '1')                          AS found_obesity,
+    (v.stroke::text    = '1')                          AS found_stroke,
     v.scr2q1::int                                      AS depression_2q_1,
     v.scr2q2::int                                      AS depression_2q_2,
     -- portal PHQ-9 columns are double precision, not text
@@ -161,7 +162,7 @@ CREATE OR REPLACE VIEW public.raw_homevisit AS
     'portal'::text                                     AS data_source,
     h.province::int                                    AS home_province,
     COALESCE(LPAD(NULLIF(h.district::text, ''), 4, '0'),
-             LPAD(NULLIF(h.crdistrict, ''), 4, '0'))   AS district_code
+             LPAD(NULLIF(h.crdistrict::text, ''), 4, '0'))   AS district_code
   FROM bma_med.portal_homevisit h;
 
 
@@ -257,9 +258,9 @@ CREATE OR REPLACE VIEW public.raw_lab_results AS
     l.crtinine::numeric                                AS creatinine,
     l.egfr::numeric                                    AS egfr,
     -- uricacid / sgot / sgpt are TEXT in app1 too — coerce through NULLIF
-    NULLIF(l.uricacid, '')::numeric                    AS uric_acid,
-    NULLIF(l.sgot, '')::numeric                        AS sgot,
-    NULLIF(l.sgpt, '')::numeric                        AS sgpt
+    NULLIF(l.uricacid::text, '')::numeric                    AS uric_acid,
+    NULLIF(l.sgot::text, '')::numeric                        AS sgot,
+    NULLIF(l.sgpt::text, '')::numeric                        AS sgpt
   FROM bma_med.app1_labhealth l
 
   UNION ALL
@@ -271,16 +272,16 @@ CREATE OR REPLACE VIEW public.raw_lab_results AS
     l.hmgb::numeric                                    AS hemoglobin,
     l.hmtc::numeric                                    AS hematocrit,
     -- portal lab columns are mostly TEXT — strip blanks then cast
-    NULLIF(l.fbs, '')::numeric                         AS fbs,
-    NULLIF(l.cholest, '')::numeric                     AS cholesterol,
-    NULLIF(l.trigly, '')::numeric                      AS triglyceride,
-    NULLIF(l.hdl, '')::numeric                         AS hdl,
-    NULLIF(l.ldl, '')::numeric                         AS ldl,
-    NULLIF(l.crtinine, '')::numeric                    AS creatinine,
-    NULLIF(l.egfr, '')::numeric                        AS egfr,
-    NULLIF(l.uricacid, '')::numeric                    AS uric_acid,
-    NULLIF(l.sgot, '')::numeric                        AS sgot,
-    NULLIF(l.sgpt, '')::numeric                        AS sgpt
+    NULLIF(l.fbs::text, '')::numeric                         AS fbs,
+    NULLIF(l.cholest::text, '')::numeric                     AS cholesterol,
+    NULLIF(l.trigly::text, '')::numeric                      AS triglyceride,
+    NULLIF(l.hdl::text, '')::numeric                         AS hdl,
+    NULLIF(l.ldl::text, '')::numeric                         AS ldl,
+    NULLIF(l.crtinine::text, '')::numeric                    AS creatinine,
+    NULLIF(l.egfr::text, '')::numeric                        AS egfr,
+    NULLIF(l.uricacid::text, '')::numeric                    AS uric_acid,
+    NULLIF(l.sgot::text, '')::numeric                        AS sgot,
+    NULLIF(l.sgpt::text, '')::numeric                        AS sgpt
   FROM bma_med.portal_labhealth l;
 
 

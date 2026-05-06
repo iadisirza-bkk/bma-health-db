@@ -29,7 +29,15 @@ if TYPE_CHECKING:  # pragma: no cover — only used for type hints
 # Permitted output formats. New formats land here once a ``ReportRenderer``
 # subclass is registered; ADR-03 §4 ships ``latex`` + ``html`` in S4 with
 # ``pptx`` stubbed.
-ReportFormat = Literal["latex", "html", "pptx"]
+#
+# S7 NOTE: ``latex`` was renamed to ``pdf`` in S7 (the renderer always
+# compiles to PDF via tectonic, so calling the format ``latex`` was
+# misleading). ``latex`` remains a valid Literal value for one sprint to
+# keep YAMLs / programmatic callers / tests written against the old name
+# loading without churn — see :mod:`services.reports.format_alias` for
+# the alias resolution used at render time. New descriptors should write
+# ``pdf``.
+ReportFormat = Literal["pdf", "latex", "html", "pptx"]
 
 # Permitted descriptor audience tags. Mirrors ``Audience`` from
 # ``agents/tools/spec.py`` plus the ``msd`` bucket needed for the legacy
@@ -65,6 +73,48 @@ class CacheSpec(BaseModel):
     invalidate_on: List[CacheInvalidator] = Field(
         default_factory=lambda: cast("list[CacheInvalidator]", ["data_hash"])
     )
+
+
+class ParameterOption(BaseModel):
+    """One enum option in a typed report parameter (S7 dropdown UI).
+
+    Used only when ``ParameterSpec.type == "enum"``. The frontend renders
+    one ``<option>`` per entry; the value goes back to the backend on
+    submit and feeds ``str.format(**params)`` substitution at render time.
+    """
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    value: str
+    label_th: str
+    label_en: Optional[str] = None
+
+
+class ParameterSpec(BaseModel):
+    """Typed input the frontend renders as a dropdown / textbox / date.
+
+    The backend's existing ``str.format(**params)`` substitution layer
+    consumes these values verbatim — see ``ReportService._resolve_descriptor``.
+    Adding a parameter here lets the UI show a proper dropdown instead of
+    a free-form ``key=value`` text input.
+
+    Validation:
+        * ``type == "enum"`` MUST come with a non-empty ``options`` list.
+        * ``type`` ∈ {"text", "date"} must NOT supply ``options``.
+        * The ``key`` is the same name used for ``{placeholder}``
+          substitution in section params (e.g. ``zone_code`` for
+          ``"{zone_code}"``).
+    """
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    key: str
+    type: Literal["enum", "text", "date"]
+    label_th: str
+    label_en: Optional[str] = None
+    required: bool = True
+    default: Optional[str] = None
+    options: List[ParameterOption] = Field(default_factory=list)
 
 
 class SectionSpec(BaseModel):
@@ -103,9 +153,12 @@ class ReportDescriptor(BaseModel):
     report_id: str
     title_th: str
     title_en: Optional[str] = None
+    description_th: Optional[str] = None
+    description_en: Optional[str] = None
     formats: List[ReportFormat]
     languages: List[str] = Field(default_factory=lambda: ["th"])
     audience: List[ReportAudience] = Field(default_factory=lambda: cast("list[ReportAudience]", ["public"]))
+    parameters: List[ParameterSpec] = Field(default_factory=list)
     sections: List[SectionSpec]
     style: StyleSpec = Field(default_factory=StyleSpec)
     cache: CacheSpec = Field(default_factory=CacheSpec)
@@ -135,6 +188,18 @@ class RenderContext:
     re-enter the orchestrator at depth 1. Depth > 1 is rejected — the
     layout primitive is not reentrant. See ADR-03 "S6 addendum: container
     blocks" for the rationale.
+
+    ``feature_flags`` (S9) is an arbitrary dict that backends populate
+    from query-string flags. Today only ``polish_prose: bool`` is honoured
+    — see :mod:`services.reports.polish`. Adding a new flag here does
+    NOT require touching this dataclass; the field is intentionally a
+    free-form dict so the surface stays stable.
+
+    ``polish_service`` (S9) is the optional handle to a
+    :class:`services.reports.polish.TextPolishService`. ``None`` means
+    "no polish" (status quo). Wiring is the orchestrator's job — blocks
+    must NOT instantiate one themselves (the SQLite cache file would be
+    re-opened per call otherwise).
     """
 
     data_collector: Any
@@ -144,6 +209,8 @@ class RenderContext:
     requested_at: datetime
     extra: Dict[str, Any] = field(default_factory=dict)
     recursion_depth: int = 0
+    feature_flags: Dict[str, Any] = field(default_factory=dict)
+    polish_service: Optional[Any] = None
 
 
 @dataclass

@@ -87,7 +87,8 @@ Tools ที่มีให้ใช้:
 
 - ตัวเลข/กราฟทั่วไป (กลุ่มอายุ/เพศ/พฤติกรรม) → **query_health_data**
 - KPI ภาพรวม / lab / comorbidity / coverage → **query_api**
-- ทดสอบ p-value / odds ratio → **query_statistical_test**
+- ทดสอบ p-value / odds ratio / **สัมพันธ์ / เชื่อมโยง / ความเสี่ยง / ปัจจัย** → **query_statistical_test**
+- **โรคร่วม / หลายโรค / พร้อมกัน** → **query_api {"endpoint":"comorbidity_matrix"}** (มีข้อมูลพร้อม)
 - แนวโน้มเดือน/ไตรมาส → **query_time_trend**
 - คน ตจว. → **query_province_breakdown**
 - รพ./คลินิก/ร้านยา → **query_facility**
@@ -106,7 +107,10 @@ Tools ที่มีให้ใช้:
 - "อายุ 60+ อ้วน" → `query_health_data {"group_by":"disease","disease":"obesity","filters":{"age_group":"60-69"}}`
 - "ผู้ชายเป็นเบาหวาน" → `query_health_data {"group_by":"disease","disease":"diabetes","filters":{"sex":"Male"}}`
 - "ค่า FBS เฉลี่ย" → `query_api {"endpoint":"lab_city_average"}`
-- "เบาหวาน+ความดัน" → `query_api {"endpoint":"comorbidity_matrix"}`
+- "เบาหวาน+ความดัน" / "โรคร่วมหลายโรค" / "Metabolic Syndrome" → `query_api {"endpoint":"comorbidity_matrix"}`
+- "สูบบุหรี่กับความดันสัมพันธ์ไหม" → `query_statistical_test {"test":"odds_ratio","disease":"hypertension","factor":"smoking","exposed_value":"smoker"}`
+- "BMI กับเบาหวานเชื่อมโยง" → `query_statistical_test {"test":"chi_square","disease":"diabetes","factor":"smoking"}` (หรือ correlation ถ้าเป็นตัวเลขต่อเนื่อง)
+- "ปัจจัยเสี่ยงเบาหวาน" → `query_statistical_test {"test":"odds_ratio","disease":"diabetes","factor":"smoking","exposed_value":"smoker"}`
 - "แนวโน้มเบาหวาน 2024-2025" → `query_time_trend {"disease":"diabetes","period":"month","from_date":"2024-01-01"}`
 - "Top 5 เขตอ้วน vs Bottom 5" → `query_district_compare {"metric":"obesity","top_n":5,"bottom_n":5}`
 - "PHQ-9 โซน 5" → `query_mental_health {"zone_code":"5"}`

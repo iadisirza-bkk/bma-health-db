@@ -19,6 +19,7 @@ from __future__ import annotations
 import importlib
 import logging
 from abc import ABC, abstractmethod
+from enum import Enum
 from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional
 
@@ -28,6 +29,29 @@ from pydantic import BaseModel, ConfigDict
 from services.reports.spec import RenderContext
 
 logger = logging.getLogger("api.services.reports.blocks")
+
+
+# ---------------------------------------------------------------------------
+# Audience targeting (S8 — "Audience-Segmented Report Sections")
+# ---------------------------------------------------------------------------
+#
+# Distinct from ``ReportAudience`` in :mod:`services.reports.spec` which
+# tags a *whole report* (public / clinician / admin / msd) — the four
+# values below tag *individual blocks* by the **reader profile** they're
+# calibrated for. The orchestrator filters sections at render time when
+# the API is called with ``?audience=<value>``; ``None`` means "render
+# in any audience" (back-compat — every block that shipped before S8
+# defaults to ``None`` so existing descriptors keep working unchanged).
+
+
+class AudienceTarget(str, Enum):
+    """Which reader profile a block is calibrated for. Used by the
+    orchestrator to filter sections when ?audience= is set."""
+
+    PEOPLE = "people"            # ประชาชนทั่วไป
+    EXECUTIVE = "executive"      # ผู้บริหาร
+    CLINICIAN = "clinician"      # แพทย์/บุคลากรการแพทย์
+    RESEARCHER = "researcher"    # นักวิจัย / population-based study
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +79,12 @@ class ContentBlock(ABC):
 
     block_id: ClassVar[str]
     Parameters: ClassVar[type[BaseModel]] = BaseModel
+
+    # S8: which reader profile this block targets. ``None`` = "any
+    # audience" (back-compat default for blocks that shipped before
+    # audience filtering existed). The orchestrator consults this only
+    # when ``?audience=<value>`` is passed; otherwise it's a no-op.
+    audience_target: ClassVar[Optional[AudienceTarget]] = None
 
     @abstractmethod
     async def collect(

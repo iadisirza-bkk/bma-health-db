@@ -1,0 +1,5 @@
+block_id: logistic_regression
+class_path: services.reports.blocks.logistic_regression:LogisticRegressionBlock
+description_th: "การถดถอยโลจิสติก (statsmodels Logit/Probit) พร้อม forest plot ของ OR และตารางสรุป n / events / AUC / McFadden R² (S11)"
+description_en: "Logistic regression (statsmodels Logit/Probit) with OR forest plot and diagnostics table (n / events / AUC / McFadden R²) (S11)"
+enabled: true

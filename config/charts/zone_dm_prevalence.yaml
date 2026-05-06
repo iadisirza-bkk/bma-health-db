@@ -1,0 +1,38 @@
+# =============================================================================
+# Chart spec: zone_dm_prevalence
+# -----------------------------------------------------------------------------
+# Per-zone diabetes prevalence (8 BMA health zones).
+# Source: mv_summary_zones (already populated by migration 207).
+# Used by:
+#   - whitepaper_phd.yaml § 3.5 — choropleth + spatial_autocorr (Moran's I)
+# Sister specs (zone_hpt_prevalence, zone_obesity_prevalence, etc.) can
+# follow the same template by changing the disease column.
+# =============================================================================
+spec_id: zone_dm_prevalence
+kind: bar
+title_th: "ความชุกเบาหวานรายเขตสุขภาพ"
+title_en: "Diabetes Prevalence by Health Zone"
+description_th: "ร้อยละความชุกเบาหวานในประชากรที่ได้รับการคัดกรอง จำแนกตามเขตสุขภาพ 8 เขต"
+query_id: zone_dm_prevalence
+query_params: {}
+accepts: []
+axes:
+  x: zone_code
+  y: pct
+count_field: cases
+color_palette:
+  - "#B71C1C"   # severity-red (high)
+  - "#E53935"
+  - "#EF5350"
+  - "#FFA726"
+  - "#FFCA28"
+  - "#FFEB3B"
+  - "#9CCC65"
+  - "#2E7D32"   # bma-green (low)
+k_anon_threshold: 5
+units:
+  y: "%"
+extra:
+  show_legend: false
+  show_data_labels: true
+  sort: "asc_by_x"

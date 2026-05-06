@@ -20,6 +20,11 @@ from typing import Any, ClassVar, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict
 
 from services.reports.blocks.base import ContentBlock
+from services.reports.blocks._render_helpers import (
+    safe_label_part,
+    wrap_table_html,
+    wrap_table_latex,
+)
 from services.reports.renderers._filters import number_format
 from services.reports.renderers._latex_filters import latex_safe
 from services.reports.spec import RenderContext
@@ -31,7 +36,16 @@ CellFormat = Literal["int", "pct", "pct2"]
 
 
 class CrosstabParams(BaseModel):
-    """Parameters for the ``crosstab`` block."""
+    """Parameters for the ``crosstab`` block.
+
+    Caption fields are optional for back-compat with descriptors that
+    pre-date the caption convention. When supplied, the table renders
+    with caption ABOVE — both LaTeX (``\\begin{table}`` float) and HTML
+    (``<caption>`` as first child of ``<table>``). When omitted, the
+    renderer falls back to the bare-tabular / un-captioned-table output
+    so existing tests stay green. New descriptors SHOULD always set
+    ``caption_th``.
+    """
 
     model_config = ConfigDict(extra="forbid", validate_assignment=True)
 
@@ -43,6 +57,9 @@ class CrosstabParams(BaseModel):
     col_label_th: Optional[str] = None
     cell_format: CellFormat = "int"
     include_total: bool = True
+    caption_th: Optional[str] = None
+    caption_en: Optional[str] = None
+    label: Optional[str] = None  # auto-derived from source_path + fields when None
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +282,20 @@ class CrosstabBlock(ContentBlock):
         # Stash the human labels so renderers don't reach back into params.
         pivot["row_label_th"] = params.row_label_th or params.row_field
         pivot["col_label_th"] = params.col_label_th or params.col_field
+        # Caption + label resolution (Phase 0 convention: caption ABOVE).
+        # Lang-aware caption pick — empty string means "no caption" and
+        # downstream renderers fall back to the legacy bare-tabular path.
+        caption = ""
+        if ctx.lang == "en" and params.caption_en:
+            caption = params.caption_en
+        elif params.caption_th:
+            caption = params.caption_th
+        # Auto-derive a label from the pivot identity (source + axes) so
+        # two crosstabs over the same source with different pivots get
+        # distinct ``\label``s. Caller can override with ``label``.
+        derived = f"{params.source_path}__{params.row_field}_x_{params.col_field}"
+        pivot["caption"] = caption
+        pivot["label"] = params.label or ("tab:" + safe_label_part(derived))
         return pivot
 
     # ------------------------------------------------------------------
@@ -306,12 +337,17 @@ class CrosstabBlock(ContentBlock):
             cells_for_row = cells.get(rk, {})
             row_cells = [latex_safe(rk)]
             for col in columns:
+                # latex_safe escapes ``%`` (which would otherwise start a
+                # LaTeX comment and swallow the rest of the row, leading
+                # to a "Misplaced \\noalign" error at the next \\midrule).
                 row_cells.append(
-                    _format_cell(cells_for_row.get(col), cell_format)
+                    latex_safe(_format_cell(cells_for_row.get(col), cell_format))
                 )
             if include_total:
                 tr = data.get("totals_row", {}).get(rk)
-                row_cells.append(_format_cell(tr, cell_format))
+                row_cells.append(
+                    latex_safe(_format_cell(tr, cell_format))
+                )
             out.append(" & ".join(row_cells) + r" \\")
         if include_total:
             out.append(r"\midrule")
@@ -320,18 +356,26 @@ class CrosstabBlock(ContentBlock):
             for col in columns:
                 footer_cells.append(
                     r"\textbf{"
-                    + _format_cell(totals_col.get(col, 0.0), cell_format)
+                    + latex_safe(_format_cell(totals_col.get(col, 0.0), cell_format))
                     + "}"
                 )
             footer_cells.append(
                 r"\textbf{"
-                + _format_cell(data.get("grand_total", 0.0), cell_format)
+                + latex_safe(_format_cell(data.get("grand_total", 0.0), cell_format))
                 + "}"
             )
             out.append(" & ".join(footer_cells) + r" \\")
         out.append(r"\bottomrule")
         out.append(r"\end{tabular}")
-        return "\n".join(out) + "\n"
+        tabular = "\n".join(out) + "\n"
+        # Caption ABOVE convention: wrap the tabular in a ``table`` float
+        # with ``\caption`` before the body when the descriptor supplied
+        # one. Without a caption, return the bare tabular for back-compat
+        # with descriptors that pre-date this field.
+        caption = data.get("caption") or ""
+        if not caption:
+            return tabular
+        return wrap_table_latex(tabular, caption, data["label"])
 
     # ------------------------------------------------------------------
     # HTML — ``<table class="crosstab">`` with the same total-row treatment.
@@ -397,6 +441,19 @@ class CrosstabBlock(ContentBlock):
                 + "</strong></td>"
             )
             tfoot = "<tfoot><tr>" + "".join(foot_cells) + "</tr></tfoot>"
-        return (
-            '<table class="crosstab">' + thead + tbody + tfoot + "</table>"
+        # ``<caption>`` MUST be the first child of ``<table>`` (HTML spec)
+        # which renders it above the rows by default in every mainstream
+        # browser. Skip the wrapper when no caption was supplied so the
+        # output stays identical to the pre-caption release. Pass through
+        # ``css_class="crosstab"`` so the existing stylesheet keeps
+        # matching this table.
+        caption = data.get("caption") or ""
+        inner = thead + tbody + tfoot
+        if not caption:
+            return '<table class="crosstab">' + inner + "</table>"
+        return wrap_table_html(
+            inner,
+            caption,
+            label=data.get("label"),
+            css_class="crosstab",
         )

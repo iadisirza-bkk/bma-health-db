@@ -84,6 +84,13 @@ class ReportRegistry:
 
             descriptor = ReportDescriptor(**raw)
 
+            # S7: deprecation warning for YAMLs that still declare
+            # ``latex`` — migrate to ``pdf``. The format is still
+            # accepted (alias remains for one sprint).
+            if "latex" in descriptor.formats:
+                from services.reports.format_alias import warn_if_legacy
+                warn_if_legacy("latex", source=f"yaml:{path.name}")
+
             stem = path.stem
             if descriptor.report_id != stem:
                 raise ValueError(
