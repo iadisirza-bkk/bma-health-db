@@ -117,8 +117,22 @@ def get_writer_conn():
 # Query helpers
 # --------------------------------------------------------------------------- #
 
-# Columns that must NEVER appear in API results
-_PII_COLUMNS = frozenset({"idcard_hash", "patient_id", "staff_code"})
+# Columns that must NEVER appear in API results.
+#
+# CRITICAL: pid_encoded historically held base64-encoded plaintext Thai
+# national IDs (reversible). Even after the ETL fix that HMAC-SHA256s on
+# write, this allowlist is the last line of defense against a future query
+# accidentally selecting the column. Keep both raw and hashed identifier
+# columns here — never expose either to the API surface.
+_PII_COLUMNS = frozenset({
+    # Patient identifiers (raw + hashed forms)
+    "idcard", "idcard_hash", "pid", "pid_encoded", "pid_hash",
+    "patient_id", "staff_code", "hn",
+    # Direct contact / locator PII
+    "phone", "tel", "telephone", "email", "idline", "lineid",
+    "fname", "lname", "efname", "elname", "fullname",
+    "haddr", "address", "addr", "discaretel",
+})
 
 
 def execute_query(sql: str, params: Optional[tuple] = None) -> List[Dict]:
