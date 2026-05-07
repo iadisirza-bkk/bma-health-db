@@ -124,14 +124,22 @@ def get_writer_conn():
 # write, this allowlist is the last line of defense against a future query
 # accidentally selecting the column. Keep both raw and hashed identifier
 # columns here — never expose either to the API surface.
+#
+# Note: `address`, `addr`, `telephone`, `tel` are deliberately excluded
+# because the same column names are used in `ref_facilities` for public
+# hospital/clinic metadata (see api/routers/gis.py — facility map markers).
+# Patient-level address lives in `haddr`, which IS in the filter; patient
+# discharge contact lives in `discaretel`, also filtered. Other patient-only
+# contact fields (phone, email, idline) follow the project convention of
+# never being column-named on facility tables.
 _PII_COLUMNS = frozenset({
     # Patient identifiers (raw + hashed forms)
     "idcard", "idcard_hash", "pid", "pid_encoded", "pid_hash",
     "patient_id", "staff_code", "hn",
-    # Direct contact / locator PII
-    "phone", "tel", "telephone", "email", "idline", "lineid",
+    # Direct contact / locator PII (patient context only)
+    "phone", "email", "idline", "lineid",
     "fname", "lname", "efname", "elname", "fullname",
-    "haddr", "address", "addr", "discaretel",
+    "haddr", "discaretel",
 })
 
 

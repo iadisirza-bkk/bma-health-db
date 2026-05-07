@@ -17,6 +17,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -146,6 +147,60 @@ if not _audit_logger.handlers:
     _handler = logging.StreamHandler()
     _handler.setFormatter(logging.Formatter('%(asctime)s AUDIT %(message)s'))
     _audit_logger.addHandler(_handler)
+
+
+# Tier-2 emergency lockdown — block admin/monitoring endpoints from the
+# public internet entirely. Toggle with EMERGENCY_LOCKDOWN env var so we
+# don't need a redeploy to flip on/off:
+#
+#   EMERGENCY_LOCKDOWN=true   → all paths matching _LOCKDOWN_PREFIXES
+#                                return 503 with a JSON error and the
+#                                attempt is logged. Localhost is exempt
+#                                so an operator can SSH in and use psql /
+#                                local admin UI.
+#   EMERGENCY_LOCKDOWN=false  → middleware is a no-op (default).
+#
+# Only blocks paths that aren't needed for the public dashboard. Public
+# read endpoints (/api/v2/summary/*, /api/v2/<disease>/*, /api/v2/gis/*,
+# etc.) keep working. The dashboard is unaffected.
+_LOCKDOWN_PREFIXES = (
+    "/admin/",
+    "/api/admin/",
+    "/api/v2/admin/",
+    "/api/v2/monitoring/",
+    "/api/auth/",
+)
+_LOCKDOWN_LOCALHOST_EXEMPT = ("127.0.0.1", "::1", "localhost")
+
+
+class EmergencyLockdownMiddleware(BaseHTTPMiddleware):
+    """503 admin/monitoring endpoints when EMERGENCY_LOCKDOWN=true."""
+
+    async def dispatch(self, request: Request, call_next):
+        if os.getenv("EMERGENCY_LOCKDOWN", "").strip().lower() != "true":
+            return await call_next(request)
+
+        path = request.url.path
+        if not any(path.startswith(p) for p in _LOCKDOWN_PREFIXES):
+            return await call_next(request)
+
+        client_ip = request.client.host if request.client else ""
+        # Operator on the API host can still bypass via SSH-localhost
+        if client_ip in _LOCKDOWN_LOCALHOST_EXEMPT:
+            return await call_next(request)
+
+        _audit_logger.warning(
+            "LOCKDOWN_BLOCK method=%s path=%s ip=%s ua=%s",
+            request.method, path, client_ip,
+            request.headers.get("user-agent", "-")[:120],
+        )
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "service_unavailable",
+                "detail": "endpoint disabled for security review",
+            },
+        )
 
 
 class AuditMiddleware(BaseHTTPMiddleware):
@@ -284,14 +339,20 @@ app = FastAPI(
     openapi_tags=_OPENAPI_TAGS,
 )
 
-# Middleware order (outermost first): RequestId -> CORS -> Rate Limit -> API Key -> Audit.
+# Middleware order (outermost first): RequestId -> Lockdown -> CORS -> Rate Limit -> API Key -> Audit.
 # Starlette wraps in reverse-add order, so add_middleware(RequestIdMiddleware)
 # LAST puts it OUTERMOST — every other middleware sees a populated request_id
 # context var.
+#
+# EmergencyLockdownMiddleware sits just inside RequestId so blocked attempts
+# still get a request_id in the audit log, but the block happens BEFORE rate
+# limit / api key validation — a 503 fires immediately without consuming a
+# rate-limit slot or revealing whether the key was valid.
 add_cors(app)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(APIKeyMiddleware)
 app.add_middleware(AuditMiddleware)
+app.add_middleware(EmergencyLockdownMiddleware)
 app.add_middleware(RequestIdMiddleware)
 
 # Global error handlers
