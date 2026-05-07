@@ -81,12 +81,29 @@ $$;
 -- ── 1. Patient master ───────────────────────────────────────────────────────
 -- pid_encoded is UNIQUE NOT NULL — must rewrite before any visit-table FK
 -- traversal, because patient_id (the BIGSERIAL surrogate) is unaffected.
+--
+-- The patient_audit trigger (schema_init.sql:178) writes to_jsonb(OLD) and
+-- to_jsonb(NEW) into audit_log.detail on every UPDATE. If we leave it on
+-- during this migration, we'd write 600k+ base64 plaintext IDCARDs into
+-- audit_log — exactly the leak we're trying to close. Disable for the
+-- duration; the rehash itself is recorded as a single audit_log entry below.
 BEGIN;
+
+ALTER TABLE bma_med.patient DISABLE TRIGGER patient_audit;
 
 UPDATE bma_med.patient
 SET pid_encoded = public._rehash_pid_hmac(pid_encoded)
 WHERE pid_encoded IS NOT NULL
   AND pid_encoded !~ '^[0-9a-f]{64}$';
+
+ALTER TABLE bma_med.patient ENABLE TRIGGER patient_audit;
+
+INSERT INTO bma_med.audit_log (user_name, operation, table_name, row_pk, detail)
+VALUES (current_user, 'UPDATE', 'patient', 'BULK',
+        jsonb_build_object(
+            'note', 'rehash_pid_encoded migration 501',
+            'rows_affected', (SELECT COUNT(*) FROM bma_med.patient)
+        ));
 
 DO $$
 DECLARE
