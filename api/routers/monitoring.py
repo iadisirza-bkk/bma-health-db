@@ -88,15 +88,21 @@ def cleansing_report():
     """Data cleansing summary -- what was cleaned during import."""
     tables_info = {}
 
+    # Defense in depth — _BMA_MED_TABLE_MAP is hardcoded so schema/tbl can
+    # only be one of a known set, but assert before f-string interpolation.
+    # If this list ever takes user input, the assert fails closed.
+    _ALLOWED_SCHEMAS = {"bma_med", "public"}
     for legacy_name, real_tables in _BMA_MED_TABLE_MAP.items():
         total = 0
         cancelled = 0
         for fq in real_tables:
             schema, tbl = fq.split(".")
-            total += execute_scalar(f'SELECT COUNT(*) FROM {schema}."{tbl}"') or 0
+            assert schema in _ALLOWED_SCHEMAS, schema
+            assert tbl.replace("_", "").isalnum(), tbl
+            total += execute_scalar(f'SELECT COUNT(*) FROM "{schema}"."{tbl}"') or 0
             if legacy_name != "raw_patients":
                 cancelled += execute_scalar(
-                    f'SELECT COUNT(*) FROM {schema}."{tbl}" WHERE record_cancelled = 1'
+                    f'SELECT COUNT(*) FROM "{schema}"."{tbl}" WHERE record_cancelled = 1'
                 ) or 0
 
         tables_info[legacy_name] = {
@@ -119,15 +125,19 @@ def cleansing_report():
     null_district = 0
     for fq in ["bma_med.app1_homevisit", "bma_med.portal_homevisit"]:
         schema, tbl = fq.split(".")
+        assert schema in _ALLOWED_SCHEMAS, schema
+        assert tbl.replace("_", "").isalnum(), tbl
         null_district += execute_scalar(
-            f'SELECT COUNT(*) FROM {schema}."{tbl}" WHERE district IS NULL AND crdistrict IS NULL'
+            f'SELECT COUNT(*) FROM "{schema}"."{tbl}" WHERE district IS NULL AND crdistrict IS NULL'
         ) or 0
 
     null_bp = 0
     for fq in ["bma_med.app1_vitalsignslf", "bma_med.portal_vitalsignslf"]:
         schema, tbl = fq.split(".")
+        assert schema in _ALLOWED_SCHEMAS, schema
+        assert tbl.replace("_", "").isalnum(), tbl
         null_bp += execute_scalar(
-            f'SELECT COUNT(*) FROM {schema}."{tbl}" WHERE (hbpn IS NULL OR hbpn = 0) AND record_cancelled = 0'
+            f'SELECT COUNT(*) FROM "{schema}"."{tbl}" WHERE (hbpn IS NULL OR hbpn = 0) AND record_cancelled = 0'
         ) or 0
     tables_info["raw_vitalsigns"]["null_district_code"] = int(null_district)
     tables_info["raw_vitalsigns"]["null_bp"] = int(null_bp)
