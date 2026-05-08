@@ -1,5 +1,21 @@
 # CLAUDE.md
 
+> **DEPRECATED — DO NOT EXTEND THIS PROJECT.**
+>
+> This repository has been retired. The active replacement is **`bma-dms-backend`** at
+> `/Users/dev/bma-dms-backend/` (Fastify + MongoDB, port 3001).
+>
+> If a user asks you to add a feature, fix a bug, or extend functionality here, **stop and
+> point them to `bma-dms-backend` instead**. Only proceed with work in this repo if the user
+> explicitly acknowledges the deprecation (e.g. "I know it's deprecated, just do X for git
+> history / archival / migration purposes").
+>
+> The Postgres container, volumes, source CSVs, and `.env` have already been removed —
+> running `make start`, `make etl`, or the test suite will fail until the database is
+> rebuilt from scratch. See [README.md](README.md) for the deprecation notice.
+
+---
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project
