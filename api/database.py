@@ -117,8 +117,30 @@ def get_writer_conn():
 # Query helpers
 # --------------------------------------------------------------------------- #
 
-# Columns that must NEVER appear in API results
-_PII_COLUMNS = frozenset({"idcard_hash", "patient_id", "staff_code"})
+# Columns that must NEVER appear in API results.
+#
+# CRITICAL: pid_encoded historically held base64-encoded plaintext Thai
+# national IDs (reversible). Even after the ETL fix that HMAC-SHA256s on
+# write, this allowlist is the last line of defense against a future query
+# accidentally selecting the column. Keep both raw and hashed identifier
+# columns here — never expose either to the API surface.
+#
+# Note: `address`, `addr`, `telephone`, `tel` are deliberately excluded
+# because the same column names are used in `ref_facilities` for public
+# hospital/clinic metadata (see api/routers/gis.py — facility map markers).
+# Patient-level address lives in `haddr`, which IS in the filter; patient
+# discharge contact lives in `discaretel`, also filtered. Other patient-only
+# contact fields (phone, email, idline) follow the project convention of
+# never being column-named on facility tables.
+_PII_COLUMNS = frozenset({
+    # Patient identifiers (raw + hashed forms)
+    "idcard", "idcard_hash", "pid", "pid_encoded", "pid_hash",
+    "patient_id", "staff_code", "hn",
+    # Direct contact / locator PII (patient context only)
+    "phone", "email", "idline", "lineid",
+    "fname", "lname", "efname", "elname", "fullname",
+    "haddr", "discaretel",
+})
 
 
 def execute_query(sql: str, params: Optional[tuple] = None) -> List[Dict]:

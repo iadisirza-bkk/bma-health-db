@@ -146,7 +146,11 @@ def behavior_disease_correlation(
     found_col = dk.get("found")
 
     if behavior in ("smoking", "exercise"):
-        # Data from summary_district_risk_factors
+        # Data from summary_district_risk_factors. behavior is membership-
+        # checked against valid_behaviors above, but assert again before
+        # f-string interpolation so a future refactor that loosens the
+        # whitelist can't silently introduce SQL injection.
+        assert behavior in {"smoking", "alcohol", "exercise"}, behavior
         behavior_col = behavior
         conditions = []
         params: list = []

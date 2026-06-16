@@ -138,6 +138,20 @@ def validate_production_config():
                 f"{key} is too short ({len(current)} chars, need >= {_MIN_SECRET_LENGTH})"
             )
 
+    # IDCARD_HASH_SECRET is consumed by the ETL pipeline (bma-med/export.py)
+    # but if a future API endpoint ever needs to hash an inbound IDCARD for
+    # lookup, it must use the same secret. Refuse to start without it in
+    # production so the secret is always available — and so a missing-env
+    # incident is caught at boot, not during the next ETL run at 3 AM.
+    idcard_secret = os.getenv("IDCARD_HASH_SECRET", "").strip()
+    if not idcard_secret:
+        problems.append("IDCARD_HASH_SECRET is unset (required by ETL HMAC pipeline)")
+    elif len(idcard_secret) < _MIN_SECRET_LENGTH:
+        problems.append(
+            f"IDCARD_HASH_SECRET is too short "
+            f"({len(idcard_secret)} chars, need >= {_MIN_SECRET_LENGTH})"
+        )
+
     if not problems:
         return
 

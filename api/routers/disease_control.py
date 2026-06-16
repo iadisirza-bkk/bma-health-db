@@ -113,14 +113,23 @@ def ncd_cascade(disease: str = Query("diabetes")):
     risk_col = dk.get("risk")
     found_col = dk.get("found")
 
+    # Defense in depth — DISEASE_KEYS is hardcoded so risk_col/found_col can
+    # only be one of a known set, but assert before f-string interpolation so
+    # any future change to DISEASE_KEYS that adds an attacker-controlled
+    # value still fails closed instead of yielding SQL injection.
+    _ALLOWED_RISK_COLS = {dk_v["risk"] for dk_v in DISEASE_KEYS.values() if dk_v.get("risk")}
+    _ALLOWED_FOUND_COLS = {dk_v["found"] for dk_v in DISEASE_KEYS.values() if dk_v.get("found")}
+
     at_risk = None
     diagnosed = None
 
     if risk_col:
+        assert risk_col in _ALLOWED_RISK_COLS, risk_col
         at_risk = execute_scalar(
             f"SELECT COALESCE(SUM({risk_col}_count), 0) FROM summary_district_disease"
         ) or 0
     if found_col:
+        assert found_col in _ALLOWED_FOUND_COLS, found_col
         diagnosed = execute_scalar(
             f"SELECT COALESCE(SUM({found_col}_count), 0) FROM summary_district_disease"
         ) or 0
